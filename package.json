@@ -1,0 +1,13 @@
+{
+  "name": "agent-platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun run dev:server & bun run dev:web",
+    "dev:server": "cd agent-server && bun run dev",
+    "dev:web": "cd agent-web && bun run dev",
+    "build": "cd agent-web && bun run build",
+    "start": "cd agent-server && bun run start",
+    "install:all": "cd agent-server && bun install && cd ../agent-web && bun install"
+  }
+}
