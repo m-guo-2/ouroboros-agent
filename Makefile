@@ -1,4 +1,4 @@
-.PHONY: all admin server agent-go feishu qiwei clean
+.PHONY: all admin server agent feishu qiwei clean
 
 # Default target
 all: help
@@ -7,10 +7,10 @@ help:
 	@echo "Available commands:"
 	@echo "  make admin      - Start the Admin frontend (Vite)"
 	@echo "  make server     - Start the main Server (Bun)"
-	@echo "  make agent-go   - Start the Go Agent"
+	@echo "  make agent      - Start the Go Agent"
 	@echo "  make feishu     - Start the Feishu Channel service (Bun)"
 	@echo "  make qiwei      - Start the Qiwei Channel service (Bun)"
-	@echo "  make start-all  - Start Server, Agent-Go, and Admin together (requires tmux or separate terminals)"
+	@echo "  make start-all  - Start Server, Agent, and Admin together (requires tmux or separate terminals)"
 
 # Start the admin frontend
 admin:
@@ -23,9 +23,9 @@ server:
 	cd server && bun run dev
 
 # Start the Go agent
-agent-go:
+agent:
 	@echo "=> Starting Go Agent..."
-	cd agent-go && go run ./cmd/agent/main.go
+	cd agent && go run ./cmd/agent/main.go
 
 # Start the Feishu channel
 feishu:
@@ -40,5 +40,5 @@ qiwei:
 # Clean up all build artifacts
 clean:
 	@echo "=> Cleaning up..."
-	cd agent-go && make clean || true
+	cd agent && make clean || true
 	rm -rf admin/dist server/dist channel-feishu/dist channel-qiwei/dist

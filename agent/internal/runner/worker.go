@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"agent-go/internal/serverclient"
-	"agent-go/internal/types"
+	"agent/internal/serverclient"
+	"agent/internal/types"
 )
 
 type ProcessRequest struct {

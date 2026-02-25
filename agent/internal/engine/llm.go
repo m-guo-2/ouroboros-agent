@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"agent-go/internal/types"
+	"agent/internal/types"
 )
 
 type LLMResponse struct {

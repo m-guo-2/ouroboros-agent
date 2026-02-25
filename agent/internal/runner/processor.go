@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"agent-go/internal/engine"
-	"agent-go/internal/serverclient"
-	"agent-go/internal/types"
+	"agent/internal/engine"
+	"agent/internal/serverclient"
+	"agent/internal/types"
 )
 
 func createTraceReporter(server *serverclient.Client, base types.TraceEventPayload) func(types.AgentEvent) {

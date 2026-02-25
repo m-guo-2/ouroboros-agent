@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"agent-go/internal/types"
+	"agent/internal/types"
 )
 
 const DefaultMaxIterations = 25

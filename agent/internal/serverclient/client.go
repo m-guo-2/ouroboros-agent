@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"agent-go/internal/types"
+	"agent/internal/types"
 )
 
 type AgentConfig struct {

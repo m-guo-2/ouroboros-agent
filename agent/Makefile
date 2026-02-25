@@ -5,12 +5,12 @@ all: build
 
 # Run the agent locally (for development)
 run:
-	@echo "=> Starting agent-go..."
+	@echo "=> Starting agent..."
 	go run ./cmd/agent/main.go
 
 # Build the agent binary
 build:
-	@echo "=> Building agent-go..."
+	@echo "=> Building agent..."
 	go build -o bin/agent-server ./cmd/agent/...
 
 # Run all tests

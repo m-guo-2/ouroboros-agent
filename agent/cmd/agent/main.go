@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"agent-go/internal/handlers"
-	"agent-go/internal/runner"
-	"agent-go/internal/serverclient"
+	"agent/internal/handlers"
+	"agent/internal/runner"
+	"agent/internal/serverclient"
 )
 
 func main() {
@@ -28,7 +28,7 @@ func main() {
 
 	appID := os.Getenv("AGENT_ID")
 	if appID == "" {
-		appID = "agent-go-instance"
+		appID = "agent-instance"
 	}
 
 	publicURL := os.Getenv("AGENT_PUBLIC_URL")
@@ -75,7 +75,7 @@ func main() {
 
 	// Start server
 	go func() {
-		log.Printf("Agent-go starting on port %s", port)
+		log.Printf("Agent starting on port %s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}

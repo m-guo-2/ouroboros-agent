@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"agent-go/internal/runner"
+	"agent/internal/runner"
 )
 
 var (
