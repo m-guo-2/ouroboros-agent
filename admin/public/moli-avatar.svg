@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- �o� -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#667eea" />
+      <stop offset="50%" stop-color="#764ba2" />
+      <stop offset="100%" stop-color="#f093fb" />
+    </linearGradient>
+    <!-- b�� -->
+    <radialGradient id="face" cx="50%" cy="45%" r="45%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#e8eaf6" />
+    </radialGradient>
+    <!-- <[�I -->
+    <radialGradient id="eyeGlow" cx="40%" cy="35%" r="50%">
+      <stop offset="0%" stop-color="#80d8ff" />
+      <stop offset="100%" stop-color="#2979ff" />
+    </radialGradient>
+    <!-- IUH� -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="softShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#3d5afe" flood-opacity="0.3" />
+    </filter>
+    <filter id="innerGlow">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- �o�c�b -->
+  <rect width="512" height="512" rx="110" ry="110" fill="url(#bg)" />
+
+  <!-- �pI -->
+  <circle cx="256" cy="248" r="175" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="40" />
+  <circle cx="256" cy="248" r="155" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="2" />
+
+  <!-- 4�;S -->
+  <ellipse cx="256" cy="240" rx="130" ry="140" fill="url(#face)" filter="url(#softShadow)" />
+
+  <!-- 35/)��p -->
+  <g>
+    <!-- �)� -->
+    <line x1="175" y1="135" x2="155" y2="85" stroke="#b388ff" stroke-width="6"
+      stroke-linecap="round" />
+    <circle cx="155" cy="80" r="10" fill="#ea80fc" filter="url(#glow)" />
+    <!-- �)� -->
+    <line x1="337" y1="135" x2="357" y2="85" stroke="#b388ff" stroke-width="6"
+      stroke-linecap="round" />
+    <circle cx="357" cy="80" r="10" fill="#80d8ff" filter="url(#glow)" />
+  </g>
+
+  <!-- b�h� -->
+  <g>
+    <!-- �< -->
+    <ellipse cx="210" cy="225" rx="30" ry="32" fill="url(#eyeGlow)" />
+    <ellipse cx="210" cy="225" rx="18" ry="20" fill="#0d47a1" />
+    <circle cx="204" cy="218" r="7" fill="white" opacity="0.9" />
+    <circle cx="218" cy="228" r="3" fill="white" opacity="0.5" />
+
+    <!-- �< -->
+    <ellipse cx="302" cy="225" rx="30" ry="32" fill="url(#eyeGlow)" />
+    <ellipse cx="302" cy="225" rx="18" ry="20" fill="#0d47a1" />
+    <circle cx="296" cy="218" r="7" fill="white" opacity="0.9" />
+    <circle cx="310" cy="228" r="3" fill="white" opacity="0.5" />
+  </g>
+
+  <!-- n� -->
+  <ellipse cx="170" cy="275" rx="22" ry="14" fill="#f48fb1" opacity="0.35" />
+  <ellipse cx="342" cy="275" rx="22" ry="14" fill="#f48fb1" opacity="0.35" />
+
+  <!-- �4� -->
+  <path d="M 225 290 Q 256 325 287 290" fill="none" stroke="#5c6bc0" stroke-width="5"
+    stroke-linecap="round" />
+
+  <!-- �4�p - M � -->
+  <g transform="translate(256, 170)" filter="url(#innerGlow)">
+    <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
+      font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+      font-size="32" font-weight="700" fill="#7c4dff" letter-spacing="2">M</text>
+  </g>
+
+  <!-- ��
+W -->
+  <g transform="translate(256, 420)">
+    <text x="0" y="0" text-anchor="middle" dominant-baseline="central"
+      font-family="'SF Pro Rounded', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+      font-size="48" font-weight="800" fill="white" letter-spacing="6" opacity="0.95">MOLI</text>
+    <text x="0" y="36" text-anchor="middle" dominant-baseline="central"
+      font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+      font-size="14" font-weight="400" fill="rgba(255,255,255,0.6)" letter-spacing="4">AI ASSISTANT</text>
+  </g>
+
+  <!-- v�I� -->
+  <ellipse cx="230" cy="160" rx="60" ry="25" fill="white" opacity="0.12" />
+</svg>

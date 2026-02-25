@@ -3,11 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bun run dev:server & bun run dev:web",
-    "dev:server": "cd agent-server && bun run dev",
-    "dev:web": "cd agent-web && bun run dev",
-    "build": "cd agent-web && bun run build",
-    "start": "cd agent-server && bun run start",
-    "install:all": "cd agent-server && bun install && cd ../agent-web && bun install"
+    "dev": "concurrently -n server,admin -c blue,magenta \"bun run dev:server\" \"bun run dev:admin\"",
+    "dev:all": "concurrently -n server,admin,agent,feishu,qiwei -c blue,magenta,cyan,yellow,green \"bun run dev:server\" \"bun run dev:admin\" \"bun run dev:agent\" \"bun run dev:feishu\" \"bun run dev:qiwei\"",
+    "dev:core": "concurrently -n server,admin,agent -c blue,magenta,cyan \"bun run dev:server\" \"bun run dev:admin\" \"bun run dev:agent\"",
+    "dev:channels": "concurrently -n feishu,qiwei -c yellow,green \"bun run dev:feishu\" \"bun run dev:qiwei\"",
+    "dev:server": "cd server && bun run dev",
+    "dev:admin": "cd admin && bun run dev",
+    "dev:agent": "cd agent && bun run dev",
+    "dev:feishu": "cd channel-feishu && bun run dev",
+    "dev:qiwei": "cd channel-qiwei && bun run dev",
+    "stop": "./scripts/restart.sh stop",
+    "restart": "./scripts/restart.sh restart",
+    "status": "./scripts/restart.sh status",
+    "build": "cd admin && bun run build",
+    "start": "cd server && bun run start",
+    "install:all": "cd server && bun install && cd ../admin && bun install && cd ../agent && bun install && cd ../channel-feishu && bun install && cd ../channel-qiwei && bun install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

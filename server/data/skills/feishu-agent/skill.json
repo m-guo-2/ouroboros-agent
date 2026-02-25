@@ -1,0 +1,385 @@
+{
+  "name": "feishu-agent",
+  "description": "飞书信息查询与协作能力。查群名称、查群成员、搜索群组、查用户信息、发消息、建群、约会议、写文档。",
+  "version": "2.0.0",
+  "type": "action",
+  "enabled": true,
+  "triggers": [
+    "飞书",
+    "Lark",
+    "群聊",
+    "群组",
+    "群名",
+    "群成员",
+    "会议",
+    "发消息",
+    "文档",
+    "知识库",
+    "查人",
+    "用户信息"
+  ],
+  "tools": [
+    {
+      "name": "feishu_list_bot_chats",
+      "description": "获取机器人所在的所有群列表（群名称、群ID、群描述等）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_get_chat_info",
+      "description": "获取指定群的详细信息（群名称、描述、群主、成员数等）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "description": "群聊 ID，格式为 oc_xxx"
+          }
+        },
+        "required": [
+          "chat_id"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_get_chat_members",
+      "description": "获取指定群的全部成员列表（姓名、open_id、角色等）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "description": "群聊 ID，格式为 oc_xxx"
+          }
+        },
+        "required": [
+          "chat_id"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_search_chats",
+      "description": "按关键词搜索群组（模糊匹配群名称）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索关键词"
+          },
+          "page_size": {
+            "type": "number",
+            "description": "返回数量，默认 20"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_get_user_info",
+      "description": "获取用户详细信息（姓名、头像、部门、工号等）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "用户 ID（open_id 格式 ou_xxx，或其他类型）"
+          },
+          "user_id_type": {
+            "type": "string",
+            "description": "ID 类型：open_id（默认）、user_id、union_id",
+            "enum": [
+              "open_id",
+              "user_id",
+              "union_id"
+            ]
+          }
+        },
+        "required": [
+          "user_id"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_batch_get_user_id",
+      "description": "通过邮箱或手机号批量查找用户的 open_id",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "邮箱列表"
+          },
+          "mobiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "手机号列表（含国际区号，如 +8613800138000）"
+          }
+        }
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_send_text",
+      "description": "发送文本消息到群或个人",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "receive_id": {
+            "type": "string",
+            "description": "接收者 ID（群 chat_id 或用户 open_id/email）"
+          },
+          "receive_id_type": {
+            "type": "string",
+            "description": "ID 类型：chat_id（默认）、open_id、email",
+            "enum": [
+              "chat_id",
+              "open_id",
+              "user_id",
+              "union_id",
+              "email"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "消息文本"
+          }
+        },
+        "required": [
+          "receive_id",
+          "text"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_send_rich_text",
+      "description": "发送富文本消息（支持链接、@、加粗）",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "receive_id": {
+            "type": "string",
+            "description": "接收者 ID"
+          },
+          "receive_id_type": {
+            "type": "string",
+            "description": "ID 类型，默认 chat_id"
+          },
+          "title": {
+            "type": "string",
+            "description": "富文本标题"
+          },
+          "content": {
+            "type": "array",
+            "description": "富文本内容，二维数组：外层是段落，内层是行内元素"
+          }
+        },
+        "required": [
+          "receive_id",
+          "title",
+          "content"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_send_default_card",
+      "description": "发送简单标题+内容卡片消息",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "receive_id": {
+            "type": "string",
+            "description": "接收者 ID"
+          },
+          "receive_id_type": {
+            "type": "string",
+            "description": "ID 类型，默认 chat_id"
+          },
+          "title": {
+            "type": "string",
+            "description": "卡片标题"
+          },
+          "content": {
+            "type": "string",
+            "description": "卡片内容"
+          }
+        },
+        "required": [
+          "receive_id",
+          "title",
+          "content"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_create_chat",
+      "description": "创建飞书群组",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "群名称"
+          },
+          "description": {
+            "type": "string",
+            "description": "群描述"
+          },
+          "user_id_list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "初始成员的 open_id 列表"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_get_message_list",
+      "description": "获取群聊的消息列表",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "description": "群聊 ID"
+          },
+          "page_size": {
+            "type": "number",
+            "description": "每页数量，默认 20"
+          }
+        },
+        "required": [
+          "chat_id"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_reserve_meeting",
+      "description": "预约飞书视频会议",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "会议主题"
+          },
+          "end_time": {
+            "type": "string",
+            "description": "结束时间（秒级 Unix 时间戳）"
+          },
+          "start_time": {
+            "type": "string",
+            "description": "开始时间（秒级 Unix 时间戳），默认为当前时间"
+          },
+          "invitees": {
+            "type": "array",
+            "description": "参会人列表 [{id, idType}]"
+          }
+        },
+        "required": [
+          "topic",
+          "end_time"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    },
+    {
+      "name": "feishu_create_document",
+      "description": "创建飞书文档",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "文档标题"
+          },
+          "folder_token": {
+            "type": "string",
+            "description": "目标文件夹 token（可选）"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "url": "http://localhost:1998/api/feishu/action",
+        "method": "POST"
+      }
+    }
+  ]
+}

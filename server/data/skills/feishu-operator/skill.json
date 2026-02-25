@@ -1,0 +1,15 @@
+{
+  "name": "feishu-operator",
+  "description": "飞书高级操作能力。表情回复、图片/文件/语音发送、文档读写。与 feishu-agent（查询协作）互补。",
+  "version": "1.0.0",
+  "type": "action",
+  "enabled": true,
+  "triggers": [
+    "表情", "reaction", "emoji", "👍", "点赞",
+    "图片", "截图", "image", "发图",
+    "语音", "音频", "audio", "voice",
+    "文件", "file", "上传", "upload",
+    "文档内容", "读文档", "写文档", "追加文档", "document"
+  ],
+  "tools": []
+}
