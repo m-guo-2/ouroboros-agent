@@ -67,3 +67,20 @@ data/config.db-wal
 daily_active_chart*
 **/temp_images/
 **/charts/
+
+# Temporary HTML files
+*.html
+
+# Application session data
+.agent-sessions/
+
+# Claude AI context
+.claude/
+
+# Shared personal data
+.shared/
+
+# Temporary directories
+temp/
+tmp/
+**/tmp/
