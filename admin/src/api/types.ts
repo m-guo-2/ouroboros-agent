@@ -44,45 +44,34 @@ export interface AgentProfile {
 export interface AgentSession {
   id: string
   title: string
-  sdkSessionId?: string
-  userId?: string
-  agentId?: string
-  agentDisplayName?: string
-  sourceChannel?: string
-  executionStatus?: string
-  channelName?: string
-  messages: AgentMessage[]
-  createdAt?: string
-  updatedAt?: string
+  agentId: string
+  userId: string
+  sourceChannel: string
+  sessionKey: string
+  channelConversationId: string
+  channelName: string
+  workDir: string
+  executionStatus: string
+  createdAt: string
+  updatedAt: string
 }
 
-export interface AgentSessionListItem {
-  id: string
-  title: string
-  agentId?: string
-  agentDisplayName?: string
-  sourceChannel?: string
-  executionStatus?: "idle" | "processing" | "completed" | "interrupted" | string
-  channelName?: string
+export interface AgentSessionListItem extends AgentSession {
   messageCount: number
-  createdAt?: string
-  updatedAt?: string
 }
 
-export interface AgentMessage {
-  role: "user" | "assistant" | "system"
+export interface MessageData {
+  id: string
+  sessionId: string
+  role: string
   content: string
-  toolCalls?: Array<{
-    id: string
-    tool: string
-    input: unknown
-    result?: unknown
-    status: "pending" | "running" | "success" | "error"
-  }>
-  timestamp?: string
+  messageType?: string
+  channel?: string
   traceId?: string
-  initiator?: "user" | "agent" | "system"
-  status?: "sending" | "sent" | "failed"
+  initiator?: string
+  senderName?: string
+  senderId?: string
+  createdAt?: string
 }
 
 // ===== Skills =====
@@ -98,7 +87,7 @@ export interface SkillManifest {
     name: string
     description: string
     inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] }
-    executor: { type: "http" | "script" | "internal"; url?: string; method?: string; command?: string; handler?: string }
+    executor: { type: "http" | "shell" | "script" | "internal"; url?: string; method?: string; command?: string; handler?: string }
   }>
 }
 
@@ -176,7 +165,7 @@ export interface ExecutionStep {
   /** ReAct 迭代轮次（从 1 开始；system 步骤可能为 0） */
   iteration: number
   timestamp: number
-  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "model_io"
+  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call"
   thinking?: string
   /** 来源：model = 模型推理, system = 系统状态日志（加载配置/Skills 等） */
   source?: "model" | "system"
@@ -188,9 +177,15 @@ export interface ExecutionStep {
   toolSuccess?: boolean
   content?: string
   error?: string
-  /** 每次 LLM 调用的完整输入/输出摘要 */
-  modelInput?: unknown
-  modelOutput?: unknown
+  /** llm_call：每次 LLM 调用的轻量统计 */
+  model?: string
+  inputTokens?: number
+  outputTokens?: number
+  durationMs?: number
+  stopReason?: string
+  costUsd?: number
+  /** 完整 LLM I/O 文件引用（用于按需加载原始请求/响应） */
+  llmIORef?: string
 }
 
 export interface ExecutionTrace {
@@ -208,27 +203,7 @@ export interface ExecutionTrace {
   steps: ExecutionStep[]
 }
 
-export interface TraceSummary extends Omit<ExecutionTrace, "steps"> {
-  thinkingCount: number
-  toolCallCount: number
-  toolErrorCount: number
-  toolNames: string[]
-  lastThinking?: string
-  lastError?: string
-}
-
-// ===== Logs =====
-
-export interface LogEntry {
-  ts: string
-  trace: string
-  service: string
-  op: string
-  summary: string
-  status?: string
-  span?: string
-  meta?: Record<string, unknown>
-  data?: Record<string, unknown>
-  error?: string
-  _level?: string
+export interface TraceListItem {
+  id: string
+  startedAt: number
 }

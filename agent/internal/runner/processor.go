@@ -7,48 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/channels"
 	"agent/internal/engine"
-	"agent/internal/serverclient"
+	"agent/internal/engine/ostools"
+	"agent/internal/logger"
+	"agent/internal/subagent"
+	"agent/internal/storage"
 	"agent/internal/types"
 )
-
-func createTraceReporter(server *serverclient.Client, base types.TraceEventPayload) func(types.AgentEvent) {
-	return func(event types.AgentEvent) {
-		fullEvent := types.TraceEventPayload{
-			TraceID:    base.TraceID,
-			SessionID:  base.SessionID,
-			AgentID:    base.AgentID,
-			UserID:     base.UserID,
-			Channel:    base.Channel,
-			AgentEvent: event,
-		}
-
-		tag := fmt.Sprintf("[react-engine] sid=%s tid=%s", base.SessionID, base.TraceID)
-		if event.Type == "thinking" {
-			preview := event.Thinking
-			if len(preview) > 100 {
-				preview = preview[:100]
-			}
-			fmt.Printf("%s think: %q\n", tag, preview)
-		} else if event.Type == "tool_call" {
-			fmt.Printf("%s call: %s id=%s\n", tag, event.ToolName, event.ToolCallID)
-		} else if event.Type == "tool_result" {
-			ok := "fail"
-			if event.ToolSuccess != nil && *event.ToolSuccess {
-				ok = "ok"
-			}
-			fmt.Printf("%s result: %s %s %dms\n", tag, event.ToolName, ok, event.ToolDuration)
-		} else if event.Type == "done" {
-			if event.Usage != nil {
-				fmt.Printf("%s done: in=%d out=%d\n", tag, event.Usage.InputTokens, event.Usage.OutputTokens)
-			}
-		} else if event.Type == "error" {
-			fmt.Printf("%s error: %s\n", tag, event.Error)
-		}
-
-		server.ReportTraceEvent(fullEvent)
-	}
-}
 
 func buildSystemPrompt(agentSystemPrompt, skillsAddition string) string {
 	var parts []string
@@ -66,6 +32,7 @@ func buildSystemPrompt(agentSystemPrompt, skillsAddition string) string {
 - ` + "`" + `content` + "`" + `（必填）：要发送的消息内容
 - ` + "`" + `messageType` + "`" + `（可选）：消息类型，默认 text；支持 text / image / file / rich_text
 - ` + "`" + `channel` + "`" + ` / ` + "`" + `channelUserId` + "`" + ` / ` + "`" + `channelConversationId` + "`" + `：默认取自消息来源，通常不需要手动填写
+- ` + "`" + `replyToChannelMessageId` + "`" + `（可选）：要回复的上游消息 ID。不传则不带 reply_to，由你自行决定是否回复某条消息
 
 **使用原则：**
 - 需要回复用户时，调用此工具发送，不要依赖直接文字输出。
@@ -74,7 +41,7 @@ func buildSystemPrompt(agentSystemPrompt, skillsAddition string) string {
 
 **关于历史消息的理解：**
 历史消息只包含客观事件记录，不包含你过去的推理过程：
-- ` + "`" + `user` + "`" + ` 消息 = 某个用户发来的内容。消息前的 [` + "`" + `名字` + "`" + `] 标记表示发送者身份（群聊场景有多个不同用户）
+- ` + "`" + `user` + "`" + ` 消息 = 某个用户发来的内容。消息头格式：[` + "`" + `昵称 (渠道ID) | via 渠道 | type=消息类型` + "`" + `]。其中 via 表示来源渠道（feishu/wecom/webui），type 仅在非文本消息时出现（image/file/audio 等）
 - ` + "`" + `assistant` + "`" + ` 消息（tool_use block）= 你过去执行的工具调用动作
 - ` + "`" + `tool_result` + "`" + ` block = 工具执行返回的客观结果
 - 你过去通过 ` + "`" + `send_channel_message` + "`" + ` 发送的内容会出现在对应的 tool_use 和 tool_result 中`
@@ -88,9 +55,8 @@ func buildSystemPrompt(agentSystemPrompt, skillsAddition string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-
-func toPersistableMessages(loopMessages []types.AgentMessage) []serverclient.MessageData {
-	var result []serverclient.MessageData
+func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageData {
+	var result []storage.MessageData
 	for _, msg := range loopMessages {
 		if msg.Role == "assistant" {
 			var toolUseBlocks []types.ContentBlock
@@ -103,7 +69,7 @@ func toPersistableMessages(loopMessages []types.AgentMessage) []serverclient.Mes
 				continue
 			}
 			b, _ := json.Marshal(toolUseBlocks)
-			result = append(result, serverclient.MessageData{
+			result = append(result, storage.MessageData{
 				Role:        "assistant",
 				Content:     string(b),
 				MessageType: "structured",
@@ -119,7 +85,7 @@ func toPersistableMessages(loopMessages []types.AgentMessage) []serverclient.Mes
 				continue
 			}
 			b, _ := json.Marshal(toolResultBlocks)
-			result = append(result, serverclient.MessageData{
+			result = append(result, storage.MessageData{
 				Role:        "tool_result",
 				Content:     string(b),
 				MessageType: "structured",
@@ -129,11 +95,6 @@ func toPersistableMessages(loopMessages []types.AgentMessage) []serverclient.Mes
 	return result
 }
 
-// truncateByFullTurns implementation truncates history while ensuring we don't break the user->assistant->user alternation
-// and don't cut off in the middle of a "turn" (user + tools ...).
-// A full turn is typically: user input -> assistant (tool uses) -> user (tool results) -> assistant (final response).
-// Since we don't know exact token counts easily here without a tokenizer, we'll implement a simple limit by full turns
-// assuming each user message that doesn't contain tool_result is the start of a turn.
 func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.AgentMessage {
 	if len(messages) == 0 {
 		return messages
@@ -163,39 +124,246 @@ func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.Ag
 	return messages[startIndex:]
 }
 
-func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedRequest, server *serverclient.Client) error {
-	report := createTraceReporter(server, types.TraceEventPayload{
-		TraceID:   request.TraceID,
-		SessionID: worker.SessionID,
-		AgentID:   request.AgentID,
-		UserID:    request.UserID,
-		Channel:   request.Channel,
-	})
-
-	if !request.TraceStarted {
-		report(types.AgentEvent{Type: "start", Timestamp: time.Now().UnixMilli()})
+func formatUserMessage(senderName, channelUserID, channel, messageType, channelMessageID, content string) string {
+	var sender string
+	if senderName != "" {
+		sender = fmt.Sprintf("%s (%s)", senderName, channelUserID)
+	} else {
+		sender = channelUserID
 	}
 
-	report(types.AgentEvent{
-		Type:      "thinking",
-		Timestamp: time.Now().UnixMilli(),
-		Thinking:  "Loading Agent Config and Skills...",
-		Source:    "system",
+	var meta []string
+	meta = append(meta, sender)
+	if channel != "" {
+		meta = append(meta, fmt.Sprintf("via %s", channel))
+	}
+	if channelMessageID != "" {
+		meta = append(meta, fmt.Sprintf("msg_id=%s", channelMessageID))
+	}
+	if messageType != "" && messageType != "text" {
+		meta = append(meta, fmt.Sprintf("type=%s", messageType))
+	}
+	return fmt.Sprintf("[%s]\n%s", strings.Join(meta, " | "), content)
+}
+
+func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
+	dbMessages, err := storage.GetSessionMessages(sessionID, 100)
+	if err != nil || len(dbMessages) == 0 {
+		return nil
+	}
+
+	var result []types.AgentMessage
+	for _, msg := range dbMessages {
+		switch msg.Role {
+		case "user":
+			if msg.MessageType == "structured" {
+				continue
+			}
+			text := formatUserMessage(msg.SenderName, msg.SenderID, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content)
+			result = append(result, types.AgentMessage{
+				Role:    "user",
+				Content: []types.ContentBlock{{Type: "text", Text: text}},
+			})
+		case "assistant":
+			if msg.MessageType == "structured" {
+				var blocks []types.ContentBlock
+				if err := json.Unmarshal([]byte(msg.Content), &blocks); err == nil {
+					result = append(result, types.AgentMessage{
+						Role:    "assistant",
+						Content: blocks,
+					})
+				}
+			}
+		case "tool_result":
+			if msg.MessageType == "structured" {
+				var blocks []types.ContentBlock
+				if err := json.Unmarshal([]byte(msg.Content), &blocks); err == nil {
+					result = append(result, types.AgentMessage{
+						Role:    "user",
+						Content: blocks,
+					})
+				}
+			}
+		}
+	}
+
+	if len(result) > 0 {
+		last := result[len(result)-1]
+		if last.Role == "user" && len(last.Content) > 0 && last.Content[0].Type == "text" {
+			result = result[:len(result)-1]
+		}
+	}
+
+	return result
+}
+
+func registerSubagentTools(
+	registry *engine.ToolRegistry,
+	llmClient engine.LLMClient,
+	modelName string,
+	agentID string,
+	userID string,
+	channel string,
+	channelUserID string,
+	channelConversationID string,
+	traceID string,
+	sessionID string,
+	messages []types.AgentMessage,
+) {
+	manager := subagent.DefaultManager()
+
+	notifyMain := func(job *subagent.Job, failed bool) {
+		if job == nil {
+			return
+		}
+
+		var content string
+		if failed {
+			content = fmt.Sprintf(
+				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\nerror=%s\n\n请基于失败原因决定是否重试、降级或改用其他路径继续任务。",
+				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Error),
+			)
+		} else {
+			content = fmt.Sprintf(
+				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\n\n总结：\n%s\n\n请基于该结果继续主任务。",
+				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Result),
+			)
+		}
+
+		err := EnqueueProcessRequest(context.Background(), ProcessRequest{
+			UserID:                userID,
+			AgentID:               agentID,
+			Content:               content,
+			Channel:               channel,
+			ChannelUserID:         channelUserID,
+			ChannelConversationID: channelConversationID,
+			MessageType:           "text",
+			MessageID:             fmt.Sprintf("subagent-event-%d", time.Now().UnixNano()),
+			SessionID:             sessionID,
+		})
+		if err != nil {
+			logger.Warn(context.Background(), "subagent 完成事件入队失败",
+				"jobId", job.ID, "error", err.Error())
+		}
+	}
+
+	registry.RegisterBuiltin("run_subagent_async", "异步启动一个 subagent 子任务，立即返回 jobId。子任务完成后可用 get_subagent_status 查询自然语言总结。", types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"task": map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述"},
+			"subagent": map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis，默认 developer"},
+			"timeout_seconds": map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 600）"},
+		},
+		Required: []string{"task"},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		task, _ := input["task"].(string)
+		task = strings.TrimSpace(task)
+		if task == "" {
+			return nil, fmt.Errorf("task is required")
+		}
+
+		profile, _ := input["subagent"].(string)
+		timeout := 10 * time.Minute
+		if t, ok := input["timeout_seconds"].(float64); ok && t > 0 {
+			timeout = time.Duration(int(t)) * time.Second
+		}
+
+		job, err := manager.Start(subagent.StartRequest{
+			Profile:       profile,
+			Task:          task,
+			Model:         modelName,
+			LLMClient:     llmClient,
+			Messages:      messages,
+			Tools:         registry.GetAll(),
+			ParentTraceID: traceID,
+			SessionID:     sessionID,
+			Timeout:       timeout,
+			OnCompleted: func(j *subagent.Job) {
+				notifyMain(j, false)
+			},
+			OnFailed: func(j *subagent.Job) {
+				notifyMain(j, true)
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		return map[string]interface{}{
+			"jobId":     job.ID,
+			"status":    job.Status,
+			"name":      job.Name,
+			"subagent":  job.Profile,
+			"detailDir": job.DetailDir,
+			"message":   "subagent 已启动，请稍后用 get_subagent_status 查询结果",
+		}, nil
 	})
 
-	agentConfig, err := server.GetAgentConfig(ctx, request.AgentID)
+	registry.RegisterBuiltin("get_subagent_status", "查询 subagent 异步任务状态。完成时返回自然语言总结 result。", types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"job_id": map[string]interface{}{"type": "string", "description": "subagent jobId"},
+		},
+		Required: []string{"job_id"},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		jobID, _ := input["job_id"].(string)
+		jobID = strings.TrimSpace(jobID)
+		if jobID == "" {
+			return nil, fmt.Errorf("job_id is required")
+		}
+		job, ok := manager.Get(jobID)
+		if !ok {
+			return nil, fmt.Errorf("subagent job not found: %s", jobID)
+		}
+		return map[string]interface{}{
+			"jobId":         job.ID,
+			"name":          job.Name,
+			"subagent":      job.Profile,
+			"status":        job.Status,
+			"result":        job.Result,
+			"error":         job.Error,
+			"detailDir":     job.DetailDir,
+			"subTraceId":    job.SubTraceID,
+			"parentTraceId": job.ParentTraceID,
+		}, nil
+	})
+}
+
+func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedRequest) error {
+	logger.Business(ctx, "开始处理事件",
+		"agentId", request.AgentID, "channel", request.Channel, "userId", request.UserID)
+	logger.Business(ctx, "加载配置中", "traceEvent", "thinking", "source", "system")
+
+	agentConfig, err := storage.GetAgentConfig(request.AgentID)
 	if err != nil || agentConfig == nil {
+		logger.Error(ctx, "Agent 配置未找到",
+			"agentId", request.AgentID, "error", fmt.Sprint(err))
 		return fmt.Errorf("agent not found: %s", request.AgentID)
 	}
 
 	provider := agentConfig.Provider
 	modelName := agentConfig.Model
 	if provider == "" || modelName == "" {
+		logger.Error(ctx, "Agent 缺少 provider/model",
+			"provider", provider, "model", modelName)
 		return fmt.Errorf("agent %s missing provider/model", request.AgentID)
 	}
 
-	credentials, _ := server.GetProviderCredentials(ctx, provider)
-	skillsCtx, _ := server.GetSkillsContext(ctx, request.AgentID)
+	logger.Detail(ctx, "Agent 配置已加载", "provider", provider, "model", modelName)
+
+	credentials, _ := storage.GetProviderCredentials(provider)
+	if credentials == nil {
+		credentials = &storage.ProviderCredentials{}
+	}
+
+	skillsCtx, err := storage.GetSkillsContext(request.AgentID)
+	if err != nil || skillsCtx == nil {
+		skillsCtx = &storage.SkillContext{
+			Tools:         []types.ToolDefinition{},
+			ToolExecutors: map[string]storage.SkillToolExecutor{},
+			SkillDocs:     map[string]string{},
+		}
+	}
 
 	var llmClient engine.LLMClient
 	if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
@@ -212,25 +380,26 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		})
 	}
 
-	if skillsCtx == nil {
-		skillsCtx = &serverclient.SkillContext{}
-	}
+	shellSession := ostools.NewShellSession(worker.WorkDir)
 
 	registry := engine.NewToolRegistry()
+	ostools.RegisterOSTools(registry, shellSession)
+
 	registry.RegisterBuiltin("send_channel_message", "向当前渠道发送消息。content 填要发出去的话。", types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
-			"content":               map[string]interface{}{"type": "string", "description": "消息内容"},
-			"channel":               map[string]interface{}{"type": "string", "description": "目标渠道"},
-			"channelUserId":         map[string]interface{}{"type": "string", "description": "渠道用户 ID"},
-			"channelConversationId": map[string]interface{}{"type": "string", "description": "群聊 ID"},
-			"messageType":           map[string]interface{}{"type": "string", "description": "消息类型"},
+			"content":                 map[string]interface{}{"type": "string", "description": "消息内容"},
+			"channel":                 map[string]interface{}{"type": "string", "description": "目标渠道"},
+			"channelUserId":           map[string]interface{}{"type": "string", "description": "渠道用户 ID"},
+			"channelConversationId":   map[string]interface{}{"type": "string", "description": "群聊 ID"},
+			"messageType":             map[string]interface{}{"type": "string", "description": "消息类型"},
+			"replyToChannelMessageId": map[string]interface{}{"type": "string", "description": "回复目标的上游消息 ID（可选）"},
 		},
 		Required: []string{"content"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
 		channel := request.Channel
-		if c, ok := input["channel"].(string); ok && c != "" {
-			channel = c
+		if ch, ok := input["channel"].(string); ok && ch != "" {
+			channel = ch
 		}
 		channelUserID := request.ChannelUserID
 		if cu, ok := input["channelUserId"].(string); ok && cu != "" {
@@ -246,20 +415,22 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			channelConvID = cc
 		}
 
-		msg := map[string]interface{}{
-			"channel":               channel,
-			"channelUserId":         channelUserID,
-			"content":               content,
-			"channelConversationId": channelConvID,
-			"sessionId":             worker.SessionID,
-			"traceId":               request.TraceID,
+		outMsg := channels.OutgoingMessage{
+			Channel:               channel,
+			ChannelUserID:         channelUserID,
+			Content:               content,
+			ChannelConversationID: channelConvID,
+			SessionID:             worker.SessionID,
+			TraceID:               request.TraceID,
 		}
 		if mt, ok := input["messageType"].(string); ok && mt != "" {
-			msg["messageType"] = mt
+			outMsg.MessageType = mt
+		}
+		if replyTo, ok := input["replyToChannelMessageId"].(string); ok && replyTo != "" {
+			outMsg.ReplyToChannelMessageID = replyTo
 		}
 
-		err := server.SendToChannel(c, msg)
-		if err != nil {
+		if err := channels.SendToChannel(outMsg); err != nil {
 			return nil, err
 		}
 
@@ -287,57 +458,50 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SystemPromptAddition)
 
-	report(types.AgentEvent{
-		Type:      "thinking",
-		Timestamp: time.Now().UnixMilli(),
-		Thinking:  "Configuration loaded.",
-		Source:    "system",
-	})
-
 	var historyMessages []types.AgentMessage
+	var histSource string
 
-	// Load directly from Session Context (JSON) if it exists, otherwise fallback to empty/legacy.
-	sessionData, err := server.GetSession(ctx, worker.SessionID)
+	sessionData, err := storage.GetSession(worker.SessionID)
 	if err == nil && sessionData != nil && sessionData.Context != "" {
 		_ = json.Unmarshal([]byte(sessionData.Context), &historyMessages)
+		histSource = "session"
 	}
 
-	// Filter out the current user message if it accidentally got injected
-	// (usually handled by the dispatcher adding to messages table, but context is pure)
-	// We'll trust the context is pure and doesn't contain the current message yet.
-	// We no longer need: ensureAlternation, removeOrphanedToolUses, removeOrphanedToolResults
-	
-	// Enforce context length (truncate by full turns)
-	historyMessages = truncateByFullTurns(historyMessages, 10) // e.g. keep last 10 turns
-
-	var meta []string
-	meta = append(meta, "channel="+request.Channel)
-	meta = append(meta, "channelUserId="+request.ChannelUserID)
-	if request.ChannelConversationID != "" {
-		meta = append(meta, "channelConversationId="+request.ChannelConversationID)
-	}
-	if request.SenderName != "" {
-		meta = append(meta, "senderName="+request.SenderName)
+	if len(historyMessages) == 0 {
+		historyMessages = reconstructHistoryFromMessages(worker.SessionID)
+		if len(historyMessages) > 0 {
+			histSource = "db_reconstruct"
+		} else {
+			histSource = "empty"
+		}
 	}
 
-	sender := request.SenderName
-	if sender == "" {
-		sender = request.ChannelUserID
-	}
+	historyMessages = truncateByFullTurns(historyMessages, 10)
 
-	currentUserContent := fmt.Sprintf("[消息来源] %s\n[%s]\n%s", strings.Join(meta, " "), sender, request.Content)
+	currentUserContent := formatUserMessage(request.SenderName, request.ChannelUserID, request.Channel, request.MessageType, request.ChannelMessageID, request.Content)
 
 	messages := append(historyMessages, types.AgentMessage{
 		Role:    "user",
 		Content: []types.ContentBlock{{Type: "text", Text: currentUserContent}},
 	})
 
-	report(types.AgentEvent{
-		Type:      "thinking",
-		Timestamp: time.Now().UnixMilli(),
-		Thinking:  fmt.Sprintf("Ready, history %d messages, starting ReAct loop...", len(historyMessages)),
-		Source:    "system",
-	})
+	registerSubagentTools(
+		registry,
+		llmClient,
+		modelName,
+		request.AgentID,
+		request.UserID,
+		request.Channel,
+		request.ChannelUserID,
+		request.ChannelConversationID,
+		request.TraceID,
+		worker.SessionID,
+		messages,
+	)
+
+	logger.Detail(ctx, "历史消息加载诊断",
+		"source", histSource, "historyCount", len(historyMessages), "totalMessages", len(messages),
+		"diagnostic", engine.BuildToolUseDiagnostic(messages))
 
 	loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
 		LLMClient:     llmClient,
@@ -346,9 +510,6 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		Tools:         registry.GetAll(),
 		Model:         modelName,
 		MaxIterations: 25,
-		OnEvent: func(event types.AgentEvent) {
-			report(event)
-		},
 		OnNewMessages: func(iterMessages []types.AgentMessage) error {
 			persistable := toPersistableMessages(iterMessages)
 			for _, msg := range persistable {
@@ -356,7 +517,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 				if msg.Role == "assistant" {
 					initiator = "agent"
 				}
-				_, _ = server.SaveMessage(ctx, map[string]interface{}{
+				_, _ = storage.SaveMessage(map[string]interface{}{
 					"sessionId":   worker.SessionID,
 					"role":        msg.Role,
 					"content":     msg.Content,
@@ -371,20 +532,25 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	})
 
 	if err != nil {
-		report(types.AgentEvent{Type: "error", Timestamp: time.Now().UnixMilli(), Error: err.Error()})
-		report(types.AgentEvent{Type: "done", Timestamp: time.Now().UnixMilli(), Error: err.Error()})
+		logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
 		return err
 	}
 
-	// At the end of the loop, serialize and save the FULL original memory back to session_context
+	if cwd := shellSession.CWD(); cwd != "" && cwd != worker.WorkDir {
+		worker.WorkDir = cwd
+		logger.Detail(ctx, "工作目录已更新", "cwd", cwd)
+	}
+
+	updateData := map[string]interface{}{
+		"workDir": worker.WorkDir,
+	}
 	if loopResult != nil && len(loopResult.Messages) > 0 {
 		contextBytes, err := json.Marshal(loopResult.Messages)
 		if err == nil {
-			_ = server.UpdateSession(ctx, worker.SessionID, map[string]interface{}{
-				"context": string(contextBytes),
-			})
+			updateData["context"] = string(contextBytes)
 		}
 	}
+	_ = storage.UpdateSession(worker.SessionID, updateData)
 
 	return nil
 }

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { sessionsApi } from "@/api/sessions"
-import type { AgentSession } from "@/api/types"
+import type { AgentSession, MessageData } from "@/api/types"
 
 export function useSessions(filters?: { agentId?: string; channel?: string; limit?: number }) {
   return useQuery({
@@ -22,10 +22,21 @@ export function useSession(id: string | undefined) {
     },
     enabled: !!id,
     refetchInterval: (query) => {
-      // Poll faster when the session is actively processing
       const data = query.state.data
       return data?.executionStatus === "processing" ? 2000 : false
     },
+  })
+}
+
+export function useSessionMessages(sessionId: string | undefined, opts?: { refetchInterval?: number | false }) {
+  return useQuery<MessageData[]>({
+    queryKey: ["sessions", sessionId, "messages"],
+    queryFn: async () => {
+      const res = await sessionsApi.getMessages(sessionId!)
+      return res.data ?? []
+    },
+    enabled: !!sessionId,
+    refetchInterval: opts?.refetchInterval ?? 5000,
   })
 }
 

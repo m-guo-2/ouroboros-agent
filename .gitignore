@@ -49,4 +49,11 @@ coverage
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+# Go binary
 agent/agent
+
+# Runtime data (SQLite)
+data/config.db
+data/config.db-shm
+data/config.db-wal

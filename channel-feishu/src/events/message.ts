@@ -10,8 +10,11 @@ import { feishuConfig } from "../config";
  */
 const messageHandlers: MessageHandler[] = [];
 
-const CHAT_NAME_CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_TTL_MS = 10 * 60 * 1000;
 const chatNameCache = new Map<string, { name: string; expiresAt: number }>();
+const userNameCache = new Map<string, { name: string; expiresAt: number }>();
+
+let tenantToken: { token: string; expiresAt: number } | null = null;
 
 function getCachedChatName(chatId: string): string | undefined {
   const cached = chatNameCache.get(chatId);
@@ -28,11 +31,78 @@ async function refreshChatName(chatId: string): Promise<void> {
     const chatInfo = await getChatInfo(chatId);
     const name = (chatInfo as any)?.data?.name;
     if (typeof name === "string" && name.trim()) {
-      chatNameCache.set(chatId, { name: name.trim(), expiresAt: Date.now() + CHAT_NAME_CACHE_TTL_MS });
+      chatNameCache.set(chatId, { name: name.trim(), expiresAt: Date.now() + CACHE_TTL_MS });
     }
   } catch {
     // 群名刷新失败不影响主流程
   }
+}
+
+async function getTenantAccessToken(): Promise<string> {
+  if (tenantToken && tenantToken.expiresAt > Date.now()) {
+    return tenantToken.token;
+  }
+  const res = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      app_id: feishuConfig.appId,
+      app_secret: feishuConfig.appSecret,
+    }),
+  });
+  const data = await res.json() as { code?: number; tenant_access_token?: string; expire?: number };
+  if (data.code !== 0 || !data.tenant_access_token) {
+    throw new Error(`获取 tenant_access_token 失败: ${JSON.stringify(data)}`);
+  }
+  tenantToken = {
+    token: data.tenant_access_token,
+    expiresAt: Date.now() + (data.expire ?? 7200) * 1000 - 60_000,
+  };
+  return tenantToken.token;
+}
+
+/**
+ * 用原生 fetch 查询飞书用户昵称（绕过 SDK 的 axios，避免 Bun 兼容性问题）。
+ * 带本地缓存 + 重试。
+ */
+async function resolveUserName(openId: string): Promise<string | undefined> {
+  const cached = userNameCache.get(openId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name;
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const token = await getTenantAccessToken();
+      const res = await fetch(
+        `https://open.feishu.cn/open-apis/contact/v3/users/${openId}?user_id_type=open_id`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) {
+        console.warn(`⚠️ 获取用户昵称 HTTP ${res.status} (${openId}), attempt=${attempt}`);
+        if (attempt === 0) continue;
+        return undefined;
+      }
+      const data = await res.json() as { code?: number; data?: { user?: { name?: string } } };
+      if (data.code !== 0) {
+        console.warn(`⚠️ 获取用户昵称 API 错误 code=${data.code} (${openId})`);
+        return undefined;
+      }
+      const name = data.data?.user?.name;
+      if (typeof name === "string" && name.trim()) {
+        userNameCache.set(openId, { name: name.trim(), expiresAt: Date.now() + CACHE_TTL_MS });
+        return name.trim();
+      }
+      return undefined;
+    } catch (err) {
+      if (attempt === 0) {
+        console.warn(`⚠️ 获取用户昵称失败 (${openId}), 重试中...`);
+        continue;
+      }
+      console.warn(`⚠️ 获取用户昵称最终失败 (${openId}):`, (err as Error).message);
+    }
+  }
+  return undefined;
 }
 
 /** 注册消息处理器 */
@@ -149,7 +219,8 @@ async function agentHandler(msg: ReceivedMessage): Promise<void> {
 
   console.log(`  🤖 转发到 Agent [${msg.messageType}]: "${content.substring(0, 80)}${content.length > 80 ? "..." : ""}"`);
 
-  // 会话名称采用缓存，避免同步请求飞书 API 阻塞消息投递（这是 Monitor 延迟的主要来源之一）
+  // 并行解析用户昵称和会话名称
+  const openId = msg.sender.senderId.open_id;
   let conversationName: string | undefined;
   if (chatType === "group") {
     conversationName = getCachedChatName(msg.chatId);
@@ -157,19 +228,18 @@ async function agentHandler(msg: ReceivedMessage): Promise<void> {
       void refreshChatName(msg.chatId);
     }
   }
+  const senderName = await resolveUserName(openId);
 
-  // 归一化为统一渠道消息格式，异步转发到 server
-  // agentId: 标识本 bot 对应哪个 Agent（多 Agent 架构下，群内每个 bot 各自收到消息）
   const result = await forwardToAgent({
     channel: "feishu",
-    channelUserId: msg.sender.senderId.open_id,
+    channelUserId: openId,
     channelMessageId: msg.messageId,
     channelConversationId: msg.chatId,
     channelConversationName: conversationName,
     conversationType: chatType,
     messageType: msg.messageType,
     content,
-    senderName: undefined, // 飞书 SDK 事件中无直接 sender name
+    senderName,
     timestamp: parseInt(msg.createTime, 10) || Date.now(),
     channelMeta: {
       chatType,

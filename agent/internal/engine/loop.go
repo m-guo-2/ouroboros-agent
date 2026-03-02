@@ -7,19 +7,17 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/logger"
 	"agent/internal/types"
 )
 
 const DefaultMaxIterations = 25
-
-type AgentEventHandler func(event types.AgentEvent)
 
 type AgentLoopConfig struct {
 	LLMClient     LLMClient
 	SystemPrompt  string
 	Messages      []types.AgentMessage
 	Tools         []types.RegisteredTool
-	OnEvent       AgentEventHandler
 	OnNewMessages func(messages []types.AgentMessage) error
 	MaxIterations int
 	Model         string
@@ -32,101 +30,23 @@ type AgentLoopResult struct {
 	HitMaxIterations bool
 }
 
-func buildModelInputSummary(systemPrompt string, messages []types.AgentMessage, tools []types.ToolDefinition, model string) interface{} {
-	if model == "" {
-		model = "unknown"
+func estimateCost(model string, inputTokens, outputTokens int) float64 {
+	type pricing struct{ in, out float64 }
+	table := map[string]pricing{
+		"claude-opus-4-5":            {15, 75},
+		"claude-sonnet-4-5":          {3, 15},
+		"claude-3-5-sonnet-20241022": {3, 15},
+		"claude-3-5-haiku-20241022":  {0.8, 4},
+		"claude-3-haiku-20240307":    {0.25, 1.25},
+		"gpt-4o":                     {5, 15},
+		"gpt-4o-mini":                {0.15, 0.60},
+		"gpt-4-turbo":                {10, 30},
 	}
-
-	spPreview := systemPrompt
-	if len(spPreview) > 500 {
-		spPreview = spPreview[:500]
+	p, ok := table[model]
+	if !ok {
+		return 0
 	}
-
-	var msgsSummary []map[string]interface{}
-	for _, m := range messages {
-		var contentParts []string
-		for _, b := range m.Content {
-			if b.Type == "text" {
-				t := b.Text
-				if len(t) > 200 {
-					t = t[:200]
-				}
-				contentParts = append(contentParts, "[text] "+t)
-			} else if b.Type == "tool_use" {
-				contentParts = append(contentParts, "[tool_use:"+b.Name+"]")
-			} else if b.Type == "tool_result" {
-				c := b.Content
-				if len(c) > 150 {
-					c = c[:150]
-				}
-				contentParts = append(contentParts, "[tool_result:"+b.ToolUseID+"] "+c)
-			} else {
-				contentParts = append(contentParts, "[unknown]")
-			}
-		}
-		
-		joined := strings.Join(contentParts, " | ")
-		if len(joined) > 400 {
-			joined = joined[:400]
-		}
-		
-		msgsSummary = append(msgsSummary, map[string]interface{}{
-			"role":    m.Role,
-			"content": joined,
-		})
-	}
-
-	var toolNames []string
-	for _, t := range tools {
-		toolNames = append(toolNames, t.Name)
-	}
-
-	return map[string]interface{}{
-		"model":               model,
-		"systemPromptPreview": spPreview,
-		"messageCount":        len(messages),
-		"messages":            msgsSummary,
-		"toolNames":           toolNames,
-	}
-}
-
-func buildModelOutputSummary(response *LLMResponse) interface{} {
-	var textParts []string
-	var toolCalls []map[string]interface{}
-
-	for _, b := range response.Content {
-		if b.Type == "text" {
-			textParts = append(textParts, b.Text)
-		} else if b.Type == "tool_use" {
-			inputBytes, _ := json.Marshal(b.Input)
-			inputPreview := string(inputBytes)
-			if len(inputPreview) > 200 {
-				inputPreview = inputPreview[:200]
-			}
-			toolCalls = append(toolCalls, map[string]interface{}{
-				"name":         b.Name,
-				"id":           b.ID,
-				"inputPreview": inputPreview,
-			})
-		}
-	}
-
-	textContent := strings.Join(textParts, "")
-	if len(textContent) > 1500 {
-		textContent = textContent[:1500]
-	}
-
-	res := map[string]interface{}{
-		"content":      textContent,
-		"stopReason":   response.StopReason,
-		"inputTokens":  response.Usage.InputTokens,
-		"outputTokens": response.Usage.OutputTokens,
-	}
-	if len(toolCalls) > 0 {
-		res["toolCalls"] = toolCalls
-	}
-
-	return res
+	return float64(inputTokens)/1e6*p.in + float64(outputTokens)/1e6*p.out
 }
 
 func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult, error) {
@@ -145,81 +65,70 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		toolDefs = append(toolDefs, t.Definition)
 	}
 
-	cumulativeUsage := types.TokenUsage{
-		InputTokens:  0,
-		OutputTokens: 0,
-		TotalCostUsd: 0,
-	}
-
+	var totalInputTokens, totalOutputTokens int
+	var totalCostUsd float64
 	iteration := 0
 	var finalText string
 	hitMaxIterations := false
 
 	for iteration < maxIters {
 		if ctx.Err() != nil {
-			config.OnEvent(types.AgentEvent{
-				Type:      "error",
-				Timestamp: time.Now().UnixMilli(),
-				Iteration: iteration,
-				Error:     "Agent loop aborted by signal",
-			})
+			logger.Error(ctx, "引擎循环被中止",
+				"traceEvent", "error", "iteration", iteration, "error", "Agent loop aborted by signal")
 			break
 		}
 
 		iteration++
 
-		// Step 1: Call LLM
+		llmStart := time.Now()
 		response, err := config.LLMClient.Chat(ctx, ChatParams{
 			Messages:     messages,
 			Tools:        toolDefs,
 			SystemPrompt: config.SystemPrompt,
 			Model:        config.Model,
 		})
+		llmDurationMs := time.Since(llmStart).Milliseconds()
 
 		if err != nil {
-			config.OnEvent(types.AgentEvent{
-				Type:      "error",
-				Timestamp: time.Now().UnixMilli(),
-				Iteration: iteration,
-				Error:     err.Error(),
-			})
+			logger.Error(ctx, "LLM 调用失败",
+				"traceEvent", "error", "iteration", iteration, "error", err.Error())
 			break
 		}
 
-		// Report Model I/O
-		config.OnEvent(types.AgentEvent{
-			Type:        "model_io",
-			Timestamp:   time.Now().UnixMilli(),
-			Iteration:   iteration,
-			ModelInput:  buildModelInputSummary(config.SystemPrompt, messages, toolDefs, config.Model),
-			ModelOutput: buildModelOutputSummary(response),
-		})
+		// Write full LLM I/O to dedicated file (detail level)
+		llmIORef := logger.WriteLLMIO(ctx, iteration, response.RawRequest, response.RawResponse)
 
-		cumulativeUsage.InputTokens += response.Usage.InputTokens
-		cumulativeUsage.OutputTokens += response.Usage.OutputTokens
+		callCost := estimateCost(config.Model, response.Usage.InputTokens, response.Usage.OutputTokens)
+		totalInputTokens += response.Usage.InputTokens
+		totalOutputTokens += response.Usage.OutputTokens
+		totalCostUsd += callCost
 
-		// Step 2: Parse response content
+		// Business-level: trace event with metrics + reference to full I/O
+		logger.Business(ctx, "LLM 调用",
+			"traceEvent", "llm_call",
+			"iteration", iteration,
+			"model", config.Model,
+			"inputTokens", response.Usage.InputTokens,
+			"outputTokens", response.Usage.OutputTokens,
+			"durationMs", llmDurationMs,
+			"stopReason", response.StopReason,
+			"costUsd", callCost,
+			"llmIORef", llmIORef)
+
 		var textBlocks []types.ContentBlock
 		var toolUseBlocks []types.ContentBlock
-
 		for _, block := range response.Content {
 			if block.Type == "text" {
 				textBlocks = append(textBlocks, block)
 				if strings.TrimSpace(block.Text) != "" {
-					config.OnEvent(types.AgentEvent{
-						Type:      "thinking",
-						Timestamp: time.Now().UnixMilli(),
-						Iteration: iteration,
-						Thinking:  block.Text,
-						Source:    "model",
-					})
+					logger.Business(ctx, "思考中",
+						"traceEvent", "thinking", "iteration", iteration, "thinking", block.Text)
 				}
 			} else if block.Type == "tool_use" {
 				toolUseBlocks = append(toolUseBlocks, block)
 			}
 		}
 
-		// Step 3: If no tool calls, loop ends
 		if len(toolUseBlocks) == 0 {
 			var texts []string
 			for _, b := range textBlocks {
@@ -229,81 +138,47 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			break
 		}
 
-		// Append assistant message (keep both text and tool_use blocks intact as per new design)
 		var assistantBlocks []types.ContentBlock
 		assistantBlocks = append(assistantBlocks, textBlocks...)
 		assistantBlocks = append(assistantBlocks, toolUseBlocks...)
-		assistantMsg := types.AgentMessage{
-			Role:    "assistant",
-			Content: assistantBlocks,
-		}
+		assistantMsg := types.AgentMessage{Role: "assistant", Content: assistantBlocks}
 		messages = append(messages, assistantMsg)
 
-		// Step 4: Execute tools
 		var toolResults []types.ContentBlock
-
 		for _, toolUse := range toolUseBlocks {
-			config.OnEvent(types.AgentEvent{
-				Type:       "tool_call",
-				Timestamp:  time.Now().UnixMilli(),
-				Iteration:  iteration,
-				ToolCallID: toolUse.ID,
-				ToolName:   toolUse.Name,
-				ToolInput:  toolUse.Input,
-			})
+			toolInputJSON, _ := json.Marshal(toolUse.Input)
+			logger.Business(ctx, "工具调用",
+				"traceEvent", "tool_call", "iteration", iteration,
+				"tool", toolUse.Name, "toolCallId", toolUse.ID, "toolInput", string(toolInputJSON))
 
 			startedAt := time.Now().UnixMilli()
 			registeredTool, ok := toolMap[toolUse.Name]
-
 			if !ok {
 				var available []string
 				for k := range toolMap {
 					available = append(available, k)
 				}
 				errorMsg := fmt.Sprintf("Tool not found: %s. Available tools: %s", toolUse.Name, strings.Join(available, ", "))
-				
-				f := false
-				config.OnEvent(types.AgentEvent{
-					Type:         "tool_result",
-					Timestamp:    time.Now().UnixMilli(),
-					Iteration:    iteration,
-					ToolCallID:   toolUse.ID,
-					ToolName:     toolUse.Name,
-					ToolResult:   errorMsg,
-					ToolDuration: time.Now().UnixMilli() - startedAt,
-					ToolSuccess:  &f,
-				})
-
+				dur := time.Now().UnixMilli() - startedAt
+				logger.Business(ctx, "工具返回",
+					"traceEvent", "tool_result", "iteration", iteration,
+					"tool", toolUse.Name, "toolCallId", toolUse.ID,
+					"toolSuccess", false, "toolDuration", dur, "toolResult", errorMsg)
 				toolResults = append(toolResults, types.ContentBlock{
-					Type:      "tool_result",
-					ToolUseID: toolUse.ID,
-					Content:   errorMsg,
-					IsError:   true,
+					Type: "tool_result", ToolUseID: toolUse.ID, Content: errorMsg, IsError: true,
 				})
 				continue
 			}
 
 			result, err := registeredTool.Execute(ctx, toolUse.Input)
 			duration := time.Now().UnixMilli() - startedAt
-
 			if err != nil {
-				f := false
-				config.OnEvent(types.AgentEvent{
-					Type:         "tool_result",
-					Timestamp:    time.Now().UnixMilli(),
-					Iteration:    iteration,
-					ToolCallID:   toolUse.ID,
-					ToolName:     toolUse.Name,
-					ToolResult:   err.Error(),
-					ToolDuration: duration,
-					ToolSuccess:  &f,
-				})
-
+				logger.Business(ctx, "工具返回",
+					"traceEvent", "tool_result", "iteration", iteration,
+					"tool", toolUse.Name, "toolCallId", toolUse.ID,
+					"toolSuccess", false, "toolDuration", duration, "toolResult", err.Error())
 				toolResults = append(toolResults, types.ContentBlock{
-					Type:      "tool_result",
-					ToolUseID: toolUse.ID,
-					Content:   err.Error(),
-					IsError:   true,
+					Type: "tool_result", ToolUseID: toolUse.ID, Content: err.Error(), IsError: true,
 				})
 			} else {
 				var resultStr string
@@ -313,70 +188,47 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 					b, _ := json.MarshalIndent(result, "", "  ")
 					resultStr = string(b)
 				}
-
-				t := true
-				config.OnEvent(types.AgentEvent{
-					Type:         "tool_result",
-					Timestamp:    time.Now().UnixMilli(),
-					Iteration:    iteration,
-					ToolCallID:   toolUse.ID,
-					ToolName:     toolUse.Name,
-					ToolResult:   result,
-					ToolDuration: duration,
-					ToolSuccess:  &t,
-				})
-
+				logger.Business(ctx, "工具返回",
+					"traceEvent", "tool_result", "iteration", iteration,
+					"tool", toolUse.Name, "toolCallId", toolUse.ID,
+					"toolSuccess", true, "toolDuration", duration, "toolResult", resultStr)
 				toolResults = append(toolResults, types.ContentBlock{
-					Type:      "tool_result",
-					ToolUseID: toolUse.ID,
-					Content:   resultStr,
+					Type: "tool_result", ToolUseID: toolUse.ID, Content: resultStr,
 				})
 			}
 		}
 
-		// Step 5: Append tool results
-		toolResultMsg := types.AgentMessage{
-			Role:    "user",
-			Content: toolResults,
-		}
+		toolResultMsg := types.AgentMessage{Role: "user", Content: toolResults}
 		messages = append(messages, toolResultMsg)
 
-		// Step 6: Incremental persistence
 		if config.OnNewMessages != nil {
-			err := config.OnNewMessages([]types.AgentMessage{assistantMsg, toolResultMsg})
-			if err != nil {
-				config.OnEvent(types.AgentEvent{
-					Type:      "error",
-					Timestamp: time.Now().UnixMilli(),
-					Iteration: iteration,
-					Error:     fmt.Sprintf("Failed to persist iteration messages: %v", err),
-					Source:    "system",
-				})
+			if err := config.OnNewMessages([]types.AgentMessage{assistantMsg, toolResultMsg}); err != nil {
+				logger.Error(ctx, "持久化迭代消息失败",
+					"traceEvent", "error", "iteration", iteration, "error", err.Error())
 			}
 		}
 
 		if iteration >= maxIters {
 			hitMaxIterations = true
-			config.OnEvent(types.AgentEvent{
-				Type:      "error",
-				Timestamp: time.Now().UnixMilli(),
-				Iteration: iteration,
-				Error:     fmt.Sprintf("Reached max iterations (%d), stopping loop", maxIters),
-				Source:    "system",
-			})
+			logger.Warn(ctx, "达到最大迭代数",
+				"traceEvent", "error", "iteration", iteration, "maxIters", maxIters)
 		}
 	}
 
-	config.OnEvent(types.AgentEvent{
-		Type:      "done",
-		Timestamp: time.Now().UnixMilli(),
-		Usage:     &cumulativeUsage,
-	})
+	logger.Business(ctx, "执行完成",
+		"traceEvent", "done",
+		"inputTokens", totalInputTokens,
+		"outputTokens", totalOutputTokens,
+		"totalCostUsd", totalCostUsd)
 
 	return &AgentLoopResult{
-		FinalText:        finalText,
-		Messages:         messages,
-		Usage:            cumulativeUsage,
+		FinalText: finalText,
+		Messages:  messages,
+		Usage: types.TokenUsage{
+			InputTokens:  totalInputTokens,
+			OutputTokens: totalOutputTokens,
+			TotalCostUsd: totalCostUsd,
+		},
 		HitMaxIterations: hitMaxIterations,
 	}, nil
 }

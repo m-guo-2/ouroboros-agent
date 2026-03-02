@@ -3,7 +3,7 @@ import {
   Activity, MessageSquare,
   User, Bot, Brain, Wrench, CheckCircle2, XCircle,
   Clock, ChevronDown, ChevronRight, Search, Trash2,
-  Cpu, Settings2, Eye
+  Cpu, Settings2, Zap, FileText, X
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -12,24 +12,23 @@ import { StatusBadge } from "@/components/shared/status-badge"
 import { ChannelBadge } from "@/components/shared/channel-badge"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { useMonitorSessions } from "@/hooks/use-monitor"
-import { useSession, useDeleteSession } from "@/hooks/use-sessions"
+import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
 import { useQuery } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
 import { cn, timeAgo, formatDuration, formatCost, truncate } from "@/lib/utils"
-import type { AgentMessage, ExecutionTrace, ExecutionStep } from "@/api/types"
+import type { MessageData, ExecutionTrace, ExecutionStep } from "@/api/types"
 
 // ===== Message Exchange: user msg → trace → assistant response =====
 
 interface MessageExchange {
-  userMessage: AgentMessage
+  userMessage: Pick<MessageData, "role" | "content"> & Partial<MessageData>
   trace?: ExecutionTrace
-  assistantMessage?: AgentMessage
-  /** true when triggered by system/agent, not a real user message */
+  assistantMessage?: MessageData
   isSystemInitiated?: boolean
 }
 
 function buildExchanges(
-  messages: AgentMessage[],
+  messages: MessageData[],
   traces: Record<string, ExecutionTrace>,
 ): MessageExchange[] {
   const exchanges: MessageExchange[] = []
@@ -78,113 +77,463 @@ function buildExchanges(
   return exchanges
 }
 
-// ===== Trace Step =====
+// ===== Iteration grouping =====
 
-function TraceStep({ step }: { step: ExecutionStep }) {
+interface ToolPair {
+  call: ExecutionStep
+  result?: ExecutionStep
+}
+
+interface IterationData {
+  iteration: number
+  llmCall?: ExecutionStep
+  systemSteps: ExecutionStep[]
+  thinkings: ExecutionStep[]
+  toolPairs: ToolPair[]
+  contentSteps: ExecutionStep[]
+  errorSteps: ExecutionStep[]
+}
+
+function groupStepsByIteration(steps: ExecutionStep[]): IterationData[] {
+  const iterMap = new Map<number, IterationData>()
+  const pendingToolCalls = new Map<string, { iterIdx: number; pairIdx: number }>()
+
+  const getOrCreate = (iter: number): IterationData => {
+    if (!iterMap.has(iter)) {
+      iterMap.set(iter, { iteration: iter, systemSteps: [], thinkings: [], toolPairs: [], contentSteps: [], errorSteps: [] })
+    }
+    return iterMap.get(iter)!
+  }
+
+  for (const step of steps) {
+    const iter = step.iteration ?? 0
+    const data = getOrCreate(iter)
+
+    if (step.type === "llm_call") {
+      data.llmCall = step
+    } else if (step.type === "thinking") {
+      if (step.source === "system") data.systemSteps.push(step)
+      else data.thinkings.push(step)
+    } else if (step.type === "tool_call") {
+      const pairIdx = data.toolPairs.length
+      data.toolPairs.push({ call: step })
+      if (step.toolCallId) pendingToolCalls.set(step.toolCallId, { iterIdx: iter, pairIdx })
+    } else if (step.type === "tool_result") {
+      const loc = step.toolCallId ? pendingToolCalls.get(step.toolCallId) : undefined
+      if (loc && iterMap.has(loc.iterIdx)) {
+        iterMap.get(loc.iterIdx)!.toolPairs[loc.pairIdx].result = step
+        if (step.toolCallId) pendingToolCalls.delete(step.toolCallId)
+      }
+    } else if (step.type === "content") {
+      data.contentSteps.push(step)
+    } else if (step.type === "error") {
+      data.errorSteps.push(step)
+    }
+  }
+
+  return Array.from(iterMap.values()).sort((a, b) => a.iteration - b.iteration)
+}
+
+// ===== Detail panel (expandable code block) =====
+
+function DetailBlock({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-1.5 rounded-md border border-slate-200 bg-slate-50/80 p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
+      {children}
+    </div>
+  )
+}
+
+function LLMIOInline({
+  traceId,
+  llmIORef,
+}: {
+  traceId: string
+  llmIORef: string
+}) {
   const [expanded, setExpanded] = useState(false)
-
-  const config = {
-    thinking: { 
-      icon: step.source === "system" ? Cpu : Brain, 
-      color: step.source === "system" ? "text-purple-600" : "text-slate-500", 
-      bg: step.source === "system" ? "bg-purple-50" : "bg-slate-100", 
-      label: step.source === "system" ? "System" : "Think" 
-    },
-    tool_call: { icon: Wrench, color: "text-brand-600", bg: "bg-brand-50", label: "Act" },
-    tool_result: {
-      icon: step.toolSuccess === false ? XCircle : CheckCircle2,
-      color: step.toolSuccess === false ? "text-red-600" : "text-green-600",
-      bg: step.toolSuccess === false ? "bg-red-50" : "bg-green-50",
-      label: "Observe",
-    },
-    content: { icon: CheckCircle2, color: "text-green-600", bg: "bg-green-50", label: "Result" },
-    error: { icon: XCircle, color: "text-red-600", bg: "bg-red-50", label: "Error" },
-    model_io: { icon: Eye, color: "text-sky-600", bg: "bg-sky-50", label: "Model I/O" },
-  }[step.type] ?? { icon: Activity, color: "text-slate-500", bg: "bg-slate-100", label: step.type }
-
-  const Icon = config.icon
-  const hasDetail = !!(step.thinking || step.toolInput || step.toolResult || step.error || step.modelInput || step.modelOutput)
-
-  const isMultiLine = step.thinking?.includes('\n')
-
-  const modelOutputData = step.modelOutput as Record<string, unknown> | undefined
-  const modelOutputSummary = step.type === "model_io" && modelOutputData
-    ? `in=${(modelOutputData.inputTokens as number) ?? "?"} out=${(modelOutputData.outputTokens as number) ?? "?"}${modelOutputData.stopReason ? ` · ${modelOutputData.stopReason}` : ""}`
-    : ""
-
-  const summaryText = step.type === "model_io"
-    ? modelOutputSummary || "LLM 调用"
-    : step.thinking
-      ? (isMultiLine ? step.thinking.split('\n')[0] : truncate(step.thinking, 100))
-      : step.toolName
-        ? `${step.toolName}${step.toolDuration ? ` · ${formatDuration(step.toolDuration)}` : ""}`
-        : step.content
-          ? truncate(step.content, 100)
-          : step.error ?? ""
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["llm-io-inline", traceId, llmIORef],
+    queryFn: () => tracesApi.getLLMIO(traceId, llmIORef),
+    enabled: expanded,
+    staleTime: Infinity,
+  })
+  const payload = data?.data as Record<string, unknown> | undefined
 
   return (
-    <div className="flex gap-2.5 group/step">
+    <div className="mb-2 rounded-md border border-indigo-100 bg-indigo-50/40 overflow-hidden">
+      <button
+        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left hover:bg-indigo-100/50 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded
+          ? <ChevronDown className="h-3 w-3 text-indigo-500" />
+          : <ChevronRight className="h-3 w-3 text-indigo-500" />}
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-indigo-700">Model I/O</span>
+        <span className="text-[10px] font-mono text-indigo-500">{llmIORef}</span>
+      </button>
+
+      {expanded && (
+        <div className="px-2.5 pb-2.5 space-y-2">
+          {isLoading && (
+            <div className="space-y-1.5">
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-20 rounded-md" />
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-20 rounded-md" />
+            </div>
+          )}
+
+          {error && <div className="text-[11px] text-red-600">加载失败: {String(error)}</div>}
+
+          {payload && payload.request != null && (
+            <div className="rounded-md border border-brand-100 bg-white overflow-hidden">
+              <div className="px-2 py-0.5 bg-brand-50 text-[10px] font-semibold text-brand-700 uppercase tracking-wider">
+                Input
+              </div>
+              <pre className="p-2 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto">
+                {typeof payload.request === "string"
+                  ? payload.request
+                  : JSON.stringify(payload.request, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          {payload && payload.response != null && (
+            <div className="rounded-md border border-green-100 bg-white overflow-hidden">
+              <div className="px-2 py-0.5 bg-green-50 text-[10px] font-semibold text-green-700 uppercase tracking-wider">
+                Output
+              </div>
+              <pre className="p-2 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-56 overflow-y-auto">
+                {typeof payload.response === "string"
+                  ? payload.response
+                  : JSON.stringify(payload.response, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ===== Tool Pair =====
+
+function ToolPairView({ pair }: { pair: ToolPair }) {
+  const [expanded, setExpanded] = useState(false)
+  const { call, result } = pair
+  const success = result ? result.toolSuccess !== false : undefined
+  const hasDetail = !!(call.toolInput || result?.toolResult || result?.error)
+
+  return (
+    <div className="flex gap-2.5 group/tool">
       <div className="flex flex-col items-center pt-0.5">
-        <div className={cn("flex h-5 w-5 items-center justify-center rounded-full flex-shrink-0", config.bg)}>
-          <Icon className={cn("h-3 w-3", config.color)} />
+        <div className={cn(
+          "flex h-5 w-5 items-center justify-center rounded-full flex-shrink-0",
+          success === false ? "bg-red-50" : success === true ? "bg-green-50" : "bg-brand-50"
+        )}>
+          {success === false
+            ? <XCircle className="h-3 w-3 text-red-600" />
+            : success === true
+              ? <CheckCircle2 className="h-3 w-3 text-green-600" />
+              : <Wrench className="h-3 w-3 text-brand-600" />
+          }
         </div>
         <div className="w-px flex-1 bg-slate-200 mt-0.5" />
       </div>
 
       <div className="flex-1 pb-2.5 min-w-0">
         <div
-          className={cn("flex items-start gap-1.5", hasDetail && "cursor-pointer")}
+          className={cn("flex items-center gap-1.5", hasDetail && "cursor-pointer")}
           onClick={() => hasDetail && setExpanded(!expanded)}
         >
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className={cn("text-[10px] font-semibold uppercase tracking-wider", config.color)}>
-                {config.label}
-              </span>
-              {step.toolDuration != null && (
-                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
-                  <Clock className="h-2.5 w-2.5" />
-                  {formatDuration(step.toolDuration)}
-                </span>
-              )}
-            </div>
-            <p className="text-[13px] text-slate-600 mt-0.5 break-words leading-relaxed">{summaryText}</p>
-          </div>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-brand-600">Tool</span>
+          <span className="text-[13px] font-medium text-slate-700">{call.toolName}</span>
+          {result?.toolDuration != null && (
+            <span className="flex items-center gap-0.5 text-[10px] text-slate-400 ml-auto">
+              <Clock className="h-2.5 w-2.5" />
+              {formatDuration(result.toolDuration)}
+            </span>
+          )}
           {hasDetail && (
-            <span className="mt-0.5 text-slate-300 opacity-0 group-hover/step:opacity-100 transition-opacity">
+            <span className={cn("text-slate-300 transition-opacity opacity-0 group-hover/tool:opacity-100", !result?.toolDuration && "ml-auto")}>
               {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             </span>
           )}
         </div>
 
-        {expanded && step.type === "model_io" ? (
-          <div className="mt-1.5 space-y-1.5">
-            {step.modelInput && (
-              <div className="rounded-md border border-sky-100 bg-sky-50/60 overflow-hidden">
-                <div className="px-2.5 py-1 bg-sky-100/60 text-[10px] font-semibold text-sky-700 uppercase tracking-wider">Input</div>
-                <div className="p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
-                  {JSON.stringify(step.modelInput, null, 2)}
+        {expanded && (
+          <div className="space-y-1.5">
+            {call.toolInput != null && (
+              <div className="mt-1.5 rounded-md border border-brand-100 bg-brand-50/40 overflow-hidden">
+                <div className="px-2.5 py-0.5 bg-brand-100/50 text-[10px] font-semibold text-brand-700 uppercase tracking-wider">Input</div>
+                <div className="p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {typeof call.toolInput === "string" ? call.toolInput : JSON.stringify(call.toolInput, null, 2)}
                 </div>
               </div>
             )}
-            {step.modelOutput && (
-              <div className="rounded-md border border-slate-200 bg-slate-50/80 overflow-hidden">
-                <div className="px-2.5 py-1 bg-slate-100/80 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Output</div>
-                <div className="p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
-                  {JSON.stringify(step.modelOutput, null, 2)}
+            {(result?.toolResult != null || result?.error) && (
+              <div className={cn(
+                "rounded-md border overflow-hidden",
+                result.toolSuccess === false ? "border-red-100 bg-red-50/40" : "border-green-100 bg-green-50/40"
+              )}>
+                <div className={cn(
+                  "px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                  result.toolSuccess === false ? "bg-red-100/50 text-red-700" : "bg-green-100/50 text-green-700"
+                )}>
+                  {result.toolSuccess === false ? "Error" : "Result"}
+                </div>
+                <div className="p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {result.error
+                    ? <span className="text-red-600">{result.error}</span>
+                    : typeof result.toolResult === "string"
+                      ? result.toolResult
+                      : JSON.stringify(result.toolResult, null, 2)
+                  }
                 </div>
               </div>
             )}
           </div>
-        ) : expanded ? (
-          <div className="mt-1.5 rounded-md border border-slate-200 bg-slate-50/80 p-2.5 text-[11px] font-mono text-slate-600 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
-            {step.thinking && String(step.thinking)}
-            {step.toolInput ? JSON.stringify(step.toolInput, null, 2) : null}
-            {step.toolResult ? (typeof step.toolResult === "string" ? step.toolResult : JSON.stringify(step.toolResult, null, 2)) : null}
-            {step.error && <span className="text-red-600">{step.error}</span>}
-          </div>
-        ) : null}
+        )}
       </div>
+    </div>
+  )
+}
+
+// ===== Thinking block =====
+
+function ThinkingView({ step }: { step: ExecutionStep }) {
+  const [expanded, setExpanded] = useState(false)
+  const isSystem = step.source === "system"
+  const text = step.thinking ?? ""
+  const isLong = text.length > 120 || text.includes('\n')
+  const preview = isLong ? truncate(text.split('\n')[0], 120) : text
+
+  return (
+    <div className="flex gap-2.5 group/think">
+      <div className="flex flex-col items-center pt-0.5">
+        <div className={cn("flex h-5 w-5 items-center justify-center rounded-full flex-shrink-0",
+          isSystem ? "bg-purple-50" : "bg-slate-100")}>
+          {isSystem
+            ? <Cpu className="h-3 w-3 text-purple-500" />
+            : <Brain className="h-3 w-3 text-slate-400" />
+          }
+        </div>
+        <div className="w-px flex-1 bg-slate-200 mt-0.5" />
+      </div>
+
+      <div className="flex-1 pb-2 min-w-0">
+        <div
+          className={cn("flex items-start gap-1.5", isLong && "cursor-pointer")}
+          onClick={() => isLong && setExpanded(!expanded)}
+        >
+          <span className={cn("text-[10px] font-semibold uppercase tracking-wider",
+            isSystem ? "text-purple-500" : "text-slate-400")}>
+            {isSystem ? "System" : "Think"}
+          </span>
+          {isLong && (
+            <span className="ml-auto text-slate-300 opacity-0 group-hover/think:opacity-100 transition-opacity">
+              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            </span>
+          )}
+        </div>
+        <p className="text-[13px] text-slate-600 mt-0.5 leading-relaxed break-words">
+          {expanded ? text : preview}
+        </p>
+        {expanded && isLong && (
+          <button onClick={() => setExpanded(false)} className="mt-1 text-[10px] text-slate-400 hover:text-slate-600">
+            收起
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ===== LLM I/O Viewer =====
+
+function LLMIOViewer({ traceId, llmIORef, onClose }: { traceId: string; llmIORef: string; onClose: () => void }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["llm-io", traceId, llmIORef],
+    queryFn: () => tracesApi.getLLMIO(traceId, llmIORef),
+    staleTime: Infinity,
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="relative bg-white rounded-xl shadow-2xl w-[90vw] max-w-4xl max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-brand-600" />
+            <h3 className="text-sm font-semibold text-slate-900">LLM I/O</h3>
+            <span className="text-xs font-mono text-slate-400">{llmIORef}</span>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {isLoading && (
+            <div className="space-y-3">
+              <Skeleton className="h-6 w-32" />
+              <Skeleton className="h-40 rounded-lg" />
+              <Skeleton className="h-6 w-32" />
+              <Skeleton className="h-40 rounded-lg" />
+            </div>
+          )}
+          {error && (
+            <div className="text-sm text-red-600">加载失败: {String(error)}</div>
+          )}
+          {data?.data && (
+            <div className="space-y-4">
+              {data.data.request != null && (
+                <div className="rounded-lg border border-brand-100 overflow-hidden">
+                  <div className="px-3 py-1.5 bg-brand-50 text-xs font-semibold text-brand-700 uppercase tracking-wider">
+                    Request
+                  </div>
+                  <pre className="p-3 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-[35vh] overflow-y-auto bg-white">
+                    {typeof data.data.request === "string"
+                      ? data.data.request
+                      : JSON.stringify(data.data.request, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {data.data.response != null && (
+                <div className="rounded-lg border border-green-100 overflow-hidden">
+                  <div className="px-3 py-1.5 bg-green-50 text-xs font-semibold text-green-700 uppercase tracking-wider">
+                    Response
+                  </div>
+                  <pre className="p-3 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-[35vh] overflow-y-auto bg-white">
+                    {typeof data.data.response === "string"
+                      ? data.data.response
+                      : JSON.stringify(data.data.response, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ===== Iteration Group =====
+
+function IterationGroup({ data, traceId, defaultExpanded }: { data: IterationData; traceId?: string; defaultExpanded: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const [llmIOOpen, setLlmIOOpen] = useState(false)
+  const { llmCall, systemSteps, thinkings, toolPairs, contentSteps, errorSteps } = data
+  const hasErrors = errorSteps.length > 0 || toolPairs.some(p => p.result?.toolSuccess === false)
+  const isSystemOnly = data.iteration === 0
+  const hasLLMIO = !!llmCall?.llmIORef && !!traceId
+
+  const iterLabel = isSystemOnly ? "初始化" : `Iteration ${data.iteration}`
+
+  const modelShort = llmCall?.model
+    ? llmCall.model.replace(/^claude-/, "").replace(/-\d{8}$/, "")
+    : null
+
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className={cn(
+            "flex items-center gap-1.5 flex-1 py-1 px-2 rounded-md text-left transition-colors",
+            expanded ? "bg-slate-100/80" : "hover:bg-slate-100/60",
+            hasErrors && "text-red-700"
+          )}
+        >
+          {expanded ? <ChevronDown className="h-3 w-3 text-slate-400 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 text-slate-400 flex-shrink-0" />}
+          <span className={cn(
+            "text-[11px] font-semibold",
+            isSystemOnly ? "text-purple-600" : "text-slate-600"
+          )}>
+            {iterLabel}
+          </span>
+
+          {llmCall && (
+            <>
+              {modelShort && (
+                <span className="text-[10px] text-slate-400 font-mono ml-1">{modelShort}</span>
+              )}
+              <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
+                <Zap className="h-2.5 w-2.5" />
+                {llmCall.inputTokens ?? "?"}↑{llmCall.outputTokens ?? "?"}↓
+              </span>
+              {llmCall.durationMs != null && (
+                <span className="flex items-center gap-0.5 text-[10px] text-slate-400">
+                  <Clock className="h-2.5 w-2.5" />
+                  {formatDuration(llmCall.durationMs)}
+                </span>
+              )}
+            </>
+          )}
+
+          {toolPairs.length > 0 && (
+            <span className="text-[10px] text-slate-400 ml-1">{toolPairs.length} 工具</span>
+          )}
+          {hasErrors && <span className="text-[10px] text-red-500 ml-1">⚠</span>}
+          {llmCall?.costUsd != null && llmCall.costUsd > 0 && (
+            <span className="ml-auto text-[10px] text-slate-400">{formatCost(llmCall.costUsd)}</span>
+          )}
+        </button>
+
+        {hasLLMIO && (
+          <button
+            onClick={() => setLlmIOOpen(true)}
+            className="flex items-center gap-0.5 px-1.5 py-0.5 ml-1 rounded text-[10px] text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+            title="查看完整 LLM 请求/响应"
+          >
+            <FileText className="h-3 w-3" />
+            <span>I/O</span>
+          </button>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="ml-3 pl-2.5 border-l-2 border-slate-200 mt-0.5">
+          {hasLLMIO && <LLMIOInline traceId={traceId!} llmIORef={llmCall!.llmIORef!} />}
+          {systemSteps.map((s, i) => <ThinkingView key={i} step={s} />)}
+          {thinkings.map((s, i) => <ThinkingView key={i} step={s} />)}
+          {toolPairs.map((pair, i) => <ToolPairView key={i} pair={pair} />)}
+          {contentSteps.map((s, i) => (
+            <div key={i} className="flex gap-2.5">
+              <div className="flex flex-col items-center pt-0.5">
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-50 flex-shrink-0">
+                  <CheckCircle2 className="h-3 w-3 text-green-600" />
+                </div>
+              </div>
+              <div className="flex-1 pb-2 min-w-0">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-green-600">Result</span>
+                <p className="text-[13px] text-slate-600 mt-0.5 break-words">{truncate(s.content ?? "", 200)}</p>
+              </div>
+            </div>
+          ))}
+          {errorSteps.map((s, i) => (
+            <div key={i} className="flex gap-2.5">
+              <div className="flex flex-col items-center pt-0.5">
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-red-50 flex-shrink-0">
+                  <XCircle className="h-3 w-3 text-red-600" />
+                </div>
+              </div>
+              <div className="flex-1 pb-2 min-w-0">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-red-600">Error</span>
+                <DetailBlock><span className="text-red-600">{s.error}</span></DetailBlock>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {llmIOOpen && hasLLMIO && (
+        <LLMIOViewer traceId={traceId!} llmIORef={llmCall!.llmIORef!} onClose={() => setLlmIOOpen(false)} />
+      )}
     </div>
   )
 }
@@ -204,10 +553,11 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
     if (isRunning) setTraceOpen(true)
   }, [isRunning])
 
+  const iterGroups = useMemo(() => groupStepsByIteration(steps), [steps])
+  const maxIteration = iterGroups.filter(g => g.iteration > 0).length
+  const thinkSteps = steps.filter((s) => s.type === "thinking").length
   const toolCalls = steps.filter((s) => s.type === "tool_call").length
-  const thinkSteps = steps.filter((s) => s.type === "thinking" && s.source !== "system").length
   const errors = steps.filter((s) => s.type === "error" || (s.type === "tool_result" && s.toolSuccess === false)).length
-  const maxIteration = Math.max(0, ...steps.map(s => s.iteration || 0))
   const duration = trace?.completedAt ? trace.completedAt - trace.startedAt : 0
   // Trace is "stuck" if it reports running but the session is no longer processing
   const isStaleTrace = trace?.status === "running" && !isSessionProcessing
@@ -223,8 +573,8 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-purple-600">系统</span>
-              {exchange.userMessage.timestamp && (
-                <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.timestamp)}</span>
+              {exchange.userMessage.createdAt && (
+                <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
               )}
             </div>
             <p className="text-sm text-slate-700 mt-0.5 leading-relaxed whitespace-pre-wrap">
@@ -240,8 +590,8 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-500">用户</span>
-              {exchange.userMessage.timestamp && (
-                <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.timestamp)}</span>
+              {exchange.userMessage.createdAt && (
+                <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
               )}
               {exchange.userMessage.initiator && exchange.userMessage.initiator !== "user" && (
                 <Badge variant="outline" className="text-[10px]">{exchange.userMessage.initiator}</Badge>
@@ -286,27 +636,19 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
           </button>
 
           {traceOpen && (
-            <div className="mt-2 ml-2 pl-3 border-l-2 border-slate-200">
-              {(() => {
-                let lastIteration = 0
-                return steps.map((step, i) => {
-                  const showHeader = step.iteration > 0 && step.iteration !== lastIteration && step.source !== "system"
-                  if (step.iteration > 0) lastIteration = step.iteration
-                  return (
-                    <div key={i}>
-                      {showHeader && (
-                        <div className="flex items-center gap-2 mb-1.5 mt-1">
-                          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                            Iteration {step.iteration}
-                          </span>
-                          <div className="flex-1 h-px bg-slate-200" />
-                        </div>
-                      )}
-                      <TraceStep step={step} />
-                    </div>
-                  )
-                })
-              })()}
+            <div className="mt-2">
+              {iterGroups.map((group) => (
+                <IterationGroup
+                  key={group.iteration}
+                  data={group}
+                  traceId={trace?.id}
+                  defaultExpanded={
+                    isRunning
+                      ? group.iteration === iterGroups[iterGroups.length - 1].iteration
+                      : group.iteration > 0 && maxIteration <= 3
+                  }
+                />
+              ))}
             </div>
           )}
         </div>
@@ -321,8 +663,8 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-500">助手</span>
-              {exchange.assistantMessage.timestamp && (
-                <span className="text-[11px] text-slate-400">{timeAgo(exchange.assistantMessage.timestamp)}</span>
+              {exchange.assistantMessage.createdAt && (
+                <span className="text-[11px] text-slate-400">{timeAgo(exchange.assistantMessage.createdAt)}</span>
               )}
             </div>
             <div className="mt-0.5 text-sm text-slate-800">
@@ -351,19 +693,19 @@ function ExchangeCard({ exchange, isSessionProcessing }: { exchange: MessageExch
 
 function SessionPanel({ sessionId }: { sessionId: string }) {
   const { data: session, isLoading } = useSession(sessionId)
+  const isProcessing = session?.executionStatus === "processing"
+  const { data: messages = [] } = useSessionMessages(sessionId, {
+    refetchInterval: isProcessing ? 1000 : 5000,
+  })
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Is this session actively processing?
-  const isProcessing = session?.executionStatus === "processing"
-
-  // Fetch traces for messages
   const traceIds = useMemo(() => {
     return [...new Set(
-      (session?.messages ?? [])
+      messages
         .map((m) => m.traceId)
         .filter(Boolean) as string[]
     )]
-  }, [session?.messages])
+  }, [messages])
 
   const { data: fullTraces } = useQuery({
     queryKey: ["traces", "full", traceIds],
@@ -375,14 +717,13 @@ function SessionPanel({ sessionId }: { sessionId: string }) {
       }, {})
     },
     enabled: traceIds.length > 0,
-    // Poll faster when processing
-    refetchInterval: isProcessing ? 2000 : false,
+    refetchInterval: 1000,
   })
 
   const exchanges = useMemo(() => {
-    if (!session) return []
-    return buildExchanges(session.messages, fullTraces ?? {})
-  }, [session, fullTraces])
+    if (messages.length === 0) return []
+    return buildExchanges(messages, fullTraces ?? {})
+  }, [messages, fullTraces])
 
   // Auto-scroll to bottom on new exchanges
   useEffect(() => {
@@ -416,18 +757,18 @@ function SessionPanel({ sessionId }: { sessionId: string }) {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-slate-900 truncate">
-              {session.channelName || session.title || `会话 ${session.id.slice(0, 8)}`}
+              {session.channelName || session.title || `会话 ${session.id?.slice(0, 8) || "未知"}`}
             </h2>
             {session.sourceChannel && <ChannelBadge channel={session.sourceChannel} />}
-            {session.agentDisplayName && (
-              <Badge variant="brand">{session.agentDisplayName}</Badge>
+            {session.agentId && (
+              <Badge variant="outline" className="text-[10px]">{session.agentId}</Badge>
             )}
             {isProcessing && (
               <span className="h-2 w-2 rounded-full bg-green-500 animate-live-pulse" />
             )}
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            {session.messages.length} 条消息 · {exchanges.length} 次交互
+            {messages.length} 条消息 · {exchanges.length} 次交互
           </p>
         </div>
       </div>
@@ -467,7 +808,7 @@ export function MonitorPage() {
     return sessions.filter((s) =>
       (s.title?.toLowerCase().includes(q))
       || (s.channelName?.toLowerCase().includes(q))
-      || (s.agentDisplayName?.toLowerCase().includes(q))
+      || (s.agentId?.toLowerCase().includes(q))
       || (s.sourceChannel?.toLowerCase().includes(q))
     )
   }, [sessions, search])
@@ -549,7 +890,7 @@ export function MonitorPage() {
                         "text-sm font-medium truncate flex-1",
                         isSelected ? "text-brand-700" : "text-slate-900"
                       )}>
-                        {session.channelName || session.title || session.id.slice(0, 10)}
+                        {session.channelName || session.title || session.id?.slice(0, 10) || "未知会话"}
                       </span>
                       <button
                         onClick={(e) => handleDeleteSession(e, session.id)}
@@ -563,12 +904,12 @@ export function MonitorPage() {
                       {session.sourceChannel && <ChannelBadge channel={session.sourceChannel} />}
                       {session.executionStatus && <StatusBadge status={session.executionStatus} />}
                       <span className="text-[11px] text-slate-400 ml-auto">
-                        {session.updatedAt ? timeAgo(session.updatedAt) : ""}
+                        {(session.updatedAt || session.createdAt) ? timeAgo(session.updatedAt || session.createdAt) : ""}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-400">
-                      <span>{session.agentDisplayName ?? "default"}</span>
-                      <span>· {session.messageCount} 条</span>
+                      <span>{session.agentId || "default"}</span>
+                      {session.messageCount > 0 && <span>· {session.messageCount} 条</span>}
                     </div>
                   </div>
                 )

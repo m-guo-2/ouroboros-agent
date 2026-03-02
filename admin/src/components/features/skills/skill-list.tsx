@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Blocks, Wrench, BookOpen, Zap, Plus } from "lucide-react"
+import { Blocks, Wrench, BookOpen, Zap, Plus, Pencil } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { EmptyState } from "@/components/layout/empty-state"
 import { Card } from "@/components/ui/card"
@@ -84,6 +84,11 @@ export function SkillList() {
                         {skill.toolCount}
                       </span>
                     )}
+                    <Link to={`/skills/${skill.name}?edit=1`}>
+                      <Button variant="ghost" size="sm" title="编辑">
+                        <Pencil className="h-3.5 w-3.5 text-slate-500" />
+                      </Button>
+                    </Link>
                     <Switch
                       checked={skill.enabled}
                       onCheckedChange={(enabled) => toggleMutation.mutate({ name: skill.name, enabled })}

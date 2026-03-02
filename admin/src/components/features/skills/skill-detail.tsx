@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react"
-import { useParams, Link, useNavigate } from "react-router-dom"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom"
 import { ArrowLeft, Trash2, Pencil, Save, X, Plus, Minus, Eye, Code } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -65,6 +65,16 @@ export function SkillDetail() {
   }, [skill])
 
   useEffect(() => { syncFromSkill() }, [syncFromSkill])
+
+  const appliedEditParam = useRef(false)
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    if (searchParams.get("edit") === "1" && skill && !appliedEditParam.current) {
+      appliedEditParam.current = true
+      syncFromSkill()
+      setEditing(true)
+    }
+  }, [searchParams.get("edit"), skill, syncFromSkill])
 
   const enterEdit = () => {
     syncFromSkill()
@@ -339,16 +349,19 @@ export function SkillDetail() {
                       <ToolsVisualEditor tools={tools} onChange={setTools} />
                     )
                   ) : m.tools && m.tools.length > 0 ? (
-                    <div className="space-y-1">
-                      {m.tools.map((tool) => (
-                        <div key={tool.name} className="text-xs p-2 bg-slate-50 rounded">
-                          <p className="font-medium font-mono">{tool.name}</p>
-                          <p className="text-slate-500 mt-0.5">{tool.description}</p>
-                        </div>
-                      ))}
+                    <div>
+                      <p className="text-xs text-slate-400 mb-2">点击「编辑」可修改工具配置</p>
+                      <div className="space-y-1">
+                        {m.tools.map((tool) => (
+                          <div key={tool.name} className="text-xs p-2 bg-slate-50 rounded">
+                            <p className="font-medium font-mono">{tool.name}</p>
+                            <p className="text-slate-500 mt-0.5">{tool.description}</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : (
-                    <p className="text-sm text-slate-400">暂无工具</p>
+                    <p className="text-sm text-slate-400">暂无工具，点击「编辑」可添加</p>
                   )}
                 </CardContent>
               </Card>
@@ -405,6 +418,10 @@ function ToolEditor({
   const [schemaStr, setSchemaStr] = useState(JSON.stringify(tool.inputSchema, null, 2))
   const [schemaError, setSchemaError] = useState("")
 
+  useEffect(() => {
+    setSchemaStr(JSON.stringify(tool.inputSchema, null, 2))
+  }, [tool.inputSchema])
+
   const handleSchemaChange = (value: string) => {
     setSchemaStr(value)
     setSchemaError("")
@@ -449,7 +466,7 @@ function ToolEditor({
             <div>
               <label className="text-xs text-slate-400 mb-1 block">执行类型</label>
               <div className="flex gap-1">
-                {(["http", "script", "internal"] as const).map(t => (
+                {(["http", "shell", "script", "internal"] as const).map(t => (
                   <button
                     key={t}
                     type="button"

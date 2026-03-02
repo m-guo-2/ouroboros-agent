@@ -1,31 +1,54 @@
-.PHONY: all admin server agent feishu qiwei clean
+.PHONY: all admin agent feishu qiwei build clean dev dev-core
 
 # Default target
 all: help
 
 help:
 	@echo "Available commands:"
-	@echo "  make admin      - Start the Admin frontend (Vite)"
-	@echo "  make server     - Start the main Server (Bun)"
-	@echo "  make agent      - Start the Go Agent"
-	@echo "  make feishu     - Start the Feishu Channel service (Bun)"
-	@echo "  make qiwei      - Start the Qiwei Channel service (Bun)"
-	@echo "  make start-all  - Start Server, Agent, and Admin together (requires tmux or separate terminals)"
+	@echo "  make dev        - Start all services (agent + admin + feishu)"
+	@echo "  make dev-core   - Start core services (agent + admin)"
+	@echo "  make admin      - Start the Admin frontend (Vite dev server)"
+	@echo "  make agent      - Start the Go Agent (port 1997)"
+	@echo "  make feishu     - Start the Feishu Channel service (port 1999)"
+	@echo "  make qiwei      - Start the Qiwei Channel service (port 2000)"
+	@echo "  make build      - Build admin SPA + Go binary"
 
-# Start the admin frontend
+# Start all development services in parallel (Ctrl+C stops all)
+dev:
+	@trap 'kill 0' EXIT; \
+	$(MAKE) agent & \
+	$(MAKE) admin & \
+	$(MAKE) feishu & \
+	wait
+
+# Start core services only (agent + admin)
+dev-core:
+	@trap 'kill 0' EXIT; \
+	$(MAKE) agent & \
+	$(MAKE) admin & \
+	wait
+
+# Start the admin frontend (dev mode)
 admin:
 	@echo "=> Starting Admin frontend..."
 	cd admin && bun run dev
 
-# Start the main server
-server:
-	@echo "=> Starting Main Server..."
-	cd server && bun run dev
-
 # Start the Go agent
+# DB_PATH and LOG_DIR are resolved relative to the repo root, not agent/
 agent:
 	@echo "=> Starting Go Agent..."
-	cd agent && go run ./cmd/agent/main.go
+	cd agent && DB_PATH=$(shell pwd)/data/config.db \
+	            LOG_DIR=$(shell pwd)/data/logs \
+	            ADMIN_DIST=$(shell pwd)/admin/dist \
+	            go run ./cmd/agent/main.go
+
+# Build admin SPA then Go binary
+build:
+	@echo "=> Building Admin SPA..."
+	cd admin && bun install && bun run build
+	@echo "=> Building Go binary..."
+	cd agent && go build -o ../bin/agent ./cmd/agent
+	@echo "=> Done. Run: ./bin/agent"
 
 # Start the Feishu channel
 feishu:
@@ -40,5 +63,4 @@ qiwei:
 # Clean up all build artifacts
 clean:
 	@echo "=> Cleaning up..."
-	cd agent && make clean || true
-	rm -rf admin/dist server/dist channel-feishu/dist channel-qiwei/dist
+	rm -rf admin/dist bin/ channel-feishu/dist channel-qiwei/dist

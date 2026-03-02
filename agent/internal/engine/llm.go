@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"agent/internal/logger"
 	"net/http"
 	"regexp"
 	"strings"
@@ -20,6 +21,8 @@ type LLMResponse struct {
 		InputTokens  int
 		OutputTokens int
 	}
+	RawRequest  json.RawMessage // original JSON sent to LLM API
+	RawResponse json.RawMessage // original JSON received from LLM API
 }
 
 type ChatParams struct {
@@ -64,17 +67,116 @@ func NewAnthropicClient(config AnthropicClientConfig) *AnthropicClient {
 	}
 }
 
+// sanitizeMessagesForAnthropic removes tool_result blocks with empty or orphaned tool_use_id
+// to avoid "tool_call_id is not found" API errors. tool_use_id must match assistant's id exactly
+// (use API's original value, no transformation).
+// Uses a two-pass approach: first collect all valid tool_use IDs from assistants, then filter
+// tool_results, so message order cannot cause valid tool_results to be wrongly dropped.
+func sanitizeMessagesForAnthropic(ctx context.Context, messages []types.AgentMessage) []types.AgentMessage {
+	validToolUseIDs := make(map[string]bool)
+	for _, msg := range messages {
+		if msg.Role == "assistant" {
+			for _, b := range msg.Content {
+				if b.Type == "tool_use" && b.ID != "" {
+					validToolUseIDs[b.ID] = true
+				}
+			}
+		}
+	}
+
+	var result []types.AgentMessage
+	var dropped []struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }
+
+	for _, msg := range messages {
+		if msg.Role == "assistant" {
+			result = append(result, msg)
+		} else if msg.Role == "user" {
+			var filtered []types.ContentBlock
+			for _, b := range msg.Content {
+				if b.Type != "tool_result" {
+					filtered = append(filtered, b)
+					continue
+				}
+				if b.ToolUseID == "" {
+					dropped = append(dropped, struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }{"(empty)", "empty tool_use_id"})
+					continue
+				}
+				if validToolUseIDs[b.ToolUseID] {
+					filtered = append(filtered, b)
+				} else {
+					dropped = append(dropped, struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }{b.ToolUseID, "orphaned (no matching tool_use in history)"})
+				}
+			}
+			if len(filtered) == 0 {
+				filtered = []types.ContentBlock{{Type: "text", Text: "[Tool results omitted – references invalid or truncated]"}}
+			}
+			result = append(result, types.AgentMessage{Role: "user", Content: filtered})
+		}
+	}
+
+	if len(dropped) > 0 {
+		logger.Warn(ctx, "Anthropic 消息清洗：已过滤无效 tool_result",
+			"droppedCount", len(dropped),
+			"dropped", dropped,
+			"validToolUseIDs", keys(validToolUseIDs))
+	}
+
+	return result
+}
+
+func keys(m map[string]bool) []string {
+	var k []string
+	for s := range m {
+		k = append(k, s)
+	}
+	return k
+}
+
+// BuildToolUseDiagnostic returns a compact digest of tool_use/tool_result ID wiring for debugging.
+func BuildToolUseDiagnostic(messages []types.AgentMessage) map[string]interface{} {
+	var toolUseIDs []string
+	var toolResultRefs []string
+	var emptyToolUse, emptyToolResult int
+
+	for _, msg := range messages {
+		for _, b := range msg.Content {
+			if b.Type == "tool_use" {
+				if b.ID == "" {
+					emptyToolUse++
+				} else {
+					toolUseIDs = append(toolUseIDs, b.ID)
+				}
+			} else if b.Type == "tool_result" {
+				if b.ToolUseID == "" {
+					emptyToolResult++
+				} else {
+					toolResultRefs = append(toolResultRefs, b.ToolUseID)
+				}
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"messageCount":     len(messages),
+		"toolUseIDs":       toolUseIDs,
+		"toolResultRefs":   toolResultRefs,
+		"emptyToolUse":     emptyToolUse,
+		"emptyToolResult":  emptyToolResult,
+	}
+}
+
 func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResponse, error) {
 	model := params.Model
 	if model == "" {
 		model = "claude-3-5-sonnet-20241022"
 	}
 
+	sanitized := sanitizeMessagesForAnthropic(ctx, params.Messages)
 	body := map[string]interface{}{
 		"model":      model,
 		"max_tokens": c.maxTokens,
 		"system":     params.SystemPrompt,
-		"messages":   params.Messages,
+		"messages":   sanitized,
 	}
 
 	if len(params.Tools) > 0 {
@@ -101,9 +203,20 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Anthropic API read body: %w", err)
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errText, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Anthropic API %d: %s", resp.StatusCode, string(errText))
+		errMsg := string(respBody)
+		if strings.Contains(errMsg, "tool_call_id") || strings.Contains(errMsg, "tool_use_id") {
+			logger.Error(ctx, "Anthropic API tool_call_id 错误，发送的消息诊断",
+				"status", resp.StatusCode,
+				"rawError", errMsg,
+				"diagnostic", BuildToolUseDiagnostic(sanitized))
+		}
+		return nil, fmt.Errorf("Anthropic API %d: %s", resp.StatusCode, errMsg)
 	}
 
 	var data struct {
@@ -115,7 +228,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 		} `json:"usage"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, err
 	}
 
@@ -129,6 +242,8 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 			InputTokens:  data.Usage.InputTokens,
 			OutputTokens: data.Usage.OutputTokens,
 		},
+		RawRequest:  json.RawMessage(reqBody),
+		RawResponse: json.RawMessage(respBody),
 	}, nil
 }
 
@@ -160,12 +275,20 @@ func NewOpenAICompatibleClient(config OpenAICompatibleClientConfig) *OpenAICompa
 }
 
 func extractSenderName(text string) (string, string) {
-	re := regexp.MustCompile(`^\[([^\]]+)\]\s*`)
+	re := regexp.MustCompile(`^\[([^\]]+)\]\n?`)
 	loc := re.FindStringSubmatchIndex(text)
-	if loc != nil {
-		return text[loc[2]:loc[3]], text[loc[1]:]
+	if loc == nil {
+		return "", text
 	}
-	return "", text
+
+	raw := text[loc[2]:loc[3]]
+	rest := text[loc[1]:]
+
+	// Format: "SenderName (channelUserId)" — extract just the display name
+	if idx := strings.Index(raw, " ("); idx > 0 {
+		return raw[:idx], rest
+	}
+	return raw, rest
 }
 
 func (c *OpenAICompatibleClient) convertMessages(messages []types.AgentMessage, systemPrompt string) []map[string]interface{} {
@@ -287,9 +410,13 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("OpenAI API read body: %w", err)
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errText, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("OpenAI API %d: %s", resp.StatusCode, string(errText))
+		return nil, fmt.Errorf("OpenAI API %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var data struct {
@@ -312,7 +439,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		} `json:"usage"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, err
 	}
 
@@ -371,5 +498,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 			InputTokens:  data.Usage.PromptTokens,
 			OutputTokens: data.Usage.CompletionTokens,
 		},
+		RawRequest:  json.RawMessage(reqBody),
+		RawResponse: json.RawMessage(respBody),
 	}, nil
 }

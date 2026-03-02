@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/serverclient"
-	"agent/internal/types"
+	"agent/internal/logger"
+	"agent/internal/storage"
 )
 
 type ProcessRequest struct {
@@ -19,6 +19,7 @@ type ProcessRequest struct {
 	ChannelConversationID string `json:"channelConversationId,omitempty"`
 	ChannelMessageID      string `json:"channelMessageId,omitempty"`
 	SenderName            string `json:"senderName,omitempty"`
+	MessageType           string `json:"messageType,omitempty"`
 	MessageID             string `json:"messageId"`
 	SessionID             string `json:"sessionId,omitempty"`
 	TraceID               string `json:"traceId,omitempty"`
@@ -26,7 +27,6 @@ type ProcessRequest struct {
 
 type QueuedRequest struct {
 	ProcessRequest
-	TraceStarted bool
 }
 
 type SessionWorker struct {
@@ -41,7 +41,7 @@ type SessionWorker struct {
 }
 
 var (
-	SessionIdleTimeoutMs = 10 * 60 * 1000 // 10 minutes
+	SessionIdleTimeoutMs = 10 * 60 * 1000
 	sessionWorkers       = make(map[string]*SessionWorker)
 	workerMutex          sync.Mutex
 	shuttingDown         = false
@@ -76,7 +76,7 @@ func evictSession(sessionID string) {
 		resetIdleTimer(worker)
 		return
 	}
-	
+
 	if worker.IdleTimer != nil {
 		worker.IdleTimer.Stop()
 	}
@@ -84,8 +84,6 @@ func evictSession(sessionID string) {
 }
 
 func drainWorker(worker *SessionWorker) {
-	server := serverclient.NewClient()
-
 	for {
 		workerMutex.Lock()
 		if len(worker.Queue) == 0 {
@@ -98,18 +96,24 @@ func drainWorker(worker *SessionWorker) {
 		worker.Queue = worker.Queue[1:]
 		workerMutex.Unlock()
 
-		_ = server.UpdateSession(context.Background(), worker.SessionID, map[string]interface{}{
+		baseCtx, cancel := context.WithCancel(context.Background())
+		traceID, sessionID := req.TraceID, worker.SessionID
+		ctx := logger.WithTrace(baseCtx, traceID, sessionID)
+
+		logger.Business(ctx, "出队开始处理", "queueRemaining", len(worker.Queue))
+
+		_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 			"executionStatus": "processing",
 		})
 
-		ctx, cancel := context.WithCancel(context.Background())
 		workerMutex.Lock()
 		worker.CancelFunc = cancel
 		workerMutex.Unlock()
 
-		err := processOneEvent(ctx, worker, req, server)
+		err := processOneEvent(ctx, worker, req)
 		if err != nil {
-			_ = server.UpdateSession(context.Background(), worker.SessionID, map[string]interface{}{
+			logger.Error(ctx, "处理请求失败", "error", err.Error())
+			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 				"executionStatus": "interrupted",
 			})
 		}
@@ -118,9 +122,10 @@ func drainWorker(worker *SessionWorker) {
 		worker.CancelFunc = nil
 		workerMutex.Unlock()
 
-		_ = server.UpdateSession(context.Background(), worker.SessionID, map[string]interface{}{
+		_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 			"executionStatus": "completed",
 		})
+		logger.Business(ctx, "请求处理完成")
 	}
 }
 
@@ -132,33 +137,29 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 	}
 	workerMutex.Unlock()
 
-	server := serverclient.NewClient()
 	sessionKey := resolveSessionKey(req.Channel, req.ChannelUserID, req.ChannelConversationID)
 
 	var sessionID string
 	var workDir string
 
 	if req.SessionID != "" {
-		sd, _ := server.GetSession(ctx, req.SessionID)
-		if sd != nil {
-			sessionID = sd.ID
-			workDir = sd.WorkDir
-		}
-	}
-	
-	if sessionID == "" {
-		sd, _ := server.FindSessionByKey(ctx, req.AgentID, sessionKey)
+		sd, _ := storage.GetSession(req.SessionID)
 		if sd != nil {
 			sessionID = sd.ID
 			workDir = sd.WorkDir
 		}
 	}
 
-	// Wait, I need a UUID generator for missing session/trace IDs.
-	// Assume missing trace ID is handled by the caller or we can generate a pseudo-random one if needed.
-	// For now, let's just make sure they are strings.
 	if sessionID == "" {
-		sessionID = req.SessionID // should generate UUID in real implementation
+		sd, _ := storage.FindSessionByKey(req.AgentID, sessionKey)
+		if sd != nil {
+			sessionID = sd.ID
+			workDir = sd.WorkDir
+		}
+	}
+
+	if sessionID == "" {
+		sessionID = req.SessionID
 		if sessionID == "" {
 			sessionID = fmt.Sprintf("sess-%d", time.Now().UnixNano())
 		}
@@ -167,16 +168,16 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 		if len(title) > 30 {
 			title = title[:30] + "..."
 		}
-		
-		_, _ = server.CreateSession(ctx, map[string]interface{}{
-			"id": sessionID,
-			"agentId": req.AgentID,
-			"userId": req.UserID,
-			"channel": req.Channel,
-			"sessionKey": sessionKey,
+
+		_, _ = storage.CreateSession(map[string]interface{}{
+			"id":                    sessionID,
+			"agentId":               req.AgentID,
+			"userId":                req.UserID,
+			"channel":               req.Channel,
+			"sessionKey":            sessionKey,
 			"channelConversationId": req.ChannelConversationID,
-			"workDir": workDir,
-			"title": title,
+			"workDir":               workDir,
+			"title":                 title,
 		})
 	}
 
@@ -185,35 +186,25 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 		traceID = fmt.Sprintf("trace-%d", time.Now().UnixNano())
 	}
 
-	queuedReq := QueuedRequest{
-		ProcessRequest: req,
-		TraceStarted:   false,
-	}
+	traceCtx := logger.WithTrace(ctx, traceID, sessionID)
+	logger.Boundary(traceCtx, "请求入队", "agentId", req.AgentID, "channel", req.Channel)
+
+	queuedReq := QueuedRequest{ProcessRequest: req}
 	queuedReq.SessionID = sessionID
 	queuedReq.TraceID = traceID
 
-	_ = server.ReportTraceEventSync(ctx, types.TraceEventPayload{
-		TraceID: traceID,
-		SessionID: sessionID,
-		AgentID: req.AgentID,
-		UserID: req.UserID,
-		Channel: req.Channel,
-		AgentEvent: types.AgentEvent{
-			Type: "start",
-			Timestamp: time.Now().UnixMilli(),
-		},
-	})
-	queuedReq.TraceStarted = true
+	logger.Business(traceCtx, "trace 开始",
+		"traceEvent", "start", "agentId", req.AgentID, "userId", req.UserID, "channel", req.Channel)
 
 	workerMutex.Lock()
 	worker, ok := sessionWorkers[sessionID]
 	if !ok {
 		worker = &SessionWorker{
-			SessionID: sessionID,
-			SessionKey: sessionKey,
-			WorkDir: workDir,
-			Queue: []QueuedRequest{},
-			Processing: false,
+			SessionID:      sessionID,
+			SessionKey:     sessionKey,
+			WorkDir:        workDir,
+			Queue:          []QueuedRequest{},
+			Processing:     false,
 			LastActivityAt: time.Now().UnixMilli(),
 		}
 		sessionWorkers[sessionID] = worker
@@ -243,7 +234,7 @@ func GracefulShutdown() {
 		return
 	}
 	shuttingDown = true
-	
+
 	for _, worker := range sessionWorkers {
 		if worker.IdleTimer != nil {
 			worker.IdleTimer.Stop()
@@ -255,15 +246,14 @@ func GracefulShutdown() {
 	}
 	workerMutex.Unlock()
 
-	server := serverclient.NewClient()
 	for sessionID, worker := range sessionWorkers {
 		if worker.Processing {
-			_ = server.UpdateSession(context.Background(), sessionID, map[string]interface{}{
+			_ = storage.UpdateSession(sessionID, map[string]interface{}{
 				"executionStatus": "interrupted",
 			})
 		}
 	}
-	
+
 	workerMutex.Lock()
 	sessionWorkers = make(map[string]*SessionWorker)
 	workerMutex.Unlock()

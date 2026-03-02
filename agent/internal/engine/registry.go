@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"sync"
 	"time"
 
-	"agent/internal/serverclient"
+	"agent/internal/storage"
 	"agent/internal/types"
 )
 
@@ -29,7 +30,33 @@ type mcpToolsResponse struct {
 	} `json:"tools"`
 }
 
-func createSkillHTTPExecutor(executor serverclient.SkillToolExecutor) types.ToolExecutor {
+func createShellExecutor() types.ToolExecutor {
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		cmdVal, ok := input["command"]
+		if !ok {
+			return nil, fmt.Errorf("shell: missing command in input")
+		}
+		cmdStr, ok := cmdVal.(string)
+		if !ok || cmdStr == "" {
+			return nil, fmt.Errorf("shell: command must be non-empty string")
+		}
+
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		out, err := cmd.CombinedOutput()
+		text := string(out)
+		if err != nil {
+			return nil, fmt.Errorf("shell failed: %w\n%s", err, text)
+		}
+
+		var jsonResult interface{}
+		if err := json.Unmarshal(out, &jsonResult); err == nil {
+			return jsonResult, nil
+		}
+		return text, nil
+	}
+}
+
+func createSkillHTTPExecutor(executor storage.SkillToolExecutor) types.ToolExecutor {
 	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 		if executor.URL == "" {
 			return nil, fmt.Errorf("HTTP executor missing url")
@@ -199,7 +226,7 @@ func (r *ToolRegistry) RegisterBuiltin(name, description string, inputSchema typ
 	}
 }
 
-func (r *ToolRegistry) RegisterSkills(skillsCtx *serverclient.SkillContext, internalHandlers map[string]types.ToolExecutor) {
+func (r *ToolRegistry) RegisterSkills(skillsCtx *storage.SkillContext, internalHandlers map[string]types.ToolExecutor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -212,7 +239,9 @@ func (r *ToolRegistry) RegisterSkills(skillsCtx *serverclient.SkillContext, inte
 		}
 
 		var execute types.ToolExecutor
-		if executor.Type == "http" {
+		if executor.Type == "shell" {
+			execute = createShellExecutor()
+		} else if executor.Type == "http" {
 			execute = createSkillHTTPExecutor(executor)
 		} else if executor.Type == "internal" {
 			handlerName := executor.Handler

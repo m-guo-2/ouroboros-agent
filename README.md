@@ -21,30 +21,22 @@
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
-│   渠道层                                                 │
-│   ┌──────────────┐  ┌──────────────┐  ┌────────┐       │
-│   │channel-feishu│  │channel-qiwei │  │ admin  │        │
-│   │    :1999     │  │    :2000     │  │ :5173  │        │
-│   └──────┬───────┘  └──────┬───────┘  └───┬────┘        │
-│          └─────────────────┼──────────────┘              │
-│                            ▼                             │
-│   server :1997  (业务控制器)                              │
+│   渠道适配器（独立进程）                                  │
+│   ┌──────────────┐  ┌──────────────┐                    │
+│   │channel-feishu│  │channel-qiwei │                    │
+│   │    :1999     │  │    :2000     │                    │
+│   └──────┬───────┘  └──────┬───────┘                    │
+│          └─────────────────┘                            │
+│                    │  POST /api/channels/incoming        │
+│                    ▼                                     │
+│   agent :1997  (Go 单体二进制)                           │
 │   • 渠道路由 • 身份管理 • Agent Profile                  │
-│   • 会话/记忆 • 消息投递(→多Agent) • 技能管理            │
-│                            │                             │
-│                            ▼                             │
-│   agent :1996  (执行引擎)                                │
-│   • Claude Agent SDK • API Proxy(多模型)                 │
+│   • 会话/记忆 • 消息投递 • 技能管理                      │
+│   • Claude Agent SDK • 多模型 API Proxy                  │
+│   • 静态托管 admin SPA (/admin)                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 ```
-
-### 自举（Bootstrap）
-
-业务代码可以被 Agent 自己修改并热更新：
-
-- **Agent** = 执行引擎（围绕 Claude Agent SDK）
-- **Server** = 可演化的业务控制器（可被 Agent 修改和重启）
 
 ### 多 Agent 设计
 
@@ -57,65 +49,73 @@
 
 | 层级 | 技术 |
 |------|------|
-| 运行时 | Bun |
-| 后端 | Express + TypeScript |
+| 核心后端 | Go 1.24 单体二进制 |
 | 前端 | React 19 + Vite + TypeScript |
-| 数据库 | SQLite (bun:sqlite) |
-| Agent 引擎 | @anthropic-ai/claude-agent-sdk |
+| 数据库 | SQLite (`modernc.org/sqlite`) |
+| Agent 引擎 | Anthropic Claude API（直接调用）|
 | 多模型 | API Proxy (Claude / GPT-4o / DeepSeek / 百川 / Kimi / GLM) |
+| 渠道适配器 | TypeScript（飞书 / 企微）|
 
 ## 快速开始
 
 ```bash
-# 安装 Bun
-curl -fsSL https://bun.sh/install | bash
+# 构建 admin 前端
+cd admin && npm install && npm run build && cd ..
 
-# 安装依赖
-bun run install:all
+# 构建 Go 二进制
+cd agent && go build -o ../bin/agent ./cmd/agent && cd ..
 
 # 配置环境变量
-cp .env.example .env
-# 编辑 .env，填入 ANTHROPIC_API_KEY 等
+export ANTHROPIC_API_KEY=sk-ant-xxx
+export DB_PATH=./data/config.db   # 可选，默认为 ./data/config.db
 
-# 启动（开发模式）
-bun run dev
+# 启动
+./bin/agent
+# 访问 http://localhost:1997 → admin SPA
+# API 基础路径：http://localhost:1997/api/
+
+# 启动飞书渠道（独立进程）
+cd channel-feishu && npm install && npm run dev
 ```
 
 ### 端口
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| agent | 1996 | 执行引擎 |
-| server | 1997 | 业务控制器 |
-| admin | 5173 | 管理后台 |
-| channel-feishu | 1999 | 飞书渠道 |
-| channel-qiwei | 2000 | 企微渠道 |
+| agent (含 admin SPA) | 1997 | 主进程，所有 API + 管理界面 |
+| channel-feishu | 1999 | 飞书渠道适配器 |
+| channel-qiwei | 2000 | 企微渠道适配器 |
 
 ## 项目结构
 
 ```
 .
-├── agent/                 # 执行引擎（Claude Agent SDK）
-│   └── SDK Runner, API Proxy, Context Composer
+├── agent/                 # Go 单体二进制（主进程）
+│   ├── cmd/agent/         # main.go
+│   └── internal/
+│       ├── api/           # 管理 API handlers
+│       ├── channels/      # 渠道出向适配器
+│       ├── dispatcher/    # 消息入向分发
+│       ├── engine/        # LLM 推理引擎
+│       ├── logger/        # 结构化日志
+│       ├── runner/        # 任务调度
+│       └── storage/       # SQLite CRUD
 │
-├── server/                # 业务控制器（可演化）
-│   └── 渠道路由, 身份管理, 会话/记忆, Agent Profile
-│
-├── admin/                 # 管理后台
+├── admin/                 # 管理后台 SPA（构建后由 agent 静态托管）
 │   └── Monitor, Agent管理, 模型/技能/日志/设置
 │
-├── channel-feishu/        # 飞书渠道适配器
+├── channel-feishu/        # 飞书渠道适配器（独立进程）
 │   └── 消息, 会议, 文档
 │
-├── channel-qiwei/         # 企微渠道适配器
+├── channel-qiwei/         # 企微渠道适配器（独立进程）
 │   └── 消息收发
 │
+├── data/                  # 运行时数据（.gitignore）
+│   ├── config.db          # SQLite 数据库
+│   └── logs/              # JSONL 执行日志
+│
 └── docs/                  # 文档
-    ├── ARCHITECTURE.md              # 系统架构总览 ← 主文档
-    ├── PRODUCT_REQUIREMENTS.md      # 产品需求（自举架构）
-    ├── UNIFIED_CHANNEL_ARCHITECTURE.md  # 统一渠道架构
-    ├── IMPLEMENTATION_PLAN.md       # 实施计划
-    └── decisions/                   # 设计决策记录
+    └── decisions/         # 设计决策记录
 ```
 
 ## 文档

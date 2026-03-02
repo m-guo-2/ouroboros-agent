@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom"
 import {
   Bot, Blocks, Cpu,
-  Activity, ScrollText,
+  Activity,
   Settings,
   PanelLeftClose, PanelLeft,
 } from "lucide-react"
@@ -29,7 +29,6 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     title: "观测",
     items: [
       { label: "Monitor", path: "/monitor", icon: Activity, live: true },
-      { label: "Logs", path: "/logs", icon: ScrollText },
     ],
   },
   {

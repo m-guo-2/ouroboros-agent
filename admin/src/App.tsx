@@ -11,7 +11,6 @@ const AgentDetail = lazy(() => import("@/components/features/agents/agent-detail
 const ModelList = lazy(() => import("@/components/features/models/model-list").then((m) => ({ default: m.ModelList })))
 const SkillList = lazy(() => import("@/components/features/skills/skill-list").then((m) => ({ default: m.SkillList })))
 const SkillDetail = lazy(() => import("@/components/features/skills/skill-detail").then((m) => ({ default: m.SkillDetail })))
-const LogViewer = lazy(() => import("@/components/features/logs/log-viewer").then((m) => ({ default: m.LogViewer })))
 const SettingsPage = lazy(() => import("@/components/features/settings/settings-page").then((m) => ({ default: m.SettingsPage })))
 
 const queryClient = new QueryClient({
@@ -79,7 +78,6 @@ export default function App() {
             <Route path="models" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><ModelList /></Suspense></ErrorBoundary>} />
             <Route path="skills" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillList /></Suspense></ErrorBoundary>} />
             <Route path="skills/:name" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillDetail /></Suspense></ErrorBoundary>} />
-            <Route path="logs" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><LogViewer /></Suspense></ErrorBoundary>} />
             <Route path="settings" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></ErrorBoundary>} />
             <Route path="*" element={<Navigate to="/monitor" replace />} />
           </Route>
