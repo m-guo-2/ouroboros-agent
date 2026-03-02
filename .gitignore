@@ -57,3 +57,13 @@ agent/agent
 data/config.db
 data/config.db-shm
 data/config.db-wal
+
+# Temporary images and charts
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+daily_active_chart*
+**/temp_images/
+**/charts/
