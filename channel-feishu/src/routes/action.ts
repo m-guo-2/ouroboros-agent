@@ -341,7 +341,8 @@ router.post("/", async (req: Request, res: Response) => {
     const result = await handler(params);
     res.json({ success: true, data: result });
   } catch (err: any) {
-    console.error(`[Action Error] ${action}:`, err.message || err);
+    console.error(`[Action Error] ${action}:`, err);
+    console.error(`[Action Error Detail] ${action}:`, JSON.stringify(err, null, 2));
     res.status(500).json({
       success: false,
       error: err.message || "Internal error",
