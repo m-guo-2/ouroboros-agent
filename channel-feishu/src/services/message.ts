@@ -406,7 +406,7 @@ export async function getUserInfo(userId: string, userIdType = "open_id") {
 
 /** 给消息添加表情回复 */
 export async function addReaction(messageId: string, emojiType: string) {
-  const res = await client().im.message.reaction.create({
+  const res = await client().im.messageReaction.create({
     path: {
       message_id: messageId,
     },
@@ -421,7 +421,7 @@ export async function addReaction(messageId: string, emojiType: string) {
 
 /** 删除表情回复 */
 export async function deleteReaction(messageId: string, reactionId: string) {
-  const res = await client().im.message.reaction.delete({
+  const res = await client().im.messageReaction.delete({
     path: {
       message_id: messageId,
       reaction_id: reactionId,
@@ -432,7 +432,7 @@ export async function deleteReaction(messageId: string, reactionId: string) {
 
 /** 获取消息的表情回复列表 */
 export async function getReactions(messageId: string, emojiType?: string) {
-  const res = await client().im.message.reaction.list({
+  const res = await client().im.messageReaction.list({
     path: {
       message_id: messageId,
     },
