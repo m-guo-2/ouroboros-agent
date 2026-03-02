@@ -99,13 +99,28 @@ export async function sendDefaultCard(params: {
 }) {
   const res = await client().im.message.create({
     params: {
-      receive_id_type: params.receiveIdType as any,
+      receive_id_type: params.receiveIdType,
     },
     data: {
       receive_id: params.receiveId,
-      content: lark.messageCard.defaultCard({
-        title: params.title,
-        content: params.content,
+      content: JSON.stringify({
+        config: { wide_screen_mode: true },
+        elements: [
+          {
+            tag: "div",
+            text: {
+              tag: "plain_text",
+              content: params.content,
+            },
+          },
+        ],
+        header: {
+          title: {
+            tag: "plain_text",
+            content: params.title,
+          },
+          template: "blue",
+        },
       }),
       msg_type: "interactive",
     },
@@ -187,49 +202,31 @@ export async function sendVideo(params: {
 
 // ==================== 回复消息 ====================
 
-/** 回复指定消息 */
+/** 回复消息 */
 export async function replyMessage(params: ReplyMessageParams) {
   const res = await client().im.message.reply({
     path: {
       message_id: params.messageId,
     },
     data: {
-      content: params.content,
-      msg_type: params.msgType,
+      content: JSON.stringify(
+        params.msgType === "image"
+          ? { image_key: params.content }
+          : params.msgType === "file"
+          ? { file_key: params.content }
+          : { text: params.content }
+      ),
+      msg_type: params.msgType || "text",
     },
   });
   return res;
 }
 
-// ==================== 文件上传 ====================
-
-/** 上传图片 */
-export async function uploadImage(params: UploadImageParams) {
-  const res = await client().im.image.create({
-    data: {
-      image_type: params.imageType,
-      image: params.image,
-    },
-  });
-  return res;
-}
-
-/** 上传文件 */
-export async function uploadFile(params: UploadFileParams) {
-  const res = await client().im.file.create({
-    data: {
-      file_type: params.fileType,
-      file_name: params.fileName,
-      file: params.file,
-      ...(params.duration ? { duration: params.duration } : {}),
-    },
-  });
-  return res;
-}
+// ==================== 媒体上传 ====================
 
 /**
  * 从 URL 下载图片后上传到飞书，返回 image_key。
- * 适合 Agent 调用——Agent 只需提供图片 URL 即可。
+ * 支持 message/avatar 两种类型。
  */
 export async function uploadImageFromUrl(
   imageUrl: string,
@@ -247,7 +244,8 @@ export async function uploadImageFromUrl(
       image: buffer,
     },
   });
-  return res;
+  // 返回 image_key 而不是完整响应
+  return res?.data?.image_key || res;
 }
 
 /**
@@ -274,7 +272,8 @@ export async function uploadFileFromUrl(params: {
       ...(params.duration ? { duration: params.duration } : {}),
     },
   });
-  return res;
+  // 返回 file_key 而不是完整响应
+  return res?.data?.file_key || res;
 }
 
 // ==================== 消息管理 ====================
@@ -318,6 +317,22 @@ export async function getMessageList(
 
 // ==================== 群组管理 ====================
 
+/** 创建群组 */
+export async function createChat(params: {
+  name: string;
+  description?: string;
+  userIdList?: string[];
+}) {
+  const res = await client().im.chat.create({
+    data: {
+      name: params.name,
+      description: params.description,
+      user_id_list: params.userIdList,
+    },
+  });
+  return res;
+}
+
 /** 获取群信息 */
 export async function getChatInfo(chatId: string) {
   const res = await client().im.chat.get({
@@ -328,70 +343,23 @@ export async function getChatInfo(chatId: string) {
   return res;
 }
 
-/** 获取群成员列表（自动分页，返回全量） */
-export async function getChatMembers(chatId: string, pageSize = 100) {
-  const allMembers: any[] = [];
-  let pageToken: string | undefined;
-  let hasMore = true;
-
-  while (hasMore) {
-    const res = await client().im.chatMembers.get({
-      path: {
-        chat_id: chatId,
-      },
-      params: {
-        member_id_type: "open_id",
-        page_size: pageSize,
-        ...(pageToken ? { page_token: pageToken } : {}),
-      },
-    });
-
-    const items = res?.data?.items || [];
-    allMembers.push(...items);
-    hasMore = res?.data?.has_more ?? false;
-    pageToken = res?.data?.page_token;
-  }
-
-  return {
-    code: 0,
-    data: {
-      items: allMembers,
-      member_list: allMembers,
-      total: allMembers.length,
+/** 获取群成员列表 */
+export async function getChatMembers(chatId: string) {
+  const res = await client().im.chat.members({
+    path: {
+      chat_id: chatId,
     },
-  };
+  });
+  return res;
 }
 
-/** 获取机器人所在的群列表（自动分页，返回全量） */
-export async function listBotChats(pageSize = 100) {
-  const allChats: any[] = [];
-  let pageToken: string | undefined;
-  let hasMore = true;
-
-  while (hasMore) {
-    const res = await client().im.chat.list({
-      params: {
-        page_size: pageSize,
-        ...(pageToken ? { page_token: pageToken } : {}),
-      },
-    });
-
-    const items = res?.data?.items || [];
-    allChats.push(...items);
-    hasMore = res?.data?.has_more ?? false;
-    pageToken = res?.data?.page_token;
-  }
-
-  return {
-    code: 0,
-    data: {
-      items: allChats,
-      total: allChats.length,
-    },
-  };
+/** 获取机器人所在的所有群列表 */
+export async function listBotChats() {
+  const res = await client().im.chat.list();
+  return res;
 }
 
-/** 搜索群组（按关键词） */
+/** 搜索群组 */
 export async function searchChats(query: string, pageSize = 20) {
   const res = await client().im.chat.search({
     params: {
@@ -402,31 +370,33 @@ export async function searchChats(query: string, pageSize = 20) {
   return res;
 }
 
-/** 通过手机号或邮箱批量查找用户 ID */
+// ==================== 用户管理 ====================
+
+/** 通过邮箱或手机号批量查找用户 ID */
 export async function batchGetUserId(params: {
   emails?: string[];
   mobiles?: string[];
 }) {
-  const res = await client().contact.user.batchGetId({
+  const res = await client().contact.users.batchGetId({
     params: {
       user_id_type: "open_id",
     },
     data: {
-      emails: params.emails || [],
-      mobiles: params.mobiles || [],
+      ...(params.emails ? { emails: params.emails } : {}),
+      ...(params.mobiles ? { mobiles: params.mobiles } : {}),
     },
   });
   return res;
 }
 
 /** 获取用户详细信息 */
-export async function getUserInfo(userId: string, userIdType: string = "open_id") {
+export async function getUserInfo(userId: string, userIdType = "open_id") {
   const res = await client().contact.user.get({
-    path: {
-      user_id: userId,
-    },
     params: {
       user_id_type: userIdType as any,
+    },
+    path: {
+      user_id: userId,
     },
   });
   return res;
@@ -436,7 +406,7 @@ export async function getUserInfo(userId: string, userIdType: string = "open_id"
 
 /** 给消息添加表情回复 */
 export async function addReaction(messageId: string, emojiType: string) {
-  const res = await client().im.messageReaction.create({
+  const res = await client().im.message.reaction.create({
     path: {
       message_id: messageId,
     },
@@ -451,7 +421,7 @@ export async function addReaction(messageId: string, emojiType: string) {
 
 /** 删除表情回复 */
 export async function deleteReaction(messageId: string, reactionId: string) {
-  const res = await client().im.messageReaction.delete({
+  const res = await client().im.message.reaction.delete({
     path: {
       message_id: messageId,
       reaction_id: reactionId,
@@ -462,33 +432,12 @@ export async function deleteReaction(messageId: string, reactionId: string) {
 
 /** 获取消息的表情回复列表 */
 export async function getReactions(messageId: string, emojiType?: string) {
-  const res = await client().im.messageReaction.list({
+  const res = await client().im.message.reaction.list({
     path: {
       message_id: messageId,
     },
     params: {
       ...(emojiType ? { reaction_type: emojiType } : {}),
-    },
-  });
-  return res;
-}
-
-// ==================== 群组管理 ====================
-
-/** 创建群组 */
-export async function createChat(params: {
-  name: string;
-  description?: string;
-  userIdList?: string[];
-}) {
-  const res = await client().im.chat.create({
-    params: {
-      user_id_type: "open_id",
-    },
-    data: {
-      name: params.name,
-      description: params.description,
-      user_id_list: params.userIdList,
     },
   });
   return res;
