@@ -29,3 +29,11 @@
 | [023](./023-feishu-reply-to-strict-model-controlled.md) | 飞书 reply_to 严格模式（模型显式控制） | 架构决策 / 代码变更 | 2026-02-28 |
 | [024](./024-subagent-async-natural-language-aggregation.md) | Subagent 异步工具：自然语言聚合优先 | 架构决策 / 代码变更 | 2026-02-28 |
 | [025](./025-subagent-default-profiles-and-system-prompts.md) | Subagent 默认角色与内置系统提示词 | 架构决策 / 代码变更 | 2026-02-28 |
+| [026](./026-subagent-cancel-and-impact-feedback.md) | Subagent 取消与影响反馈 | 架构决策 / 代码变更 | 2026-02-28 |
+| [027](./027-feishu-action-registry-refactor.md) | 飞书独立服务 Action 路由重构 | 代码变更 | 2026-03-02 |
+| [028](./028-feishu-service-go-migration.md) | 飞书独立服务 Go 迁移 | 架构决策 / 代码重构 | 2026-03-02 |
+| [029](./029-monitor-user-input-model-output-json-pretty.md) | Monitor 补齐用户输入与模型输出主视图 | 代码变更 | 2026-03-02 |
+| [030](./030-skill-detail-manifest-fallback-guard.md) | SkillDetail 缺失 manifest 的兜底防崩 | 代码变更 | 2026-03-02 |
+| [031](./031-context-compaction.md) | 上下文压缩（Context Compaction） | 架构决策 / 代码变更 | 2026-03-03 |
+| [032](./032-redis-message-queue-multi-instance.md) | Redis 消息队列 + HRW 多实例调度 | 架构决策 | 2026-03-04 |
+| [033](./033-qiwei-go-migration-and-full-suite-adapter.md) | 企微独立服务 Go 全量迁移与模块化 API 适配 | 架构决策 / 代码重构 | 2026-03-04 |

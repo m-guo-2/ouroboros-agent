@@ -5,7 +5,7 @@ all: help
 
 help:
 	@echo "Available commands:"
-	@echo "  make dev        - Start all services (agent + admin + feishu)"
+	@echo "  make dev        - Start all services (agent + admin + feishu + qiwei)"
 	@echo "  make dev-core   - Start core services (agent + admin)"
 	@echo "  make admin      - Start the Admin frontend (Vite dev server)"
 	@echo "  make agent      - Start the Go Agent (port 1997)"
@@ -19,6 +19,7 @@ dev:
 	$(MAKE) agent & \
 	$(MAKE) admin & \
 	$(MAKE) feishu & \
+	$(MAKE) qiwei & \
 	wait
 
 # Start core services only (agent + admin)
@@ -53,14 +54,14 @@ build:
 # Start the Feishu channel
 feishu:
 	@echo "=> Starting Feishu Channel..."
-	cd channel-feishu && bun run dev
+	cd channel-feishu && go run .
 
 # Start the Qiwei channel
 qiwei:
 	@echo "=> Starting Qiwei Channel..."
-	cd channel-qiwei && bun run dev
+	cd channel-qiwei && go run .
 
 # Clean up all build artifacts
 clean:
 	@echo "=> Cleaning up..."
-	rm -rf admin/dist bin/ channel-feishu/dist channel-qiwei/dist
+	rm -rf admin/dist bin/
