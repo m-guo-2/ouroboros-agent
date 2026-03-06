@@ -62,7 +62,11 @@ Python 3.x (no external dependencies required)
 
 ## Git Workflow
 
-Never push directly to `main`. Always:
+Prefer creating a branch and pull request for normal changes.
+
+When the user explicitly requests a direct push, pushing to `main` is allowed.
+
+Recommended default workflow:
 
 1. Create a new branch: `git checkout -b feat/... ` or `fix/...`
 2. Commit changes

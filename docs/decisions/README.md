@@ -37,3 +37,19 @@
 | [031](./031-context-compaction.md) | 上下文压缩（Context Compaction） | 架构决策 / 代码变更 | 2026-03-03 |
 | [032](./032-redis-message-queue-multi-instance.md) | Redis 消息队列 + HRW 多实例调度 | 架构决策 | 2026-03-04 |
 | [033](./033-qiwei-go-migration-and-full-suite-adapter.md) | 企微独立服务 Go 全量迁移与模块化 API 适配 | 架构决策 / 代码重构 | 2026-03-04 |
+| [034](./034-runtime-secret-redaction-and-db-ignore.md) | 运行时密钥脱敏与 SQLite 落库防泄漏 | 代码变更 | 2026-03-04 |
+| [035](./035-agent-create-user-id-not-null-compat.md) | Agent 创建接口补齐 user_id 兼容修复 | 代码变更 | 2026-03-04 |
+| [036](./036-qiwei-skill-http-request-doc-driven.md) | 企微 Skill：http_request 文档驱动接入 | 代码变更 | 2026-03-04 |
+| [037](./037-qiwei-callback-receive-log.md) | 企微回调接收日志补充 | 代码变更 | 2026-03-04 |
+| [038](./038-vscode-debug-config-for-qiwei.md) | VSCode 调试配置：channel-qiwei | 代码变更 | 2026-03-04 |
+| [037](./037-model-discovery-use-official-provider-endpoints.md) | 模型发现固定走官方 Provider API | 代码变更 | 2026-03-04 |
+| [039](./039-qiwei-callback-payload-compatibility.md) | 企微回调载荷兼容解析与 ACK 策略修正 | 代码变更 | 2026-03-04 |
+| [040](./040-qiwei-callback-async-context-fix.md) | 企微回调异步处理 context canceled 修复 | Bug 修复 | 2026-03-04 |
+| [041](./041-qiwei-official-doc-method-alignment.md) | 企微官方文档 Method 全量对齐 | 代码变更 | 2026-03-04 |
+| [042](./042-admin-textarea-auto-resize.md) | Admin 文本编辑区自动扩高 | 代码变更 | 2026-03-04 |
+| [043](./043-wecom-skill-progressive-loading.md) | 企微 Skill 渐进式加载与工具合并 | 架构决策 / 代码变更 | 2026-03-04 |
+| [044](./044-skill-design-philosophy.md) | Skill 设计哲学与核心理念 | 架构设计 / 设计规范 | 2026-03-04 |
+| [045](./045-session-message-absorb-replan.md) | Session 消息吸纳与重新规划 | 架构决策 / 代码变更 | 2026-03-05 |
+| [046](./046-monitor-three-panel-redesign.md) | Monitor 可观测性前端三栏布局重设计 | 架构决策 / 代码变更 | 2026-03-05 |
+| [047](./047-systemprompt-admin-transparent.md) | SystemPrompt 透明化：Admin 写什么就是什么 | 架构决策 / 代码变更 | 2026-03-05 |
+| [048](./048-direct-push-main-by-explicit-request.md) | Main 分支显式直推放开 | 讨论结论 | 2026-03-06 |
