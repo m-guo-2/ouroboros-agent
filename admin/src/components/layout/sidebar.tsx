@@ -54,7 +54,7 @@ function SidebarNavItem({ item, collapsed }: { item: NavItem; collapsed: boolean
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
       )}
     >
-      <span className="relative flex-shrink-0">
+      <span className="relative shrink-0">
         <item.icon className={cn("h-[18px] w-[18px]", isActive ? "text-brand-600" : "")} />
         {item.live && (
           <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 animate-live-pulse" />
@@ -94,11 +94,11 @@ export function Sidebar() {
       )}>
         {!collapsed && (
           <span className="text-sm font-bold tracking-tight text-slate-900">
-            Ouroboros
+            Moli
           </span>
         )}
         {collapsed && (
-          <span className="text-sm font-bold text-brand-600">O</span>
+          <span className="text-sm font-bold text-brand-600">M</span>
         )}
       </div>
 

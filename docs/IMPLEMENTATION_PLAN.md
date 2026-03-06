@@ -1,6 +1,6 @@
 # 实施计划
 
-> 基于自举架构的 Ouroboros Agent 实施方案
+> 基于自举架构的 Moli Agent 实施方案
 
 ---
 
@@ -48,7 +48,7 @@
 ```typescript
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-const SYSTEM_PROMPT = `你是 Ouroboros Agent 的执行引擎。
+const SYSTEM_PROMPT = `你是 Moli Agent 的执行引擎。
 
 你接收来自业务控制器的指令并执行。你拥有完整的系统操作能力：
 - 读写文件、编辑代码

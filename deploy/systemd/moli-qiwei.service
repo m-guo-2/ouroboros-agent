@@ -1,0 +1,22 @@
+[Unit]
+Description=__APP_NAME__ qiwei channel service
+After=network.target __APP_NAME__-agent.service
+Requires=__APP_NAME__-agent.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__RUN_USER__
+Group=__RUN_GROUP__
+WorkingDirectory=__INSTALL_PREFIX__
+EnvironmentFile=__CONFIG_DIR__/qiwei.env
+ExecStart=__INSTALL_PREFIX__/bin/channel-qiwei
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

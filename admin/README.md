@@ -1,6 +1,6 @@
 # Admin — 管理后台
 
-Ouroboros Agent 平台的管理后台前端，用于监控 Agent 活动和管理平台配置。
+Moli Agent 平台的管理后台前端，用于监控 Agent 活动和管理平台配置。
 
 ## 功能页面
 

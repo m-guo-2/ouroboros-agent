@@ -1,6 +1,6 @@
-# Ouroboros Agent
+# Moli Agent
 
-> *衔尾蛇 — 自我循环、自我演化的 AI Agent 平台*
+> *Moli — 面向沟通与协作的 AI Agent 平台*
 
 构建通讯基础设施，让 AI Agent 像人一样在里面工作和协作。
 
@@ -8,7 +8,7 @@
 
 **Agent 是人，不是工具。** 系统不编排协作，只提供基础设施。Agent 有自己的身份、记忆、渠道，协作从 prompt 中涌现。
 
-```
+```text
 传统：   人 → 调用 → AI工具 → 返回结果
 
 这里：   人 ──┐
@@ -18,7 +18,7 @@
 
 ## 架构
 
-```
+```text
 ┌──────────────────────────────────────────────────────────┐
 │                                                          │
 │   渠道适配器（独立进程）                                  │
@@ -48,13 +48,13 @@
 ## 技术栈
 
 | 层级 | 技术 |
-|------|------|
+| ------ | ------ |
 | 核心后端 | Go 1.24 单体二进制 |
 | 前端 | React 19 + Vite + TypeScript |
 | 数据库 | SQLite (`modernc.org/sqlite`) |
-| Agent 引擎 | Anthropic Claude API（直接调用）|
+| Agent 引擎 | Anthropic Claude API（直接调用） |
 | 多模型 | API Proxy (Claude / GPT-4o / DeepSeek / 百川 / Kimi / GLM) |
-| 渠道适配器 | TypeScript（飞书 / 企微）|
+| 渠道适配器 | TypeScript（飞书 / 企微） |
 
 ## 快速开始
 
@@ -81,14 +81,14 @@ cd channel-feishu && npm install && npm run dev
 ### 端口
 
 | 服务 | 端口 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | agent (含 admin SPA) | 1997 | 主进程，所有 API + 管理界面 |
 | channel-feishu | 1999 | 飞书渠道适配器 |
 | channel-qiwei | 2000 | 企微渠道适配器 |
 
 ## 项目结构
 
-```
+```text
 .
 ├── agent/                 # Go 单体二进制（主进程）
 │   ├── cmd/agent/         # main.go
@@ -121,8 +121,8 @@ cd channel-feishu && npm install && npm run dev
 ## 文档
 
 | 文档 | 说明 |
-|------|------|
-| **[系统架构总览](./docs/ARCHITECTURE.md)** | 理念、设计、现状、演进路线 — 看这一份就够 |
+| ------ | ------ |
+| **[系统架构总览](./docs/ARCHITECTURE.md)** | 理念、设计、现状、演进路线 - 看这一份就够 |
 | [产品需求文档](./docs/PRODUCT_REQUIREMENTS.md) | 自举架构详细设计 |
 | [统一渠道架构](./docs/UNIFIED_CHANNEL_ARCHITECTURE.md) | 渠道抽象、用户身份、记忆系统 |
 | [设计决策记录](./docs/decisions/) | 重要架构决策 |
