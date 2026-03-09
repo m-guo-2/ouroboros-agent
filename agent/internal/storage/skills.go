@@ -1,16 +1,15 @@
 package storage
 
 import (
-	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 
+	"agent/internal/github"
 	"agent/internal/types"
 )
 
-// SkillRecord mirrors the skills table for CRUD operations.
+// SkillRecord mirrors the skill data shape expected by API handlers.
 type SkillRecord struct {
 	ID          string                 `json:"id"`
 	Name        string                 `json:"name"`
@@ -24,141 +23,78 @@ type SkillRecord struct {
 	Metadata    map[string]interface{} `json:"metadata"`
 }
 
-func scanSkillRecord(row interface {
-	Scan(...interface{}) error
-}) (*SkillRecord, error) {
-	var s SkillRecord
-	var isEnabled int
-	var triggersJSON, toolsJSON, metaJSON string
-	err := row.Scan(
-		&s.ID, &s.Name, &s.Description, &s.Version, &s.Type, &isEnabled,
-		&triggersJSON, &toolsJSON, &s.Readme, &metaJSON,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
+func fromGitHub(d *github.SkillData) *SkillRecord {
+	if d == nil {
+		return nil
 	}
-	if err != nil {
-		return nil, err
+	return &SkillRecord{
+		ID: d.ID, Name: d.Name, Description: d.Description,
+		Version: d.Version, Type: d.Type, Enabled: d.Enabled,
+		Triggers: d.Triggers, Tools: d.Tools,
+		Readme: d.Readme, Metadata: d.Metadata,
 	}
-	s.Enabled = isEnabled == 1
-	_ = json.Unmarshal([]byte(triggersJSON), &s.Triggers)
-	_ = json.Unmarshal([]byte(toolsJSON), &s.Tools)
-	_ = json.Unmarshal([]byte(metaJSON), &s.Metadata)
-	if s.Triggers == nil {
-		s.Triggers = []interface{}{}
-	}
-	if s.Tools == nil {
-		s.Tools = []interface{}{}
-	}
-	return &s, nil
 }
 
-const skillSelectSQL = `SELECT id, name, COALESCE(description,''), COALESCE(version,'1.0.0'),
-	COALESCE(type,'knowledge'), enabled,
-	COALESCE(triggers,'[]'), COALESCE(tools,'[]'), COALESCE(readme,''), COALESCE(metadata,'{}')`
+func toGitHub(s *SkillRecord) github.SkillData {
+	return github.SkillData{
+		ID: s.ID, Name: s.Name, Description: s.Description,
+		Version: s.Version, Type: s.Type, Enabled: s.Enabled,
+		Triggers: s.Triggers, Tools: s.Tools,
+		Readme: s.Readme, Metadata: s.Metadata,
+	}
+}
+
+func store() *github.Store {
+	return github.DefaultStore
+}
 
 // GetAllSkills returns all skills ordered by name.
 func GetAllSkills() ([]SkillRecord, error) {
-	rows, err := DB.Query(skillSelectSQL + " FROM skills ORDER BY name")
-	if err != nil {
-		return nil, err
+	all := store().GetAll()
+	out := make([]SkillRecord, len(all))
+	for i := range all {
+		out[i] = *fromGitHub(&all[i])
 	}
-	defer rows.Close()
-
-	var out []SkillRecord
-	for rows.Next() {
-		s, err := scanSkillRecord(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *s)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // GetSkillByID returns one skill by ID, or (nil, nil) if not found.
 func GetSkillByID(skillID string) (*SkillRecord, error) {
-	row := DB.QueryRow(skillSelectSQL+" FROM skills WHERE id = ?", skillID)
-	return scanSkillRecord(row)
+	return fromGitHub(store().GetByID(skillID)), nil
 }
 
 // GetSkillByName returns the first skill with the given name.
 func GetSkillByName(name string) (*SkillRecord, error) {
-	row := DB.QueryRow(skillSelectSQL+" FROM skills WHERE name = ? LIMIT 1", name)
-	return scanSkillRecord(row)
+	return fromGitHub(store().GetByName(name)), nil
 }
 
-// CreateSkill inserts a new skill. An ID is generated if not provided.
+// CreateSkill inserts a new skill.
 func CreateSkill(s SkillRecord) (*SkillRecord, error) {
-	if s.ID == "" {
-		b := make([]byte, 6)
-		_, _ = rand.Read(b)
-		s.ID = fmt.Sprintf("skill-%x", b)
-	}
-	triggersJSON, _ := json.Marshal(s.Triggers)
-	toolsJSON, _ := json.Marshal(s.Tools)
-	metaJSON, _ := json.Marshal(s.Metadata)
-	isEnabled := 0
-	if s.Enabled {
-		isEnabled = 1
-	}
-	_, err := DB.Exec(
-		`INSERT INTO skills (id, name, description, version, type, enabled, triggers, tools, readme, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Name, s.Description, s.Version, s.Type, isEnabled,
-		string(triggersJSON), string(toolsJSON), s.Readme, string(metaJSON),
-	)
+	result, err := store().Create(toGitHub(&s))
 	if err != nil {
 		return nil, err
 	}
-	return GetSkillByID(s.ID)
+	return fromGitHub(result), nil
 }
 
 // UpdateSkill applies partial updates to a skill.
 func UpdateSkill(skillID string, updates map[string]interface{}) (*SkillRecord, error) {
-	colMap := map[string]string{
-		"name": "name", "description": "description", "version": "version",
-		"type": "type", "readme": "readme",
+	result, err := store().Update(skillID, updates)
+	if err != nil {
+		return nil, err
 	}
-	for key, val := range updates {
-		col, ok := colMap[key]
-		if !ok {
-			continue
-		}
-		if _, err := DB.Exec(
-			fmt.Sprintf("UPDATE skills SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", col),
-			val, skillID,
-		); err != nil {
-			return nil, err
-		}
-	}
-	if v, ok := updates["enabled"]; ok {
-		isEnabled := 0
-		if b, ok := v.(bool); ok && b {
-			isEnabled = 1
-		}
-		DB.Exec("UPDATE skills SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", isEnabled, skillID)
-	}
-	for _, key := range []string{"triggers", "tools", "metadata"} {
-		if v, ok := updates[key]; ok {
-			b, _ := json.Marshal(v)
-			DB.Exec(
-				fmt.Sprintf("UPDATE skills SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", key),
-				string(b), skillID,
-			)
-		}
-	}
-	return GetSkillByID(skillID)
+	return fromGitHub(result), nil
 }
 
 // DeleteSkill removes a skill by ID. Returns true if deleted.
 func DeleteSkill(skillID string) (bool, error) {
-	res, err := DB.Exec("DELETE FROM skills WHERE id = ?", skillID)
-	if err != nil {
+	if store().GetByID(skillID) == nil {
+		return false, nil
+	}
+	if err := store().Delete(skillID); err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return true, nil
 }
 
 // dbSkillTool mirrors the JSON structure stored in skills.tools.
@@ -169,46 +105,30 @@ type dbSkillTool struct {
 	Executor    SkillToolExecutor `json:"executor"`
 }
 
-// dbSkillRow holds raw rows from the skills table.
-type dbSkillRow struct {
-	ID          string
-	Name        string
-	Description string
-	Type        string
-	Enabled     int
-	ToolsJSON   string
-	Readme      string
-}
+// GetSkillsContext compiles enabled skills into an agent-consumable SkillContext.
+//
+// agentSkills controls which skills are "active" (tools registered + readme in prompt):
+//   - non-empty: only skills whose ID is in agentSkills are active
+//   - empty/nil: all enabled skills are active (backward compatible)
+//
+// Skills that are enabled but not active become "deferred": their docs are
+// available via load_skill, and a brief index is appended to the system prompt.
+func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, error) {
+	all := store().GetAll()
 
-func getEnabledSkills() ([]dbSkillRow, error) {
-	rows, err := DB.Query(
-		`SELECT id, name, description, COALESCE(type,'knowledge'), enabled,
-		        COALESCE(tools,'[]'), COALESCE(readme,'')
-		 FROM skills WHERE enabled = 1 ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var skills []dbSkillRow
-	for rows.Next() {
-		var s dbSkillRow
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.Enabled, &s.ToolsJSON, &s.Readme); err != nil {
-			return nil, err
+	// Filter to enabled skills only.
+	var skills []github.SkillData
+	for _, s := range all {
+		if s.Enabled {
+			skills = append(skills, s)
 		}
-		skills = append(skills, s)
 	}
-	return skills, rows.Err()
-}
 
-// GetSkillsContext compiles all enabled skills into an agent-consumable SkillContext.
-// This mirrors the skillManager.compileContext() function in skill-manager.ts.
-// agentID is accepted for API compatibility but currently all enabled skills are global.
-func GetSkillsContext(agentID string) (*SkillContext, error) {
-	skills, err := getEnabledSkills()
-	if err != nil {
-		return nil, fmt.Errorf("get enabled skills: %w", err)
+	activeSet := make(map[string]bool, len(agentSkills))
+	for _, id := range agentSkills {
+		activeSet[id] = true
 	}
+	hasFilter := len(activeSet) > 0
 
 	ctx := &SkillContext{
 		Tools:         []types.ToolDefinition{},
@@ -216,67 +136,114 @@ func GetSkillsContext(agentID string) (*SkillContext, error) {
 		SkillDocs:     map[string]string{},
 	}
 
-	var summaryLines []string
+	var activeSummaries []string
 	var actionDocs []string
+	var deferredSummaries []string
 
 	for _, s := range skills {
-		var dbTools []dbSkillTool
-		_ = json.Unmarshal([]byte(s.ToolsJSON), &dbTools)
-
-		toolNames := make([]string, 0, len(dbTools))
-		for _, t := range dbTools {
-			toolNames = append(toolNames, t.Name)
-		}
-		toolSuffix := ""
-		if len(toolNames) > 0 {
-			toolSuffix = fmt.Sprintf(" [工具: %s]", strings.Join(toolNames, ", "))
-		}
-		summaryLines = append(summaryLines, fmt.Sprintf("- **%s**: %s%s", s.Name, s.Description, toolSuffix))
-
-		if (s.Type == "action" || s.Type == "hybrid") && s.Readme != "" {
-			actionDocs = append(actionDocs, fmt.Sprintf("### Skill: %s\n\n%s", s.Name, s.Readme))
-		}
-
-		for _, t := range dbTools {
-			ctx.Tools = append(ctx.Tools, types.ToolDefinition{
-				Name:        t.Name,
-				Description: fmt.Sprintf("[Skill: %s] %s", s.Name, t.Description),
-				InputSchema: t.InputSchema,
-			})
-			ctx.ToolExecutors[t.Name] = t.Executor
-		}
-
 		if s.Readme != "" {
 			ctx.SkillDocs[s.ID] = s.Readme
 		}
+
+		isActive := !hasFilter || activeSet[s.ID]
+
+		var dbTools []dbSkillTool
+		toolsJSON, _ := json.Marshal(s.Tools)
+		_ = json.Unmarshal(toolsJSON, &dbTools)
+
+		if isActive {
+			toolNames := make([]string, 0, len(dbTools))
+			for _, t := range dbTools {
+				toolNames = append(toolNames, t.Name)
+			}
+			toolSuffix := ""
+			if len(toolNames) > 0 {
+				toolSuffix = fmt.Sprintf(" [工具: %s]", strings.Join(toolNames, ", "))
+			}
+			activeSummaries = append(activeSummaries, fmt.Sprintf("- **%s**: %s%s", s.Name, s.Description, toolSuffix))
+
+			if (s.Type == "action" || s.Type == "hybrid") && s.Readme != "" {
+				actionDocs = append(actionDocs, fmt.Sprintf("### Skill: %s\n\n%s", s.Name, s.Readme))
+			}
+
+			for _, t := range dbTools {
+				ctx.Tools = append(ctx.Tools, types.ToolDefinition{
+					Name:        t.Name,
+					Description: fmt.Sprintf("[Skill: %s] %s", s.Name, t.Description),
+					InputSchema: t.InputSchema,
+				})
+				ctx.ToolExecutors[t.Name] = t.Executor
+			}
+		} else {
+			deferredSummaries = append(deferredSummaries,
+				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
+		}
 	}
 
-	if len(skills) > 0 {
-		ctx.SystemPromptAddition = fmt.Sprintf(
+	if len(activeSummaries) > 0 {
+		ctx.SkillsSnippet = fmt.Sprintf(
 			"\n## 你拥有的 Skills\n以下是你已注册的技能，可以根据用户需求主动使用：\n%s",
-			strings.Join(summaryLines, "\n"),
+			strings.Join(activeSummaries, "\n"),
 		)
 	}
 	if len(actionDocs) > 0 {
-		ctx.SystemPromptAddition += "\n\n## Skill 使用指南\n\n" + strings.Join(actionDocs, "\n\n---\n\n")
+		ctx.SkillsSnippet += "\n\n## Skill 使用指南\n\n" + strings.Join(actionDocs, "\n\n---\n\n")
+	}
+	if len(deferredSummaries) > 0 {
+		ctx.SkillsSnippet += fmt.Sprintf(
+			"\n\n## 可按需加载的扩展技能\n以下技能未默认加载。需要时使用 `load_skill` 工具加载对应技能的文档和工具参考，然后通过已有工具执行操作。\n%s",
+			strings.Join(deferredSummaries, "\n"),
+		)
 	}
 
-	// Always include the built-in get_skill_doc tool.
 	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
-		Name:        "get_skill_doc",
-		Description: "查阅指定 skill 的详细文档。当你需要了解某个 skill 的具体用法时使用。",
+		Name:        "load_skill",
+		Description: "加载一个扩展技能的完整文档和工具参考。当你需要使用「可按需加载的扩展技能」中的能力时，先调用此工具获取详细说明，再通过已有工具（如 wecom_api）执行具体操作。",
 		InputSchema: types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
-				"skill_name": map[string]interface{}{
+				"skill_id": map[string]interface{}{
 					"type":        "string",
-					"description": "skill 的 ID（如 'channel-reply'）",
+					"description": "要加载的技能 ID",
 				},
 			},
-			Required: []string{"skill_name"},
+			Required: []string{"skill_id"},
 		},
 	})
-	ctx.ToolExecutors["get_skill_doc"] = SkillToolExecutor{Type: "internal", Handler: "get_skill_doc"}
+	ctx.ToolExecutors["load_skill"] = SkillToolExecutor{Type: "internal", Handler: "load_skill"}
 
 	return ctx, nil
+}
+
+// GetSkillDetail returns a skill's readme and tool definitions for load_skill.
+func GetSkillDetail(skillID string) (map[string]interface{}, error) {
+	d := store().GetByID(skillID)
+	if d == nil || !d.Enabled {
+		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	}
+
+	var toolRefs []map[string]interface{}
+	for _, t := range d.Tools {
+		if m, ok := t.(map[string]interface{}); ok {
+			ref := map[string]interface{}{
+				"name":        m["name"],
+				"description": m["description"],
+			}
+			if schema, ok := m["inputSchema"]; ok {
+				ref["inputSchema"] = schema
+			}
+			if exec, ok := m["executor"]; ok {
+				ref["executor"] = exec
+			}
+			toolRefs = append(toolRefs, ref)
+		}
+	}
+
+	return map[string]interface{}{
+		"skill_id":    d.ID,
+		"name":        d.Name,
+		"description": d.Description,
+		"readme":      d.Readme,
+		"tools":       toolRefs,
+	}, nil
 }

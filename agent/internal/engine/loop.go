@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"agent/internal/logger"
+	"agent/internal/sanitize"
 	"agent/internal/types"
 )
 
@@ -147,9 +148,10 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		var toolResults []types.ContentBlock
 		for _, toolUse := range toolUseBlocks {
 			toolInputJSON, _ := json.Marshal(toolUse.Input)
+			redactedToolInput := sanitize.RedactSecrets(string(toolInputJSON))
 			logger.Business(ctx, "工具调用",
 				"traceEvent", "tool_call", "iteration", iteration,
-				"tool", toolUse.Name, "toolCallId", toolUse.ID, "toolInput", string(toolInputJSON))
+				"tool", toolUse.Name, "toolCallId", toolUse.ID, "toolInput", redactedToolInput)
 
 			startedAt := time.Now().UnixMilli()
 			registeredTool, ok := toolMap[toolUse.Name]
@@ -159,11 +161,12 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 					available = append(available, k)
 				}
 				errorMsg := fmt.Sprintf("Tool not found: %s. Available tools: %s", toolUse.Name, strings.Join(available, ", "))
+				redactedErrorMsg := sanitize.RedactSecrets(errorMsg)
 				dur := time.Now().UnixMilli() - startedAt
 				logger.Business(ctx, "工具返回",
 					"traceEvent", "tool_result", "iteration", iteration,
 					"tool", toolUse.Name, "toolCallId", toolUse.ID,
-					"toolSuccess", false, "toolDuration", dur, "toolResult", errorMsg)
+					"toolSuccess", false, "toolDuration", dur, "toolResult", redactedErrorMsg)
 				toolResults = append(toolResults, types.ContentBlock{
 					Type: "tool_result", ToolUseID: toolUse.ID, Content: errorMsg, IsError: true,
 				})
@@ -173,10 +176,11 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			result, err := registeredTool.Execute(ctx, toolUse.Input)
 			duration := time.Now().UnixMilli() - startedAt
 			if err != nil {
+				redactedErr := sanitize.RedactSecrets(err.Error())
 				logger.Business(ctx, "工具返回",
 					"traceEvent", "tool_result", "iteration", iteration,
 					"tool", toolUse.Name, "toolCallId", toolUse.ID,
-					"toolSuccess", false, "toolDuration", duration, "toolResult", err.Error())
+					"toolSuccess", false, "toolDuration", duration, "toolResult", redactedErr)
 				toolResults = append(toolResults, types.ContentBlock{
 					Type: "tool_result", ToolUseID: toolUse.ID, Content: err.Error(), IsError: true,
 				})
@@ -188,10 +192,11 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 					b, _ := json.MarshalIndent(result, "", "  ")
 					resultStr = string(b)
 				}
+				redactedResult := sanitize.RedactSecrets(resultStr)
 				logger.Business(ctx, "工具返回",
 					"traceEvent", "tool_result", "iteration", iteration,
 					"tool", toolUse.Name, "toolCallId", toolUse.ID,
-					"toolSuccess", true, "toolDuration", duration, "toolResult", resultStr)
+					"toolSuccess", true, "toolDuration", duration, "toolResult", redactedResult)
 				toolResults = append(toolResults, types.ContentBlock{
 					Type: "tool_result", ToolUseID: toolUse.ID, Content: resultStr,
 				})

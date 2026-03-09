@@ -2,8 +2,8 @@ package modules
 
 func buildSessionActions() map[string]string {
 	return map[string]string{
-		"list":       "session/list",
-		"edit-group": "session/group/edit",
-		"get-group":  "session/group/get",
+		"list":       "/session/getSessionPage",
+		"edit-group": "/session/setSessionCmd",
+		"get-group":  "/session/getSessionList",
 	}
 }

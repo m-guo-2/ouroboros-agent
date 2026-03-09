@@ -8,7 +8,6 @@ import (
 	"io"
 	"agent/internal/logger"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"agent/internal/types"
@@ -274,23 +273,6 @@ func NewOpenAICompatibleClient(config OpenAICompatibleClientConfig) *OpenAICompa
 	}
 }
 
-func extractSenderName(text string) (string, string) {
-	re := regexp.MustCompile(`^\[([^\]]+)\]\n?`)
-	loc := re.FindStringSubmatchIndex(text)
-	if loc == nil {
-		return "", text
-	}
-
-	raw := text[loc[2]:loc[3]]
-	rest := text[loc[1]:]
-
-	// Format: "SenderName (channelUserId)" — extract just the display name
-	if idx := strings.Index(raw, " ("); idx > 0 {
-		return raw[:idx], rest
-	}
-	return raw, rest
-}
-
 func (c *OpenAICompatibleClient) convertMessages(messages []types.AgentMessage, systemPrompt string) []map[string]interface{} {
 	var result []map[string]interface{}
 
@@ -305,15 +287,10 @@ func (c *OpenAICompatibleClient) convertMessages(messages []types.AgentMessage, 
 		if msg.Role == "user" {
 			for _, block := range msg.Content {
 				if block.Type == "text" {
-					name, text := extractSenderName(block.Text)
-					userMsg := map[string]interface{}{
+					result = append(result, map[string]interface{}{
 						"role":    "user",
-						"content": text,
-					}
-					if name != "" {
-						userMsg["name"] = name
-					}
-					result = append(result, userMsg)
+						"content": block.Text,
+					})
 				} else if block.Type == "tool_result" {
 					result = append(result, map[string]interface{}{
 						"role":         "tool",

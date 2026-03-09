@@ -30,7 +30,7 @@ export function SkillVersions({ skillName, currentVersion }: SkillVersionsProps)
 
   const handleRestore = async (version: number) => {
     if (!confirm(`确认回滚到版本 v${version}？将产生新版本号。`)) return
-    await restoreMutation.mutateAsync({ name: skillName, version })
+    await restoreMutation.mutateAsync({ id: skillName, version })
   }
 
   return (

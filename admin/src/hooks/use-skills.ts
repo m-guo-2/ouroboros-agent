@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { skillsApi } from "@/api/skills"
-import type { SkillManifest } from "@/api/types"
 
 export function useSkills() {
   return useQuery({
@@ -12,22 +11,21 @@ export function useSkills() {
   })
 }
 
-export function useSkill(name: string | undefined) {
+export function useSkill(id: string | undefined) {
   return useQuery({
-    queryKey: ["skills", name],
+    queryKey: ["skills", id],
     queryFn: async () => {
-      const res = await skillsApi.getById(name!)
+      const res = await skillsApi.getById(id!)
       return res.data
     },
-    enabled: !!name,
+    enabled: !!id,
   })
 }
 
 export function useCreateSkill() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, manifest, readme }: { name: string; manifest: Omit<SkillManifest, "version">; readme?: string }) =>
-      skillsApi.create(name, manifest, readme),
+    mutationFn: (data: Record<string, unknown>) => skillsApi.create(data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
   })
 }
@@ -35,12 +33,12 @@ export function useCreateSkill() {
 export function useUpdateSkill() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, manifest, readme, changeSummary }: { name: string; manifest?: Partial<SkillManifest>; readme?: string; changeSummary?: string }) =>
-      skillsApi.update(name, manifest, readme, changeSummary),
+    mutationFn: ({ id, ...data }: { id: string;[key: string]: unknown }) =>
+      skillsApi.update(id, data),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ["skills"] })
-      qc.invalidateQueries({ queryKey: ["skills", variables.name] })
-      qc.invalidateQueries({ queryKey: ["skill-versions", variables.name] })
+      qc.invalidateQueries({ queryKey: ["skills", variables.id] })
+      qc.invalidateQueries({ queryKey: ["skill-versions", variables.id] })
     },
   })
 }
@@ -48,7 +46,7 @@ export function useUpdateSkill() {
 export function useToggleSkill() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) => skillsApi.toggle(name, enabled),
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => skillsApi.toggle(id, enabled),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
   })
 }
@@ -61,37 +59,37 @@ export function useDeleteSkill() {
   })
 }
 
-export function useSkillVersions(name: string | undefined) {
+export function useSkillVersions(id: string | undefined) {
   return useQuery({
-    queryKey: ["skill-versions", name],
+    queryKey: ["skill-versions", id],
     queryFn: async () => {
-      const res = await skillsApi.getVersions(name!)
+      const res = await skillsApi.getVersions(id!)
       return res.data ?? []
     },
-    enabled: !!name,
+    enabled: !!id,
   })
 }
 
-export function useSkillVersion(name: string | undefined, version: number | undefined) {
+export function useSkillVersion(id: string | undefined, version: number | undefined) {
   return useQuery({
-    queryKey: ["skill-versions", name, version],
+    queryKey: ["skill-versions", id, version],
     queryFn: async () => {
-      const res = await skillsApi.getVersion(name!, version!)
+      const res = await skillsApi.getVersion(id!, version!)
       return res.data
     },
-    enabled: !!name && version !== undefined,
+    enabled: !!id && version !== undefined,
   })
 }
 
 export function useRestoreSkillVersion() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, version }: { name: string; version: number }) =>
-      skillsApi.restoreVersion(name, version),
+    mutationFn: ({ id, version }: { id: string; version: number }) =>
+      skillsApi.restoreVersion(id, version),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ["skills"] })
-      qc.invalidateQueries({ queryKey: ["skills", variables.name] })
-      qc.invalidateQueries({ queryKey: ["skill-versions", variables.name] })
+      qc.invalidateQueries({ queryKey: ["skills", variables.id] })
+      qc.invalidateQueries({ queryKey: ["skill-versions", variables.id] })
     },
   })
 }

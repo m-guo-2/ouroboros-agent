@@ -1,38 +1,38 @@
 import { fetchApi } from "./client"
-import type { SkillListItem, SkillDetail, SkillManifest, SkillVersionSummary, SkillVersionDetail } from "./types"
+import type { SkillListItem, SkillDetail, SkillVersionSummary, SkillVersionDetail } from "./types"
 
 export const skillsApi = {
   getAll: () => fetchApi<SkillListItem[]>("/skills"),
-  getById: (name: string) => fetchApi<SkillDetail>(`/skills/${name}`),
+  getById: (id: string) => fetchApi<SkillDetail>(`/skills/${id}`),
 
-  create: (name: string, manifest: Omit<SkillManifest, "version">, readme?: string) =>
-    fetchApi<{ name: string; manifest: SkillManifest }>("/skills", {
+  create: (data: Record<string, unknown>) =>
+    fetchApi<SkillDetail>("/skills", {
       method: "POST",
-      body: JSON.stringify({ name, manifest, readme }),
+      body: JSON.stringify(data),
     }),
 
-  update: (name: string, manifest?: Partial<SkillManifest>, readme?: string, changeSummary?: string) =>
-    fetchApi<{ name: string; manifest: SkillManifest }>(`/skills/${name}`, {
+  update: (id: string, data: Record<string, unknown>) =>
+    fetchApi<SkillDetail>(`/skills/${id}`, {
       method: "PUT",
-      body: JSON.stringify({ manifest, readme, changeSummary }),
+      body: JSON.stringify(data),
     }),
 
-  toggle: (name: string, enabled: boolean) =>
-    fetchApi<{ name: string; enabled: boolean }>(`/skills/${name}/toggle`, {
-      method: "PATCH",
+  toggle: (id: string, enabled: boolean) =>
+    fetchApi<SkillDetail>(`/skills/${id}`, {
+      method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
 
-  delete: (name: string) => fetchApi<void>(`/skills/${name}`, { method: "DELETE" }),
+  delete: (id: string) => fetchApi<void>(`/skills/${id}`, { method: "DELETE" }),
 
-  getVersions: (name: string) => fetchApi<SkillVersionSummary[]>(`/skills/${name}/versions`),
+  getVersions: (id: string) => fetchApi<SkillVersionSummary[]>(`/skills/${id}/versions`),
 
-  getVersion: (name: string, version: number) =>
-    fetchApi<SkillVersionDetail>(`/skills/${name}/versions/${version}`),
+  getVersion: (id: string, version: number) =>
+    fetchApi<SkillVersionDetail>(`/skills/${id}/versions/${version}`),
 
-  restoreVersion: (name: string, version: number) =>
+  restoreVersion: (id: string, version: number) =>
     fetchApi<{ name: string; version: number; message: string }>(
-      `/skills/${name}/versions/${version}/restore`,
+      `/skills/${id}/versions/${version}/restore`,
       { method: "POST" },
     ),
 }

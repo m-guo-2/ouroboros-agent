@@ -8,8 +8,20 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// completedTraceCache holds immutable traces whose status is "completed" or "error".
+// Completed traces never change, so we build them once and cache forever.
+var completedTraceCache struct {
+	mu    sync.RWMutex
+	items map[string]*executionTrace
+}
+
+func init() {
+	completedTraceCache.items = make(map[string]*executionTrace)
+}
 
 // tracesHandler serves /api/traces/* routes.
 // logDir is the root log directory (same value passed to logger.Init).
@@ -83,6 +95,13 @@ type executionStep struct {
 	StopReason   string      `json:"stopReason,omitempty"`
 	CostUsd      interface{} `json:"costUsd,omitempty"`
 	LLMIORef     string      `json:"llmIORef,omitempty"`
+	// Absorb event fields
+	AbsorbRound   int `json:"absorbRound,omitempty"`
+	AbsorbedCount int `json:"absorbedCount,omitempty"`
+	// Compact event fields
+	TokensBefore  int `json:"tokensBefore,omitempty"`
+	TokensAfter   int `json:"tokensAfter,omitempty"`
+	ArchivedCount int `json:"archivedCount,omitempty"`
 }
 
 type executionTrace struct {
@@ -242,15 +261,42 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 					DurationMs: row["durationMs"], CostUsd: row["costUsd"],
 				}
 				steps = append(steps, step)
-			case "error":
-				errMsg := strField(row, "error")
-				if errMsg == "" {
-					errMsg = strField(row, "msg")
-				}
-				steps = append(steps, executionStep{
-					Index: len(steps), Iteration: iter, Timestamp: ts,
-					Type: "error", Error: errMsg,
-				})
+		case "absorb":
+			step := executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "absorb",
+			}
+			if v, ok := row["absorbRound"].(float64); ok {
+				step.AbsorbRound = int(v)
+			}
+			if v, ok := row["absorbedCount"].(float64); ok {
+				step.AbsorbedCount = int(v)
+			}
+			steps = append(steps, step)
+		case "compact":
+			step := executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "compact",
+			}
+			if v, ok := row["tokensBefore"].(float64); ok {
+				step.TokensBefore = int(v)
+			}
+			if v, ok := row["tokensAfter"].(float64); ok {
+				step.TokensAfter = int(v)
+			}
+			if v, ok := row["archivedCount"].(float64); ok {
+				step.ArchivedCount = int(v)
+			}
+			steps = append(steps, step)
+		case "error":
+			errMsg := strField(row, "error")
+			if errMsg == "" {
+				errMsg = strField(row, "msg")
+			}
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "error", Error: errMsg,
+			})
 			}
 		}
 	}
@@ -280,11 +326,28 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 }
 
 func (h *tracesHandler) serveTrace(w http.ResponseWriter, r *http.Request, traceID string) {
+	// Fast path: completed traces are immutable, serve from cache.
+	completedTraceCache.mu.RLock()
+	if cached, hit := completedTraceCache.items[traceID]; hit {
+		completedTraceCache.mu.RUnlock()
+		ok(w, cached)
+		return
+	}
+	completedTraceCache.mu.RUnlock()
+
 	t := h.buildTrace(traceID)
 	if t == nil {
 		apiErr(w, http.StatusNotFound, "trace not found")
 		return
 	}
+
+	// Cache completed/error traces — they will never change.
+	if t.Status == "completed" || t.Status == "error" {
+		completedTraceCache.mu.Lock()
+		completedTraceCache.items[traceID] = t
+		completedTraceCache.mu.Unlock()
+	}
+
 	ok(w, t)
 }
 

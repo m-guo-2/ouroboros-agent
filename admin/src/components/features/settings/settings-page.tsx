@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Save, Eye, EyeOff, RefreshCw, ChevronDown, Loader2 } from "lucide-react"
+import { Save, Eye, EyeOff, RefreshCw, Loader2 } from "lucide-react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { PageHeader } from "@/components/layout/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -111,9 +111,8 @@ function ModelSelectInput({
             <button
               key={m.id}
               type="button"
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors ${
-                value === m.id ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-700"
-              }`}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors ${value === m.id ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-700"
+                }`}
               onClick={() => {
                 onChange(m.id)
                 setOpen(false)
@@ -202,6 +201,20 @@ export function SettingsPage() {
 
   /** 根据字段类型渲染不同的输入控件 */
   const renderField = (item: SettingKeyDef) => {
+    if (item.type === "select" && item.options) {
+      return (
+        <select
+          className="flex h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={formValues[item.key] ?? ""}
+          onChange={(e) => updateValue(item.key, e.target.value)}
+        >
+          {item.options.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      )
+    }
+
     // provider 下拉选择
     if (item.type === "provider-select" && item.options) {
       return (

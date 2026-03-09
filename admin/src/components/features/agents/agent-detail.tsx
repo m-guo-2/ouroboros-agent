@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useParams, useNavigate, Link } from "react-router-dom"
-import { ArrowLeft, Save, Trash2, RefreshCw, Loader2 } from "lucide-react"
+import { ArrowLeft, Save, Trash2, RefreshCw, Loader2, Eye } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
 import { useSkills } from "@/hooks/use-skills"
+import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
 import type { AvailableModel } from "@/api/types"
 
@@ -43,6 +44,33 @@ export function AgentDetail() {
   const [modelsLoading, setModelsLoading] = useState(false)
   const [modelsError, setModelsError] = useState("")
   const [showModelList, setShowModelList] = useState(false)
+
+  // Full prompt preview
+  const [fullPrompt, setFullPrompt] = useState("")
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
+
+  const fetchFullPrompt = useCallback(async () => {
+    if (!id) return
+    setPreviewLoading(true)
+    try {
+      const res = await agentsApi.getFullPrompt(id)
+      if (res.success && res.data) {
+        setFullPrompt(res.data.fullPrompt)
+      }
+    } catch {
+      // silent
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (id && initialized) {
+      fetchFullPrompt()
+      setShowPreview(true)
+    }
+  }, [id, initialized, fetchFullPrompt])
 
   // Initialize form from agent data
   if (agent && !initialized) {
@@ -103,6 +131,7 @@ export function AgentDetail() {
         isActive,
       },
     })
+    fetchFullPrompt()
   }
 
   const handleDelete = async () => {
@@ -241,7 +270,12 @@ export function AgentDetail() {
                 </div>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700 mb-1.5 block">系统提示词</label>
+                <label className="text-sm font-medium text-slate-700 mb-1.5 block">
+                  系统提示词
+                  <span className="ml-2 text-xs font-normal text-slate-400">
+                    支持 <code className="px-1 py-0.5 bg-slate-100 rounded text-[11px]">{"{{skills}}"}</code> 变量，运行时自动展开为绑定技能的索引内容
+                  </span>
+                </label>
                 <Textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
@@ -249,6 +283,36 @@ export function AgentDetail() {
                   className="font-mono text-xs"
                 />
               </div>
+
+              {showPreview && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+                      <Eye className="h-3.5 w-3.5" />
+                      完整 Prompt 预览
+                      <span className="text-xs font-normal text-slate-400">（展开后发给模型的最终内容）</span>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={fetchFullPrompt}
+                      disabled={previewLoading}
+                      className="h-7 text-xs"
+                    >
+                      {previewLoading ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                      )}
+                      刷新预览
+                    </Button>
+                  </div>
+                  <pre className="w-full rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-mono text-slate-700 whitespace-pre-wrap wrap-break-word max-h-96 overflow-y-auto">
+                    {previewLoading ? "加载中..." : fullPrompt || "（空）"}
+                  </pre>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

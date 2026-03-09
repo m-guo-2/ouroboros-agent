@@ -40,10 +40,10 @@ type SkillToolExecutor struct {
 
 // SkillContext is the compiled output of all enabled skills for an agent.
 type SkillContext struct {
-	SystemPromptAddition string
-	Tools                []types.ToolDefinition
-	ToolExecutors        map[string]SkillToolExecutor
-	SkillDocs            map[string]string
+	SkillsSnippet string // text referenced by {{skills}} template variable
+	Tools         []types.ToolDefinition
+	ToolExecutors map[string]SkillToolExecutor
+	SkillDocs     map[string]string
 }
 
 // SessionData represents a persisted agent session.

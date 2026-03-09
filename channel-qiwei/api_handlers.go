@@ -53,12 +53,12 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string]any, error) {
 	switch msg.MessageType {
 	case "text", "rich_text":
-		return "msg/sendText", map[string]any{
+		return "/msg/sendText", map[string]any{
 			"toId":    toID,
 			"content": msg.Content,
 		}, nil
 	case "image":
-		return "msg/sendImage", map[string]any{
+		return "/msg/sendImage", map[string]any{
 			"toId":   toID,
 			"imgUrl": msg.Content,
 		}, nil
@@ -69,7 +69,7 @@ func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string
 				fileName = v
 			}
 		}
-		return "msg/sendFile", map[string]any{
+		return "/msg/sendFile", map[string]any{
 			"toId":     toID,
 			"fileUrl":  msg.Content,
 			"fileName": fileName,

@@ -222,15 +222,30 @@ func runSchema(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN initiator TEXT`,
 		`ALTER TABLE messages ADD COLUMN sender_name TEXT`,
 		`ALTER TABLE messages ADD COLUMN sender_id TEXT`,
+		`ALTER TABLE agent_configs ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_configs ADD COLUMN provider TEXT`,
 		`ALTER TABLE agent_configs ADD COLUMN model TEXT`,
 		`ALTER TABLE users ADD COLUMN type TEXT NOT NULL DEFAULT 'human'`,
 		`ALTER TABLE user_memory ADD COLUMN agent_id TEXT DEFAULT ''`,
 		`ALTER TABLE user_memory_facts ADD COLUMN agent_id TEXT DEFAULT ''`,
 		`ALTER TABLE skills ADD COLUMN metadata TEXT DEFAULT '{}'`,
+
+		// Context compaction tracking (031)
+		`CREATE TABLE IF NOT EXISTS context_compactions (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			summary TEXT NOT NULL,
+			archived_before_time TEXT NOT NULL,
+			archived_message_count INTEGER,
+			token_count_before INTEGER,
+			token_count_after INTEGER,
+			compact_model TEXT,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_compactions_session ON context_compactions(session_id)`,
 	}
 	for _, m := range migrations {
-		db.Exec(m) // nolint: ignore "duplicate column" errors
+		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
 	}
 
 	return nil

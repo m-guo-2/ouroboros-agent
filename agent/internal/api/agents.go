@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"agent/internal/runner"
 	"agent/internal/storage"
 )
 
@@ -86,6 +87,31 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 	id := parts[0]
 	if id == "" {
 		apiErr(w, http.StatusBadRequest, "missing agent id")
+		return
+	}
+
+	// Handle sub-resource paths like /api/agents/{id}/full-prompt
+	subPath := ""
+	if len(parts) > 1 {
+		subPath = parts[1]
+	}
+
+	if subPath == "full-prompt" && r.Method == http.MethodGet {
+		cfg, err := storage.GetAgentConfig(id)
+		if err != nil {
+			apiErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if cfg == nil {
+			apiErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		skillsCtx, err := storage.GetSkillsContext(id, cfg.Skills)
+		if err != nil {
+			skillsCtx = &storage.SkillContext{}
+		}
+		fullPrompt := runner.BuildSystemPrompt(cfg.SystemPrompt, skillsCtx.SkillsSnippet)
+		ok(w, map[string]string{"fullPrompt": fullPrompt})
 		return
 	}
 

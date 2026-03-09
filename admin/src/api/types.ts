@@ -92,20 +92,27 @@ export interface SkillManifest {
 }
 
 export interface SkillListItem {
+  id: string
   name: string
   description: string
-  version: number
+  version: string
   type: string
   enabled: boolean
-  triggers: string[]
-  toolCount: number
-  tools: string[]
+  triggers: unknown[]
+  tools: unknown[]
 }
 
 export interface SkillDetail {
+  id: string
   name: string
-  manifest: SkillManifest
+  description: string
+  version: string
+  type: string
+  enabled: boolean
+  triggers: unknown[]
+  tools: unknown[]
   readme: string
+  metadata: Record<string, unknown>
 }
 
 export interface SkillVersionSummary {
@@ -134,7 +141,7 @@ export interface SettingKeyDef {
   secret?: boolean
   placeholder?: string
   description?: string
-  type?: "provider-select" | "model-select"
+  type?: "provider-select" | "model-select" | "select"
   options?: Array<{ value: string; label: string }>
   providerKey?: string  // model-select 关联的 provider 配置键
 }
@@ -165,7 +172,7 @@ export interface ExecutionStep {
   /** ReAct 迭代轮次（从 1 开始；system 步骤可能为 0） */
   iteration: number
   timestamp: number
-  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call"
+  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call" | "absorb" | "compact"
   thinking?: string
   /** 来源：model = 模型推理, system = 系统状态日志（加载配置/Skills 等） */
   source?: "model" | "system"
@@ -186,6 +193,16 @@ export interface ExecutionStep {
   costUsd?: number
   /** 完整 LLM I/O 文件引用（用于按需加载原始请求/响应） */
   llmIORef?: string
+  /** absorb 事件：吸纳轮次 */
+  absorbRound?: number
+  /** absorb 事件：吸纳消息数 */
+  absorbedCount?: number
+  /** compact 事件：压缩前 token 数 */
+  tokensBefore?: number
+  /** compact 事件：压缩后 token 数 */
+  tokensAfter?: number
+  /** compact 事件：归档消息数 */
+  archivedCount?: number
 }
 
 export interface ExecutionTrace {
@@ -206,4 +223,18 @@ export interface ExecutionTrace {
 export interface TraceListItem {
   id: string
   startedAt: number
+}
+
+// ===== Compactions =====
+
+export interface CompactionData {
+  id: string
+  sessionId: string
+  summary: string
+  archivedBeforeTime: string
+  archivedMessageCount: number
+  tokenCountBefore: number
+  tokenCountAfter: number
+  compactModel: string
+  createdAt: string
 }

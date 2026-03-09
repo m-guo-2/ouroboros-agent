@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"agent/internal/api"
 	"agent/internal/channels"
 	"agent/internal/dispatcher"
+	"agent/internal/github"
 	"agent/internal/logger"
 	"agent/internal/runner"
 	"agent/internal/storage"
@@ -27,7 +29,37 @@ var (
 	startTime     = time.Now()
 )
 
+// loadEnv reads a .env file and sets any vars not already in the environment.
+func loadEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		if idx := strings.Index(line, " #"); idx >= 0 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if os.Getenv(k) == "" {
+			os.Setenv(k, strings.TrimSpace(v))
+		}
+	}
+}
+
 func main() {
+	loadEnv(".env")
+	loadEnv("../.env")
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "1997"
@@ -60,6 +92,11 @@ func main() {
 
 	if err := storage.Init(dbPath); err != nil {
 		logger.Error(ctx, "数据库初始化失败", "error", err.Error(), "path", dbPath)
+		os.Exit(1)
+	}
+
+	if err := github.InitStore(); err != nil {
+		logger.Error(ctx, "GitHub skill store 初始化失败", "error", err.Error())
 		os.Exit(1)
 	}
 

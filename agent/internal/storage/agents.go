@@ -133,9 +133,9 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 		isActive = 1
 	}
 	_, err := DB.Exec(
-		`INSERT INTO agent_configs (id, model_id, display_name, system_prompt, provider, model, skills, channels, is_active)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cfg.ID, cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
+		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, is_active)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.ID, "", cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
 		string(skillsJSON), string(channelsJSON), isActive,
 	)
 	if err != nil {

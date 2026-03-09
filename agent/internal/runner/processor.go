@@ -11,48 +11,21 @@ import (
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
 	"agent/internal/logger"
-	"agent/internal/subagent"
+	"agent/internal/sanitize"
 	"agent/internal/storage"
+	"agent/internal/subagent"
 	"agent/internal/types"
 )
 
-func buildSystemPrompt(agentSystemPrompt, skillsAddition string) string {
-	var parts []string
-	if agentSystemPrompt != "" {
-		parts = append(parts, agentSystemPrompt)
-	}
-
-	builtin := `## 消息回复与输出原则
-
-**核心原则：你的文字输出（推理过程、思考内容）对用户完全不可见。用户只能收到你通过 ` + "`" + `send_channel_message` + "`" + ` 工具主动发送的消息。**
-
-所有需要传达给用户的内容，都必须通过 ` + "`" + `send_channel_message` + "`" + ` 工具发送，而非直接输出文字。
-
-**参数：**
-- ` + "`" + `content` + "`" + `（必填）：要发送的消息内容
-- ` + "`" + `messageType` + "`" + `（可选）：消息类型，默认 text；支持 text / image / file / rich_text
-- ` + "`" + `channel` + "`" + ` / ` + "`" + `channelUserId` + "`" + ` / ` + "`" + `channelConversationId` + "`" + `：默认取自消息来源，通常不需要手动填写
-- ` + "`" + `replyToChannelMessageId` + "`" + `（可选）：要回复的上游消息 ID。不传则不带 reply_to，由你自行决定是否回复某条消息
-
-**使用原则：**
-- 需要回复用户时，调用此工具发送，不要依赖直接文字输出。
-- 可以分多次调用，不必等所有工作完成后才回复。
-- 当用户的问题需要较长处理时间时，先发一条确认消息，再继续处理。
-
-**关于历史消息的理解：**
-历史消息只包含客观事件记录，不包含你过去的推理过程：
-- ` + "`" + `user` + "`" + ` 消息 = 某个用户发来的内容。消息头格式：[` + "`" + `昵称 (渠道ID) | via 渠道 | type=消息类型` + "`" + `]。其中 via 表示来源渠道（feishu/wecom/webui），type 仅在非文本消息时出现（image/file/audio 等）
-- ` + "`" + `assistant` + "`" + ` 消息（tool_use block）= 你过去执行的工具调用动作
-- ` + "`" + `tool_result` + "`" + ` block = 工具执行返回的客观结果
-- 你过去通过 ` + "`" + `send_channel_message` + "`" + ` 发送的内容会出现在对应的 tool_use 和 tool_result 中`
-
-	parts = append(parts, builtin)
-
-	if skillsAddition != "" {
-		parts = append(parts, skillsAddition)
-	}
-
-	return strings.Join(parts, "\n\n")
+// BuildSystemPrompt performs {{skills}} template expansion on the agent's
+// system prompt. The prompt stored in the database is the single source of
+// truth — no hidden builtin segments are appended.
+func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
+	result := agentSystemPrompt + "\n\n" + skillsSnippet
+	// if strings.Contains(result, "{{skills}}") {
+	// 	result = strings.ReplaceAll(result, "{{skills}}", skillsSnippet)
+	// }
+	return result
 }
 
 func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageData {
@@ -71,7 +44,7 @@ func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageD
 			b, _ := json.Marshal(toolUseBlocks)
 			result = append(result, storage.MessageData{
 				Role:        "assistant",
-				Content:     string(b),
+				Content:     sanitize.RedactSecrets(string(b)),
 				MessageType: "structured",
 			})
 		} else if msg.Role == "user" {
@@ -87,12 +60,43 @@ func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageD
 			b, _ := json.Marshal(toolResultBlocks)
 			result = append(result, storage.MessageData{
 				Role:        "tool_result",
-				Content:     string(b),
+				Content:     sanitize.RedactSecrets(string(b)),
 				MessageType: "structured",
 			})
 		}
 	}
 	return result
+}
+
+func redactMessagesForStorage(messages []types.AgentMessage) []types.AgentMessage {
+	redacted := make([]types.AgentMessage, len(messages))
+	for i, msg := range messages {
+		redacted[i] = types.AgentMessage{
+			Role:    msg.Role,
+			Content: make([]types.ContentBlock, len(msg.Content)),
+		}
+		for j, block := range msg.Content {
+			redactedBlock := block
+			if redactedBlock.Text != "" {
+				redactedBlock.Text = sanitize.RedactSecrets(redactedBlock.Text)
+			}
+			if redactedBlock.Content != "" {
+				redactedBlock.Content = sanitize.RedactSecrets(redactedBlock.Content)
+			}
+			if redactedBlock.Input != nil {
+				inputJSON, err := json.Marshal(redactedBlock.Input)
+				if err == nil {
+					redactedJSON := sanitize.RedactSecrets(string(inputJSON))
+					var inputMap map[string]interface{}
+					if err := json.Unmarshal([]byte(redactedJSON), &inputMap); err == nil {
+						redactedBlock.Input = inputMap
+					}
+				}
+			}
+			redacted[i].Content[j] = redactedBlock
+		}
+	}
+	return redacted
 }
 
 func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.AgentMessage {
@@ -124,16 +128,12 @@ func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.Ag
 	return messages[startIndex:]
 }
 
-func formatUserMessage(senderName, channelUserID, channel, messageType, channelMessageID, content string) string {
-	var sender string
-	if senderName != "" {
-		sender = fmt.Sprintf("%s (%s)", senderName, channelUserID)
-	} else {
-		sender = channelUserID
+func formatUserMessage(senderName, channel, messageType, channelMessageID, content string) string {
+	if senderName != "" && !strings.HasPrefix(content, senderName+": ") {
+		content = senderName + ": " + content
 	}
 
 	var meta []string
-	meta = append(meta, sender)
 	if channel != "" {
 		meta = append(meta, fmt.Sprintf("via %s", channel))
 	}
@@ -142,6 +142,9 @@ func formatUserMessage(senderName, channelUserID, channel, messageType, channelM
 	}
 	if messageType != "" && messageType != "text" {
 		meta = append(meta, fmt.Sprintf("type=%s", messageType))
+	}
+	if len(meta) == 0 {
+		return content
 	}
 	return fmt.Sprintf("[%s]\n%s", strings.Join(meta, " | "), content)
 }
@@ -159,7 +162,7 @@ func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
 			if msg.MessageType == "structured" {
 				continue
 			}
-			text := formatUserMessage(msg.SenderName, msg.SenderID, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content)
+			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content)
 			result = append(result, types.AgentMessage{
 				Role:    "user",
 				Content: []types.ContentBlock{{Type: "text", Text: text}},
@@ -220,13 +223,13 @@ func registerSubagentTools(
 		var content string
 		if failed {
 			content = fmt.Sprintf(
-				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\nerror=%s\n\n请基于失败原因决定是否重试、降级或改用其他路径继续任务。",
-				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Error),
+				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\nerror=%s\n\n已产生影响：\n%s\n\n请基于失败原因决定是否重试、降级或改用其他路径继续任务。",
+				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Error), formatImpacts(job.Impacts),
 			)
 		} else {
 			content = fmt.Sprintf(
-				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\n\n总结：\n%s\n\n请基于该结果继续主任务。",
-				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Result),
+				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\n\n总结：\n%s\n\n已产生影响：\n%s\n\n请基于该结果继续主任务。",
+				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Result), formatImpacts(job.Impacts),
 			)
 		}
 
@@ -250,8 +253,8 @@ func registerSubagentTools(
 	registry.RegisterBuiltin("run_subagent_async", "异步启动一个 subagent 子任务，立即返回 jobId。子任务完成后可用 get_subagent_status 查询自然语言总结。", types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
-			"task": map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述"},
-			"subagent": map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis，默认 developer"},
+			"task":            map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述"},
+			"subagent":        map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis / web_research，默认 developer"},
 			"timeout_seconds": map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 600）"},
 		},
 		Required: []string{"task"},
@@ -282,6 +285,9 @@ func registerSubagentTools(
 				notifyMain(j, false)
 			},
 			OnFailed: func(j *subagent.Job) {
+				notifyMain(j, true)
+			},
+			OnCanceled: func(j *subagent.Job) {
 				notifyMain(j, true)
 			},
 		})
@@ -322,11 +328,76 @@ func registerSubagentTools(
 			"status":        job.Status,
 			"result":        job.Result,
 			"error":         job.Error,
+			"impacts":       job.Impacts,
+			"impactSummary": formatImpacts(job.Impacts),
 			"detailDir":     job.DetailDir,
 			"subTraceId":    job.SubTraceID,
 			"parentTraceId": job.ParentTraceID,
 		}, nil
 	})
+
+	registry.RegisterBuiltin("cancel_subagent", "取消一个正在运行的 subagent 任务，并返回截至当前已产生的实际影响。", types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"job_id": map[string]interface{}{"type": "string", "description": "subagent jobId"},
+			"reason": map[string]interface{}{"type": "string", "description": "取消原因（可选）"},
+		},
+		Required: []string{"job_id"},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		jobID, _ := input["job_id"].(string)
+		jobID = strings.TrimSpace(jobID)
+		if jobID == "" {
+			return nil, fmt.Errorf("job_id is required")
+		}
+		reason, _ := input["reason"].(string)
+		job, err := manager.Cancel(jobID, reason)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"jobId":         job.ID,
+			"subagent":      job.Profile,
+			"status":        job.Status,
+			"error":         job.Error,
+			"impacts":       job.Impacts,
+			"impactSummary": formatImpacts(job.Impacts),
+		}, nil
+	})
+}
+
+func formatImpacts(impacts []subagent.Impact) string {
+	if len(impacts) == 0 {
+		return "- 暂无可记录影响"
+	}
+	var lines []string
+	for i, imp := range impacts {
+		if i >= 10 {
+			lines = append(lines, fmt.Sprintf("- ... 其余 %d 条影响省略", len(impacts)-10))
+			break
+		}
+		lines = append(lines, "- "+strings.TrimSpace(imp.Summary))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func resolveCompactModel(mainModel string) string {
+	cheapModels := map[string]string{
+		"claude-opus-4-5":            "claude-3-5-haiku-20241022",
+		"claude-sonnet-4-5":          "claude-3-5-haiku-20241022",
+		"claude-3-5-sonnet-20241022": "claude-3-5-haiku-20241022",
+		"claude-3-5-haiku-20241022":  "claude-3-5-haiku-20241022",
+		"claude-3-haiku-20240307":    "claude-3-haiku-20240307",
+		"gpt-4o":                     "gpt-4o-mini",
+		"gpt-4-turbo":                "gpt-4o-mini",
+		"gpt-4o-mini":                "gpt-4o-mini",
+	}
+	if m, ok := cheapModels[mainModel]; ok {
+		return m
+	}
+	if strings.Contains(mainModel, "claude") {
+		return "claude-3-5-haiku-20241022"
+	}
+	return mainModel
 }
 
 func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedRequest) error {
@@ -356,7 +427,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		credentials = &storage.ProviderCredentials{}
 	}
 
-	skillsCtx, err := storage.GetSkillsContext(request.AgentID)
+	skillsCtx, err := storage.GetSkillsContext(request.AgentID, agentConfig.Skills)
 	if err != nil || skillsCtx == nil {
 		skillsCtx = &storage.SkillContext{
 			Tools:         []types.ToolDefinition{},
@@ -384,6 +455,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	registry := engine.NewToolRegistry()
 	ostools.RegisterOSTools(registry, shellSession)
+	ostools.RegisterRecallContext(registry, worker.SessionID)
+	engine.RegisterTavilyTool(registry)
 
 	registry.RegisterBuiltin("send_channel_message", "向当前渠道发送消息。content 填要发出去的话。", types.JSONSchema{
 		Type: "object",
@@ -442,21 +515,25 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	})
 
 	internalHandlers := map[string]types.ToolExecutor{
-		"get_skill_doc": func(c context.Context, input map[string]interface{}) (interface{}, error) {
-			skillName, ok := input["skill_name"].(string)
-			if !ok || skillName == "" {
-				return nil, fmt.Errorf("skill_name is required")
+		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
+			skillID, ok := input["skill_id"].(string)
+			if !ok || skillID == "" {
+				return nil, fmt.Errorf("skill_id is required")
 			}
-			doc, exists := skillsCtx.SkillDocs[skillName]
-			if !exists {
-				return nil, fmt.Errorf("skill doc not found: %s", skillName)
+			detail, err := storage.GetSkillDetail(skillID)
+			if err != nil {
+				available := make([]string, 0, len(skillsCtx.SkillDocs))
+				for id := range skillsCtx.SkillDocs {
+					available = append(available, id)
+				}
+				return nil, fmt.Errorf("%s. available skills: %s", err.Error(), strings.Join(available, ", "))
 			}
-			return map[string]string{"skill": skillName, "doc": doc}, nil
+			return detail, nil
 		},
 	}
 	registry.RegisterSkills(skillsCtx, internalHandlers)
 
-	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SystemPromptAddition)
+	systemPrompt := BuildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SkillsSnippet)
 
 	var historyMessages []types.AgentMessage
 	var histSource string
@@ -478,7 +555,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	historyMessages = truncateByFullTurns(historyMessages, 10)
 
-	currentUserContent := formatUserMessage(request.SenderName, request.ChannelUserID, request.Channel, request.MessageType, request.ChannelMessageID, request.Content)
+	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content)
 
 	messages := append(historyMessages, types.AgentMessage{
 		Role:    "user",
@@ -503,54 +580,132 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		"source", histSource, "historyCount", len(historyMessages), "totalMessages", len(messages),
 		"diagnostic", engine.BuildToolUseDiagnostic(messages))
 
-	loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
-		LLMClient:     llmClient,
-		SystemPrompt:  systemPrompt,
-		Messages:      messages,
-		Tools:         registry.GetAll(),
-		Model:         modelName,
-		MaxIterations: 25,
-		OnNewMessages: func(iterMessages []types.AgentMessage) error {
-			persistable := toPersistableMessages(iterMessages)
-			for _, msg := range persistable {
-				initiator := ""
-				if msg.Role == "assistant" {
-					initiator = "agent"
+	onNewMessages := func(iterMessages []types.AgentMessage) error {
+		persistable := toPersistableMessages(iterMessages)
+		for _, msg := range persistable {
+			initiator := ""
+			if msg.Role == "assistant" {
+				initiator = "agent"
+			}
+			_, _ = storage.SaveMessage(map[string]interface{}{
+				"sessionId":   worker.SessionID,
+				"role":        msg.Role,
+				"content":     msg.Content,
+				"messageType": msg.MessageType,
+				"channel":     request.Channel,
+				"traceId":     request.TraceID,
+				"initiator":   initiator,
+			})
+		}
+		return nil
+	}
+
+	tools := registry.GetAll()
+
+	for absorbRound := 0; ; absorbRound++ {
+		// === Execute ===
+		loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
+			LLMClient:     llmClient,
+			SystemPrompt:  systemPrompt,
+			Messages:      messages,
+			Tools:         tools,
+			Model:         modelName,
+			MaxIterations: 25,
+			OnNewMessages: onNewMessages,
+		})
+		if err != nil {
+			logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
+			return err
+		}
+
+		messages = loopResult.Messages
+
+		if loopResult.FinalText != "" {
+			messages = append(messages, types.AgentMessage{
+				Role:    "assistant",
+				Content: []types.ContentBlock{{Type: "text", Text: loopResult.FinalText}},
+			})
+		}
+
+		if cwd := shellSession.CWD(); cwd != "" && cwd != worker.WorkDir {
+			worker.WorkDir = cwd
+			logger.Detail(ctx, "工作目录已更新", "cwd", cwd)
+		}
+
+		// === Checkpoint ===
+		if len(messages) > 0 {
+			estimate := EstimateTokens(messages, modelName)
+			logger.Detail(ctx, "上下文 token 估算",
+				"tokens", estimate.Tokens, "contextWindow", estimate.ContextWindow,
+				"ratio", fmt.Sprintf("%.2f", estimate.Ratio), "method", estimate.Method)
+
+			if ShouldCompact(estimate) {
+				compactModel := resolveCompactModel(modelName)
+				var compactLLM engine.LLMClient
+				if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
+					compactLLM = engine.NewAnthropicClient(engine.AnthropicClientConfig{
+						APIKey:    credentials.APIKey,
+						BaseURL:   credentials.BaseURL,
+						MaxTokens: 2048,
+					})
+				} else {
+					compactLLM = engine.NewOpenAICompatibleClient(engine.OpenAICompatibleClientConfig{
+						APIKey:    credentials.APIKey,
+						BaseURL:   credentials.BaseURL,
+						MaxTokens: 2048,
+					})
 				}
-				_, _ = storage.SaveMessage(map[string]interface{}{
-					"sessionId":   worker.SessionID,
-					"role":        msg.Role,
-					"content":     msg.Content,
-					"messageType": msg.MessageType,
-					"channel":     request.Channel,
-					"traceId":     request.TraceID,
-					"initiator":   initiator,
+
+				result, err := CompactContext(ctx, messages, modelName, compactLLM, compactModel, worker.SessionID)
+				if err != nil {
+					logger.Warn(ctx, "上下文压缩失败，使用原始消息",
+						"error", err.Error(), "sessionId", worker.SessionID)
+				} else if result.Compacted {
+					messages = result.Messages
+					logger.Business(ctx, "上下文压缩",
+						"traceEvent", "compact",
+						"tokensBefore", result.TokensBefore, "tokensAfter", result.TokensAfter,
+						"archivedCount", result.ArchivedCount)
+				}
+			}
+
+			redactedMessages := redactMessagesForStorage(messages)
+			contextBytes, err := json.Marshal(redactedMessages)
+			if err == nil {
+				_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
+					"workDir": worker.WorkDir,
+					"context": string(contextBytes),
 				})
 			}
-			return nil
-		},
-	})
-
-	if err != nil {
-		logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
-		return err
-	}
-
-	if cwd := shellSession.CWD(); cwd != "" && cwd != worker.WorkDir {
-		worker.WorkDir = cwd
-		logger.Detail(ctx, "工作目录已更新", "cwd", cwd)
-	}
-
-	updateData := map[string]interface{}{
-		"workDir": worker.WorkDir,
-	}
-	if loopResult != nil && len(loopResult.Messages) > 0 {
-		contextBytes, err := json.Marshal(loopResult.Messages)
-		if err == nil {
-			updateData["context"] = string(contextBytes)
 		}
+
+		// === Absorb-or-Exit ===
+		if absorbRound >= MaxAbsorbRounds {
+			logger.Warn(ctx, "达到最大吸纳轮次，退出吸纳循环",
+				"maxAbsorbRounds", MaxAbsorbRounds, "sessionId", worker.SessionID)
+			break
+		}
+
+		pending := popAllPending(worker)
+		if len(pending) == 0 {
+			break
+		}
+
+		var parts []string
+		parts = append(parts, fmt.Sprintf("[以下 %d 条消息在处理期间到达]", len(pending)))
+		for _, p := range pending {
+			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content))
+		}
+		merged := strings.Join(parts, "\n\n")
+		messages = append(messages, types.AgentMessage{
+			Role:    "user",
+			Content: []types.ContentBlock{{Type: "text", Text: merged}},
+		})
+
+		logger.Business(ctx, "消息吸纳",
+			"traceEvent", "absorb",
+			"absorbRound", absorbRound+1, "absorbedCount", len(pending))
 	}
-	_ = storage.UpdateSession(worker.SessionID, updateData)
 
 	return nil
 }

@@ -18,6 +18,8 @@ func main() {
 	}
 
 	app := newApp(cfg)
+	log := app.log
+
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      app.routes(),
@@ -27,12 +29,14 @@ func main() {
 	}
 
 	go func() {
-		fmt.Printf("QiWei Bot service started on :%s\n", cfg.Port)
-		fmt.Printf("  Callback: http://localhost:%s/webhook/callback\n", cfg.Port)
-		fmt.Printf("  Send API: http://localhost:%s/api/qiwei/send\n", cfg.Port)
-		fmt.Printf("  Health:   http://localhost:%s/health\n", cfg.Port)
+		log.Info("service started",
+			"port", cfg.Port,
+			"logLevel", cfg.LogLevel,
+			"agentEnabled", cfg.AgentEnabled,
+			"agentServer", cfg.AgentServer,
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("server error: %v\n", err)
+			log.Error("server error", "err", err)
 			os.Exit(1)
 		}
 	}()
@@ -41,6 +45,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
+	log.Info("shutting down")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)

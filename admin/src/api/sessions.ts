@@ -1,5 +1,5 @@
 import { fetchApi } from "./client"
-import type { AgentSession, AgentSessionListItem, MessageData } from "./types"
+import type { AgentSession, AgentSessionListItem, MessageData, CompactionData } from "./types"
 
 export const sessionsApi = {
   getAll: (filters?: { agentId?: string; channel?: string; userId?: string; limit?: number }) => {
@@ -18,4 +18,6 @@ export const sessionsApi = {
     fetchApi<MessageData[]>(`/agent-sessions/${id}/messages?limit=${limit}`),
 
   delete: (id: string) => fetchApi<void>(`/agent-sessions/${id}`, { method: "DELETE" }),
+
+  getCompactions: (id: string) => fetchApi<CompactionData[]>(`/agent-sessions/${id}/compactions`),
 }

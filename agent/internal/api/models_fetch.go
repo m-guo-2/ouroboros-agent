@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -16,26 +17,23 @@ type availableModel struct {
 }
 
 func fetchAvailableModels(provider, apiKey, baseURL string) ([]availableModel, error) {
+	_ = baseURL // model discovery always uses official provider endpoints
 	switch strings.ToLower(provider) {
 	case "claude", "anthropic":
-		return fetchClaudeModels(apiKey, baseURL)
+		return fetchClaudeModels(apiKey)
 	case "openai":
-		return fetchOpenAIModels(apiKey, baseURL)
+		return fetchOpenAIModels(apiKey)
 	case "kimi", "moonshot":
-		return fetchKimiModels(apiKey, baseURL)
+		return fetchKimiModels(apiKey)
 	case "glm", "zhipu":
-		return fetchGLMModels(apiKey, baseURL)
+		return fetchGLMModels(apiKey)
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
 }
 
-func fetchClaudeModels(apiKey, baseURL string) ([]availableModel, error) {
-	base := baseURL
-	if base == "" {
-		base = "https://api.anthropic.com"
-	}
-	base = strings.TrimSuffix(base, "/")
+func fetchClaudeModels(apiKey string) ([]availableModel, error) {
+	base := "https://api.anthropic.com"
 	req, _ := http.NewRequest(http.MethodGet, base+"/v1/models?limit=100", nil)
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -70,12 +68,8 @@ func fetchClaudeModels(apiKey, baseURL string) ([]availableModel, error) {
 	return out, nil
 }
 
-func fetchOpenAIModels(apiKey, baseURL string) ([]availableModel, error) {
-	base := baseURL
-	if base == "" {
-		base = "https://api.openai.com/v1"
-	}
-	base = strings.TrimSuffix(base, "/")
+func fetchOpenAIModels(apiKey string) ([]availableModel, error) {
+	base := "https://api.openai.com/v1"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -104,12 +98,8 @@ func fetchOpenAIModels(apiKey, baseURL string) ([]availableModel, error) {
 	return out, nil
 }
 
-func fetchKimiModels(apiKey, baseURL string) ([]availableModel, error) {
-	base := baseURL
-	if base == "" {
-		base = "https://api.moonshot.cn/v1"
-	}
-	base = strings.TrimSuffix(base, "/")
+func fetchKimiModels(apiKey string) ([]availableModel, error) {
+	base := "https://api.moonshot.cn/v1"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -136,12 +126,8 @@ func fetchKimiModels(apiKey, baseURL string) ([]availableModel, error) {
 	return out, nil
 }
 
-func fetchGLMModels(apiKey, baseURL string) ([]availableModel, error) {
-	base := baseURL
-	if base == "" {
-		base = "https://open.bigmodel.cn/api/paas/v4"
-	}
-	base = strings.TrimSuffix(base, "/")
+func fetchGLMModels(apiKey string) ([]availableModel, error) {
+	base := "https://open.bigmodel.cn/api/paas/v4"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	client := &http.Client{Timeout: 15 * time.Second}

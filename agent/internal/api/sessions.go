@@ -38,6 +38,10 @@ func handleSessionsWithID(w http.ResponseWriter, r *http.Request) {
 		getSessionMessages(w, r, id)
 		return
 	}
+	if sub == "compactions" {
+		getSessionCompactions(w, r, id)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -141,4 +145,16 @@ func getSessionMessages(w http.ResponseWriter, r *http.Request, id string) {
 		msgs = []storage.MessageData{}
 	}
 	ok(w, msgs)
+}
+
+func getSessionCompactions(w http.ResponseWriter, r *http.Request, id string) {
+	compactions, err := storage.ListCompactions(id)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if compactions == nil {
+		compactions = []storage.CompactionData{}
+	}
+	ok(w, compactions)
 }

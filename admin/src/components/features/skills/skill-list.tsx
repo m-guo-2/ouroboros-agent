@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Blocks, Wrench, BookOpen, Zap, Plus, Pencil } from "lucide-react"
+import { Blocks, Wrench, BookOpen, Zap, Plus, Pencil, Cpu, Download } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { EmptyState } from "@/components/layout/empty-state"
 import { Card } from "@/components/ui/card"
@@ -33,6 +33,9 @@ export function SkillList() {
     )
   }
 
+  const hasTools = (skill: typeof skills extends (infer T)[] | undefined ? T : never) =>
+    Array.isArray(skill.tools) && skill.tools.length > 0
+
   return (
     <div>
       <PageHeader
@@ -56,12 +59,13 @@ export function SkillList() {
             {skills.map((skill) => {
               const config = typeConfig[skill.type] ?? typeConfig.hybrid
               const TypeIcon = config.icon
+              const isSystem = hasTools(skill)
               return (
                 <div
-                  key={skill.name}
+                  key={skill.id}
                   className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 transition-colors"
                 >
-                  <Link to={`/skills/${skill.name}`} className="flex-1 min-w-0">
+                  <Link to={`/skills/${skill.id}`} className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
                       <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-100">
                         <TypeIcon className="h-4 w-4 text-slate-600" />
@@ -70,6 +74,15 @@ export function SkillList() {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-slate-900">{skill.name}</span>
                           <Badge className={config.color}>{config.label}</Badge>
+                          {isSystem ? (
+                            <Badge className="bg-emerald-50 text-emerald-700 gap-0.5">
+                              <Cpu className="h-2.5 w-2.5" />系统加载
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-slate-100 text-slate-500 gap-0.5">
+                              <Download className="h-2.5 w-2.5" />按需加载
+                            </Badge>
+                          )}
                           <span className="text-xs text-slate-400">v{skill.version}</span>
                         </div>
                         <p className="text-xs text-slate-500 truncate mt-0.5">{skill.description}</p>
@@ -77,21 +90,21 @@ export function SkillList() {
                     </div>
                   </Link>
 
-                  <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                    {skill.toolCount > 0 && (
+                  <div className="flex items-center gap-3 shrink-0 ml-4">
+                    {isSystem && (
                       <span className="flex items-center gap-1 text-xs text-slate-400">
                         <Wrench className="h-3 w-3" />
-                        {skill.toolCount}
+                        {skill.tools.length}
                       </span>
                     )}
-                    <Link to={`/skills/${skill.name}?edit=1`}>
+                    <Link to={`/skills/${skill.id}?edit=1`}>
                       <Button variant="ghost" size="sm" title="编辑">
                         <Pencil className="h-3.5 w-3.5 text-slate-500" />
                       </Button>
                     </Link>
                     <Switch
                       checked={skill.enabled}
-                      onCheckedChange={(enabled) => toggleMutation.mutate({ name: skill.name, enabled })}
+                      onCheckedChange={(enabled) => toggleMutation.mutate({ id: skill.id, enabled })}
                     />
                   </div>
                 </div>

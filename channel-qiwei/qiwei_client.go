@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -36,7 +37,7 @@ func newQiweiClient(cfg Config) *qiweiClient {
 
 func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[string]any) (qiweiDoAPIResponse, error) {
 	reqBody := qiweiRequest{
-		Method: method,
+		Method: normalizeMethod(method),
 		Params: mergeParams(c.guid, params),
 	}
 	raw, err := json.Marshal(reqBody)
@@ -114,4 +115,15 @@ func sleepRetry(ctx context.Context, attempt int) {
 	case <-ctx.Done():
 	case <-timer.C:
 	}
+}
+
+func normalizeMethod(method string) string {
+	m := strings.TrimSpace(method)
+	if m == "" {
+		return m
+	}
+	if strings.HasPrefix(m, "/") {
+		return m
+	}
+	return "/" + m
 }

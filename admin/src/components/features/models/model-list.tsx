@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Cpu, Eye, EyeOff, Check, X, ExternalLink, RefreshCw, Loader2, ChevronDown } from "lucide-react"
+import { Cpu, Eye, EyeOff, Check, X, ExternalLink, RefreshCw, Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { EmptyState } from "@/components/layout/empty-state"
 import { Card, CardContent } from "@/components/ui/card"
@@ -149,9 +149,8 @@ function ModelCard({ model }: { model: import("@/api/types").Model }) {
                     <button
                       key={m.id}
                       type="button"
-                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors ${
-                        modelId === m.id ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-600"
-                      }`}
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors ${modelId === m.id ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-600"
+                        }`}
                       onClick={() => {
                         setModelId(m.id)
                         setModelListOpen(false)

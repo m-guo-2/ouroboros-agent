@@ -29,7 +29,7 @@ func LoadConfig() Config {
 	agentEnabled := strings.ToLower(getenv("AGENT_ENABLED", "true")) != "false"
 
 	return Config{
-		APIBaseURL:    strings.TrimRight(getenv("QIWEI_API_BASE_URL", "https://api.qiweapi.com"), "/"),
+		APIBaseURL:    strings.TrimRight(getenv("QIWEI_API_BASE_URL", "http://manager.qiweapi.com/qiwe"), "/"),
 		Token:         getenv("QIWEI_TOKEN", ""),
 		GUID:          getenv("QIWEI_GUID", ""),
 		Port:          getenv("QIWEI_BOT_PORT", "2000"),

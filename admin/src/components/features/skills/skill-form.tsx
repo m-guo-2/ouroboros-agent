@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { useCreateSkill } from "@/hooks/use-skills"
-import type { SkillManifest } from "@/api/types"
 
 interface SkillFormDialogProps {
   open: boolean
@@ -22,7 +21,7 @@ const typeOptions = [
 export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [type, setType] = useState<SkillManifest["type"]>("knowledge")
+  const [type, setType] = useState<"knowledge" | "action" | "hybrid">("knowledge")
   const [triggers, setTriggers] = useState("")
   const [readme, setReadme] = useState("")
   const createMutation = useCreateSkill()
@@ -39,16 +38,15 @@ export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
     e.preventDefault()
     if (!name.trim() || !description.trim()) return
 
-    const manifest: Omit<SkillManifest, "version"> = {
+    await createMutation.mutateAsync({
       name: name.trim(),
       description: description.trim(),
       type,
       enabled: true,
       triggers: triggers.split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
       tools: [],
-    }
-
-    await createMutation.mutateAsync({ name: name.trim(), manifest, readme: readme.trim() || undefined })
+      readme: readme.trim() || undefined,
+    })
     reset()
     onOpenChange(false)
   }

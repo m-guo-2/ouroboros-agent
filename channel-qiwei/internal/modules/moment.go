@@ -2,13 +2,13 @@ package modules
 
 func buildMomentActions() map[string]string {
 	return map[string]string{
-		"list":           "moment/list",
-		"batch-detail":   "moment/getDetailBatch",
-		"upload-media":   "moment/upload",
-		"publish":        "moment/publish",
-		"delete":         "moment/delete",
-		"like":           "moment/like",
-		"comment":        "moment/comment",
-		"delete-comment": "moment/deleteComment",
+		"list":           "/sns/getSnsRecord",
+		"batch-detail":   "/sns/getSnsDetail",
+		"upload-media":   "/sns/upload",
+		"publish":        "/sns/postSns",
+		"delete":         "/sns/deleteSns",
+		"like":           "/sns/snsLike",
+		"comment":        "/sns/snsComment",
+		"delete-comment": "/sns/deleteSnsComment",
 	}
 }

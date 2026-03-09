@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { sessionsApi } from "@/api/sessions"
-import { tracesApi } from "@/api/traces"
-import type { AgentSessionListItem, TraceListItem } from "@/api/types"
+import type { AgentSessionListItem } from "@/api/types"
 
 export function useMonitorSessions(filters?: { agentId?: string; channel?: string; limit?: number }) {
   const query = useQuery<AgentSessionListItem[]>({
@@ -18,15 +17,4 @@ export function useMonitorSessions(filters?: { agentId?: string; channel?: strin
   })
 
   return query
-}
-
-export function useRecentTraces(limit = 30) {
-  return useQuery<TraceListItem[]>({
-    queryKey: ["traces", "recent", limit],
-    queryFn: async () => {
-      const res = await tracesApi.getRecentSummaries(limit)
-      return res.data ?? []
-    },
-    refetchInterval: 8000,
-  })
 }

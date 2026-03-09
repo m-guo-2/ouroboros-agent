@@ -42,6 +42,7 @@ type SessionWorker struct {
 
 var (
 	SessionIdleTimeoutMs = 10 * 60 * 1000
+	MaxAbsorbRounds      = 5
 	sessionWorkers       = make(map[string]*SessionWorker)
 	workerMutex          sync.Mutex
 	shuttingDown         = false
@@ -81,6 +82,18 @@ func evictSession(sessionID string) {
 		worker.IdleTimer.Stop()
 	}
 	delete(sessionWorkers, sessionID)
+}
+
+func popAllPending(worker *SessionWorker) []QueuedRequest {
+	workerMutex.Lock()
+	defer workerMutex.Unlock()
+	if len(worker.Queue) == 0 {
+		return nil
+	}
+	pending := make([]QueuedRequest, len(worker.Queue))
+	copy(pending, worker.Queue)
+	worker.Queue = worker.Queue[:0]
+	return pending
 }
 
 func drainWorker(worker *SessionWorker) {

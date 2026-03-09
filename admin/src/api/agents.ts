@@ -19,4 +19,7 @@ export const agentsApi = {
     fetchApi<AgentProfile>(`/agents/${id}`, { method: "PUT", body: JSON.stringify(data) }),
 
   delete: (id: string) => fetchApi<void>(`/agents/${id}`, { method: "DELETE" }),
+
+  getFullPrompt: (id: string) =>
+    fetchApi<{ fullPrompt: string }>(`/agents/${id}/full-prompt`),
 }

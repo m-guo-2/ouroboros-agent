@@ -53,3 +53,8 @@
 | [046](./046-monitor-three-panel-redesign.md) | Monitor 可观测性前端三栏布局重设计 | 架构决策 / 代码变更 | 2026-03-05 |
 | [047](./047-systemprompt-admin-transparent.md) | SystemPrompt 透明化：Admin 写什么就是什么 | 架构决策 / 代码变更 | 2026-03-05 |
 | [048](./048-direct-push-main-by-explicit-request.md) | Main 分支显式直推放开 | 讨论结论 | 2026-03-06 |
+| [049](./049-browser-subagent-redesign.md) | Browser Subagent 重设计 | 架构决策 | 2026-03-06 |
+| [050](./050-linux-production-one-click-deploy.md) | Linux 生产一键部署方案 | 讨论结论 | 2026-03-06 |
+| [051](./051-rename-brand-default-to-moli.md) | 默认品牌名切换为 Moli | 讨论结论 | 2026-03-06 |
+| [052](./052-repo-and-local-dir-rename-to-moli.md) | GitHub 仓库名与本地目录规划为 moli | 讨论结论 | 2026-03-06 |
+| [051](./051-tavily-builtin-capability.md) | Tavily 内置联网研究能力 | 架构决策 | 2026-03-06 |

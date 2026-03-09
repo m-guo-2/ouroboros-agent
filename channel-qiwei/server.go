@@ -1,29 +1,54 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"channel-qiwei/internal/modules"
 )
 
 type app struct {
-	cfg      Config
-	client   *qiweiClient
-	http     *http.Client
-	registry modules.Registry
-	dedupe   *ttlSet
+	cfg       Config
+	log       *slog.Logger
+	client    *qiweiClient
+	http      *http.Client
+	registry  modules.Registry
+	dedupe    *ttlSet
+	nameCache *ttlCache
+
+	contactsMu       sync.Mutex
+	contactsLoadedAt time.Time
 }
 
 func newApp(cfg Config) *app {
 	return &app{
-		cfg:      cfg,
-		client:   newQiweiClient(cfg),
-		http:     &http.Client{Timeout: time.Duration(cfg.RequestTimout) * time.Second},
-		registry: modules.BuildRegistry(),
-		dedupe:   newTTLSet(5 * time.Minute),
+		cfg:       cfg,
+		log:       newLogger(cfg.LogLevel),
+		client:    newQiweiClient(cfg),
+		http:      &http.Client{Timeout: time.Duration(cfg.RequestTimout) * time.Second},
+		registry:  modules.BuildRegistry(),
+		dedupe:    newTTLSet(5 * time.Minute),
+		nameCache: newTTLCache(10 * time.Minute),
 	}
+}
+
+func newLogger(level string) *slog.Logger {
+	var lv slog.Level
+	switch level {
+	case "debug":
+		lv = slog.LevelDebug
+	case "warn":
+		lv = slog.LevelWarn
+	case "error":
+		lv = slog.LevelError
+	default:
+		lv = slog.LevelInfo
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lv}))
 }
 
 func (a *app) routes() http.Handler {

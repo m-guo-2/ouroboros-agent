@@ -19,6 +19,7 @@ func Mount(mux *http.ServeMux, logDir string) {
 
 	// Settings
 	mux.HandleFunc("/api/settings", handleSettings)
+	mux.HandleFunc("/api/settings/provider-models", handleSettingsProviderModels)
 	mux.HandleFunc("/api/settings/", handleSettingsWithKey)
 
 	// Agents

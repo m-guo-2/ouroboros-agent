@@ -33,16 +33,16 @@ function emptyTool(): SkillTool {
 }
 
 export function SkillDetail() {
-  const { name } = useParams<{ name: string }>()
+  const { name: skillId } = useParams<{ name: string }>()
   const navigate = useNavigate()
-  const { data: skill, isLoading } = useSkill(name)
+  const { data: skill, isLoading } = useSkill(skillId)
   const toggleMutation = useToggleSkill()
   const deleteMutation = useDeleteSkill()
   const updateMutation = useUpdateSkill()
 
   const [editing, setEditing] = useState(false)
   const [description, setDescription] = useState("")
-  const [type, setType] = useState<SkillManifest["type"]>("knowledge")
+  const [type, setType] = useState<"knowledge" | "action" | "hybrid">("knowledge")
   const [triggers, setTriggers] = useState("")
   const [readme, setReadme] = useState("")
   const [tools, setTools] = useState<SkillTool[]>([])
@@ -53,13 +53,14 @@ export function SkillDetail() {
 
   const syncFromSkill = useCallback(() => {
     if (!skill) return
-    const m = skill.manifest
-    setDescription(m.description)
-    setType(m.type)
-    setTriggers((m.triggers ?? []).join(", "))
+    setDescription(skill.description ?? "")
+    setType((skill.type as "knowledge" | "action" | "hybrid") ?? "knowledge")
+    const trigs = Array.isArray(skill.triggers) ? skill.triggers.map(String) : []
+    setTriggers(trigs.join(", "))
     setReadme(skill.readme ?? "")
-    setTools(m.tools ? structuredClone(m.tools) : [])
-    setToolsJson(JSON.stringify(m.tools ?? [], null, 2))
+    const skillTools = (Array.isArray(skill.tools) ? skill.tools : []) as SkillTool[]
+    setTools(structuredClone(skillTools))
+    setToolsJson(JSON.stringify(skillTools, null, 2))
     setToolsJsonError("")
     setChangeSummary("")
   }, [skill])
@@ -76,18 +77,11 @@ export function SkillDetail() {
     }
   }, [searchParams.get("edit"), skill, syncFromSkill])
 
-  const enterEdit = () => {
-    syncFromSkill()
-    setEditing(true)
-  }
-
-  const cancelEdit = () => {
-    syncFromSkill()
-    setEditing(false)
-  }
+  const enterEdit = () => { syncFromSkill(); setEditing(true) }
+  const cancelEdit = () => { syncFromSkill(); setEditing(false) }
 
   const handleSave = async () => {
-    if (!name) return
+    if (!skillId) return
 
     let finalTools = tools
     if (toolEditMode === "json") {
@@ -100,18 +94,13 @@ export function SkillDetail() {
       }
     }
 
-    const manifest: Partial<SkillManifest> = {
+    await updateMutation.mutateAsync({
+      id: skillId,
       description: description.trim(),
       type,
       triggers: triggers.split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
       tools: finalTools,
-    }
-
-    await updateMutation.mutateAsync({
-      name,
-      manifest,
       readme: readme.trim(),
-      changeSummary: changeSummary.trim() || undefined,
     })
     setEditing(false)
   }
@@ -129,13 +118,14 @@ export function SkillDetail() {
     return <div className="text-sm text-slate-500">技能未找到</div>
   }
 
-  const m = skill.manifest
+  const skillTools = (Array.isArray(skill.tools) ? skill.tools : []) as SkillTool[]
+  const skillTriggers = Array.isArray(skill.triggers) ? skill.triggers.map(String) : []
 
   return (
     <div>
       <PageHeader
-        title={m.name}
-        description={editing ? undefined : m.description}
+        title={skill.name}
+        description={editing ? undefined : skill.description}
         actions={
           <div className="flex items-center gap-2">
             {editing ? (
@@ -150,8 +140,8 @@ export function SkillDetail() {
             ) : (
               <>
                 <Switch
-                  checked={m.enabled}
-                  onCheckedChange={(enabled) => toggleMutation.mutate({ name: m.name, enabled })}
+                  checked={skill.enabled}
+                  onCheckedChange={(enabled) => toggleMutation.mutate({ id: skill.id, enabled })}
                 />
                 <Button variant="secondary" size="sm" onClick={enterEdit}>
                   <Pencil className="h-4 w-4" /> 编辑
@@ -160,7 +150,7 @@ export function SkillDetail() {
                   variant="ghost" size="sm"
                   onClick={async () => {
                     if (!confirm("确认删除？")) return
-                    await deleteMutation.mutateAsync(m.name)
+                    await deleteMutation.mutateAsync(skill.id)
                     navigate("/skills")
                   }}
                 >
@@ -176,7 +166,6 @@ export function SkillDetail() {
       />
 
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: Info */}
         <Card className="lg:col-span-1">
           <CardHeader><CardTitle>信息</CardTitle></CardHeader>
           <CardContent className="space-y-3">
@@ -226,18 +215,22 @@ export function SkillDetail() {
             ) : (
               <>
                 <div>
+                  <p className="text-xs text-slate-400">ID</p>
+                  <p className="text-sm font-mono">{skill.id}</p>
+                </div>
+                <div>
                   <p className="text-xs text-slate-400">版本</p>
-                  <p className="text-sm font-mono">v{m.version}</p>
+                  <p className="text-sm font-mono">v{skill.version}</p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-400">类型</p>
-                  <Badge>{m.type}</Badge>
+                  <Badge>{skill.type}</Badge>
                 </div>
-                {m.triggers && m.triggers.length > 0 && (
+                {skillTriggers.length > 0 && (
                   <div>
                     <p className="text-xs text-slate-400 mb-1">触发词</p>
                     <div className="flex flex-wrap gap-1">
-                      {m.triggers.map((t) => (
+                      {skillTriggers.map((t) => (
                         <Badge key={t} variant="outline">{t}</Badge>
                       ))}
                     </div>
@@ -248,12 +241,11 @@ export function SkillDetail() {
           </CardContent>
         </Card>
 
-        {/* Right: Tabs — README / Tools / Versions */}
         <div className="lg:col-span-2">
           <Tabs defaultValue="readme">
             <TabsList>
               <TabsTrigger value="readme">README</TabsTrigger>
-              <TabsTrigger value="tools">工具 ({editing ? tools.length : (m.tools?.length ?? 0)})</TabsTrigger>
+              <TabsTrigger value="tools">工具 ({editing ? tools.length : skillTools.length})</TabsTrigger>
               <TabsTrigger value="versions">版本历史</TabsTrigger>
             </TabsList>
 
@@ -348,11 +340,11 @@ export function SkillDetail() {
                     ) : (
                       <ToolsVisualEditor tools={tools} onChange={setTools} />
                     )
-                  ) : m.tools && m.tools.length > 0 ? (
+                  ) : skillTools.length > 0 ? (
                     <div>
                       <p className="text-xs text-slate-400 mb-2">点击「编辑」可修改工具配置</p>
                       <div className="space-y-1">
-                        {m.tools.map((tool) => (
+                        {skillTools.map((tool) => (
                           <div key={tool.name} className="text-xs p-2 bg-slate-50 rounded">
                             <p className="font-medium font-mono">{tool.name}</p>
                             <p className="text-slate-500 mt-0.5">{tool.description}</p>
@@ -370,7 +362,7 @@ export function SkillDetail() {
             <TabsContent value="versions">
               <Card>
                 <CardContent className="pt-6">
-                  {name && <SkillVersions skillName={name} currentVersion={m.version} />}
+                  {skillId && <SkillVersions skillName={skillId} currentVersion={parseInt(String(skill.version)) || 1} />}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -515,7 +507,7 @@ function ToolEditor({
             </div>
           )}
 
-          {tool.executor.type === "script" && (
+          {(tool.executor.type === "script" || tool.executor.type === "shell") && (
             <div>
               <label className="text-xs text-slate-400 mb-1 block">Command</label>
               <Input

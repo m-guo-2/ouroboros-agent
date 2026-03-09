@@ -69,6 +69,73 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 	return msgs, rows.Err()
 }
 
+// GetMessagesBefore returns messages for a session created before the given time, oldest-first.
+func GetMessagesBefore(sessionID, beforeTime string, limit int) ([]MessageData, error) {
+	rows, err := DB.Query(
+		`SELECT id, session_id, role, content,
+		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
+		        COALESCE(trace_id,''), COALESCE(initiator,''),
+		        COALESCE(sender_name,''), COALESCE(sender_id,''),
+		        COALESCE(created_at,'')
+		 FROM messages WHERE session_id = ? AND created_at < ?
+		 ORDER BY created_at ASC LIMIT ?`,
+		sessionID, beforeTime, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []MessageData
+	for rows.Next() {
+		var m MessageData
+		if err := rows.Scan(
+			&m.ID, &m.SessionID, &m.Role, &m.Content,
+			&m.MessageType, &m.Channel, &m.ChannelMessageID,
+			&m.TraceID, &m.Initiator,
+			&m.SenderName, &m.SenderID, &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+// SearchMessages returns messages for a session whose content matches the query string.
+func SearchMessages(sessionID, query, beforeTime string, limit int) ([]MessageData, error) {
+	rows, err := DB.Query(
+		`SELECT id, session_id, role, content,
+		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
+		        COALESCE(trace_id,''), COALESCE(initiator,''),
+		        COALESCE(sender_name,''), COALESCE(sender_id,''),
+		        COALESCE(created_at,'')
+		 FROM messages
+		 WHERE session_id = ? AND created_at < ? AND content LIKE ?
+		 ORDER BY created_at DESC LIMIT ?`,
+		sessionID, beforeTime, "%"+query+"%", limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []MessageData
+	for rows.Next() {
+		var m MessageData
+		if err := rows.Scan(
+			&m.ID, &m.SessionID, &m.Role, &m.Content,
+			&m.MessageType, &m.Channel, &m.ChannelMessageID,
+			&m.TraceID, &m.Initiator,
+			&m.SenderName, &m.SenderID, &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
 // SaveMessage inserts a new message row and returns a stub record.
 func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	id := newID()

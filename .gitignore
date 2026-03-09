@@ -57,6 +57,9 @@ agent/agent
 data/config.db
 data/config.db-shm
 data/config.db-wal
+agent/data/config.db
+agent/data/config.db-shm
+agent/data/config.db-wal
 
 # Temporary images and charts
 *.png
@@ -84,3 +87,4 @@ daily_active_chart*
 temp/
 tmp/
 **/tmp/
+skills/
