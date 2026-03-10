@@ -1,0 +1,11 @@
+{
+  "msgType": 103,
+  "msgData": {
+    "fileAeskey": "aes-gw-video",
+    "fileAuthkey": "auth-gw-video",
+    "fileHttpUrl": "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=gw-video",
+    "fileSize": 319044,
+    "fileMd5": "gw-video-md5",
+    "fileName": "dmlkZW8ubXA0"
+  }
+}

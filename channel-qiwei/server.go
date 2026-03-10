@@ -9,30 +9,39 @@ import (
 	"time"
 
 	"channel-qiwei/internal/modules"
+	sharedoss "github.com/m-guo-2/ouroboros-agent/shared/oss"
 )
 
 type app struct {
-	cfg       Config
-	log       *slog.Logger
-	client    *qiweiClient
-	http      *http.Client
-	registry  modules.Registry
-	dedupe    *ttlSet
-	nameCache *ttlCache
+	cfg           Config
+	log           *slog.Logger
+	client        *qiweiClient
+	http          *http.Client
+	recognizer    recognizer
+	storage       sharedoss.Storage
+	storageConfig sharedoss.Config
+	registry      modules.Registry
+	dedupe        *ttlSet
+	nameCache     *ttlCache
 
 	contactsMu       sync.Mutex
 	contactsLoadedAt time.Time
 }
 
 func newApp(cfg Config) *app {
+	log := newLogger(cfg.LogLevel)
+	storageRuntime := newObjectStorage(log)
 	return &app{
-		cfg:       cfg,
-		log:       newLogger(cfg.LogLevel),
-		client:    newQiweiClient(cfg),
-		http:      &http.Client{Timeout: time.Duration(cfg.RequestTimout) * time.Second},
-		registry:  modules.BuildRegistry(),
-		dedupe:    newTTLSet(5 * time.Minute),
-		nameCache: newTTLCache(10 * time.Minute),
+		cfg:           cfg,
+		log:           log,
+		client:        newQiweiClient(cfg, log),
+		http:          &http.Client{Timeout: time.Duration(cfg.RequestTimout) * time.Second},
+		recognizer:    newVolcengineRecognizer(cfg),
+		storage:       storageRuntime.store,
+		storageConfig: storageRuntime.cfg,
+		registry:      modules.BuildRegistry(),
+		dedupe:        newTTLSet(5 * time.Minute),
+		nameCache:     newTTLCache(10 * time.Minute),
 	}
 }
 
@@ -56,6 +65,10 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/health", a.handleHealth)
 	mux.HandleFunc("/api/health", a.handleHealth)
 	mux.HandleFunc("/webhook/callback", a.handleWebhookCallback)
+	mux.HandleFunc("/api/qiwei/search_targets", a.handleSearchTargets)
+	mux.HandleFunc("/api/qiwei/list_or_get_conversations", a.handleListOrGetConversations)
+	mux.HandleFunc("/api/qiwei/parse_message", a.handleParseMessage)
+	mux.HandleFunc("/api/qiwei/send_message", a.handleFacadeSendMessage)
 	mux.HandleFunc("/api/qiwei/send", a.handleSend)
 	mux.HandleFunc("/api/qiwei/do", a.handleDoAPI)
 	mux.HandleFunc("/api/qiwei/", a.handleModuleAction)

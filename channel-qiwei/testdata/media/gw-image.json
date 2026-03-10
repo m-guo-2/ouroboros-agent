@@ -1,0 +1,12 @@
+{
+  "msgType": 101,
+  "msgData": {
+    "fileAeskey": "aes-gw-image",
+    "fileAuthkey": "auth-gw-image",
+    "fileBigHttpUrl": "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=gw-image-big",
+    "fileMiddleHttpUrl": "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=gw-image-middle",
+    "fileBigSize": 254,
+    "fileMd5": "gw-image-md5",
+    "fileName": "5rWL6K+VLnBuZw=="
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "msgType": 102,
+  "msgData": {
+    "fileAeskey": "aes-gw-file",
+    "fileAuthkey": "auth-gw-file",
+    "fileHttpUrl": "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=gw-file",
+    "fileSize": 319044,
+    "fileMd5": "gw-file-md5",
+    "fileName": "5rWL6K+VLnBkZg=="
+  }
+}

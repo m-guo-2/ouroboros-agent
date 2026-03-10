@@ -14,13 +14,21 @@ import (
 const tagCallback = "callback"
 
 var userMessageTypeMap = map[int]string{
-	1:  "text",
-	2:  "text",
-	3:  "image",
-	34: "voice",
-	43: "video",
-	47: "sticker",
-	49: "file",
+	1:   "text",
+	2:   "text",
+	3:   "image",
+	14:  "image",
+	15:  "file",
+	16:  "voice",
+	23:  "video",
+	34:  "voice",
+	43:  "video",
+	47:  "sticker",
+	49:  "file",
+	101: "image",
+	102: "file",
+	103: "video",
+	104: "sticker",
 }
 
 func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
@@ -58,13 +66,21 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessage) error {
 	if msg.MsgSvrID != "" && a.dedupe.Seen(msg.MsgSvrID) {
-		a.log.Debug("skip duplicate", "tag", tagCallback, "msg", msg.MsgSvrID)
+		a.log.Info("skip duplicate", "tag", tagCallback, "msg", msg.MsgSvrID)
 		return nil
 	}
 
 	messageType := userMessageTypeMap[msg.MsgType]
 	if messageType == "" {
-		a.log.Debug("skip unsupported msgType", "tag", tagCallback, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
+		rawMsgData, _ := json.Marshal(msg.MsgData)
+		a.log.Warn("skip unsupported msgType",
+			"tag", tagCallback,
+			"msgType", msg.MsgType,
+			"msg", msg.MsgSvrID,
+			"senderId", msg.SenderID,
+			"fromRoomId", msg.FromRoomID,
+			"msgData", truncateBody(rawMsgData, 400),
+		)
 		return nil
 	}
 	isGroup := msg.FromRoomID != "" && msg.FromRoomID != "0"
@@ -74,22 +90,41 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	}
 
 	content := ""
+	var attachments []incomingAttachment
 	if msg.MsgType == 1 || msg.MsgType == 2 {
 		content = strings.TrimSpace(stringValue(msg.MsgData["content"]))
 		if content == "" {
-			a.log.Debug("skip empty text", "tag", tagCallback, "msg", msg.MsgSvrID)
+			rawMsgData, _ := json.Marshal(msg.MsgData)
+			a.log.Warn("skip empty text",
+				"tag", tagCallback,
+				"msg", msg.MsgSvrID,
+				"senderId", msg.SenderID,
+				"fromRoomId", msg.FromRoomID,
+				"msgData", truncateBody(rawMsgData, 400),
+			)
 			return nil
 		}
 	} else {
-		raw, _ := json.Marshal(msg.MsgData)
-		content = string(raw)
+		prepared := a.prepareMediaForAgent(ctx, msg.MsgType, messageType, msg.MsgData)
+		if prepared.MessageType != "" {
+			messageType = prepared.MessageType
+		}
+		content = prepared.Content
+		attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, messageType, prepared)
+		if len(attachments) > 0 {
+			if incomingContent := forwardedAttachmentPlaceholder(messageType, prepared.Name); incomingContent != "" {
+				content = incomingContent
+			}
+		}
 	}
 
 	senderName := msg.SenderNickname
 	if senderName == "" && msg.SenderID != "" {
 		senderName = a.resolveUserName(ctx, msg.SenderID)
 	}
-	if senderName != "" {
+	if messageType == "voice" && strings.TrimSpace(content) != "" {
+		content = formatVoiceTranscriptEvent(senderName, msg.SenderID, content)
+	} else if senderName != "" {
 		content = senderName + ": " + content
 	}
 
@@ -125,12 +160,8 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 		Content:                 content,
 		SenderName:              senderName,
 		Timestamp:               ts,
-		ChannelMeta: map[string]any{
-			"guid":       msg.GUID,
-			"msgType":    msg.MsgType,
-			"fromRoomId": msg.FromRoomID,
-		},
-		AgentID: a.cfg.AgentID,
+		Attachments:             attachments,
+		AgentID:                 a.cfg.AgentID,
 	}
 	a.log.Info("forwarding to agent", "tag", tagCallback, "msg", msg.MsgSvrID, "conversation", in.ChannelConversationID, "type", in.MessageType, "sender", senderName)
 	err := a.forwardToAgent(ctx, in)
@@ -139,6 +170,57 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	}
 	a.log.Debug("forwarded", "tag", tagCallback, "msg", msg.MsgSvrID)
 	return nil
+}
+
+func attachmentsFromPreparedMedia(messageID, messageType string, prepared preparedMedia) []incomingAttachment {
+	resourceURI := strings.TrimSpace(prepared.ResourceURI)
+	if resourceURI == "" {
+		return nil
+	}
+	switch messageType {
+	case "image", "file", "video":
+	default:
+		return nil
+	}
+	return []incomingAttachment{{
+		ID:                strings.TrimSpace(messageID) + ":0",
+		Kind:              messageType,
+		ResourceURI:       resourceURI,
+		DisplayName:       strings.TrimSpace(prepared.Name),
+		MIMEType:          strings.TrimSpace(prepared.MIMEType),
+		SourceMessageType: strings.TrimSpace(messageType),
+	}}
+}
+
+func forwardedAttachmentPlaceholder(messageType, name string) string {
+	switch strings.TrimSpace(messageType) {
+	case "image":
+		if strings.TrimSpace(name) != "" {
+			return "[收到图片]\n名称: " + strings.TrimSpace(name)
+		}
+		return "[收到图片]"
+	case "file":
+		if strings.TrimSpace(name) != "" {
+			return "[收到文件]\n名称: " + strings.TrimSpace(name)
+		}
+		return "[收到文件]"
+	case "video":
+		if strings.TrimSpace(name) != "" {
+			return "[收到视频]\n名称: " + strings.TrimSpace(name)
+		}
+		return "[收到视频]"
+	default:
+		return ""
+	}
+}
+
+func formatVoiceTranscriptEvent(senderName, senderID, transcript string) string {
+	name := strings.TrimSpace(firstNonEmpty(senderName, senderID, "未知用户"))
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return name + "(用户)发送了语音消息"
+	}
+	return name + "(用户)发送了语音消息，转换为文字是：" + transcript
 }
 
 func (a *app) resolveUserName(ctx context.Context, userID string) string {

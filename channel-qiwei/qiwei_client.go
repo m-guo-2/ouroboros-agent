@@ -17,6 +17,7 @@ type qiweiClient struct {
 	token      string
 	guid       string
 	httpClient *http.Client
+	log        logger
 }
 
 type qiweiRequest struct {
@@ -24,7 +25,12 @@ type qiweiRequest struct {
 	Params map[string]any `json:"params"`
 }
 
-func newQiweiClient(cfg Config) *qiweiClient {
+type logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+}
+
+func newQiweiClient(cfg Config, log logger) *qiweiClient {
 	return &qiweiClient{
 		baseURL: cfg.APIBaseURL,
 		token:   cfg.Token,
@@ -32,6 +38,7 @@ func newQiweiClient(cfg Config) *qiweiClient {
 		httpClient: &http.Client{
 			Timeout: time.Duration(cfg.RequestTimout) * time.Second,
 		},
+		log: log,
 	}
 }
 
@@ -55,9 +62,24 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-QIWEI-TOKEN", c.token)
 
+		if c.log != nil {
+			c.log.Info("qiwei api request",
+				"method", reqBody.Method,
+				"attempt", attempt+1,
+				"params", truncateBody(raw, 400),
+			)
+		}
+
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
+			if c.log != nil {
+				c.log.Warn("qiwei api request failed",
+					"method", reqBody.Method,
+					"attempt", attempt+1,
+					"err", err,
+				)
+			}
 			if attempt < 2 {
 				sleepRetry(ctx, attempt)
 				continue
@@ -69,6 +91,14 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 		_ = resp.Body.Close()
 		if readErr != nil {
 			return qiweiDoAPIResponse{}, readErr
+		}
+		if c.log != nil {
+			c.log.Info("qiwei api response",
+				"method", reqBody.Method,
+				"attempt", attempt+1,
+				"httpStatus", resp.StatusCode,
+				"body", truncateBody(body, 400),
+			)
 		}
 
 		if resp.StatusCode >= 500 {

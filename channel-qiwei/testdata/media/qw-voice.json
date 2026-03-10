@@ -1,0 +1,10 @@
+{
+  "msgType": 16,
+  "msgData": {
+    "fileAesKey": "aes-qw-voice",
+    "fileId": "qw-voice-id",
+    "fileMd5": "qw-voice-md5",
+    "fileSize": 8934,
+    "voiceTime": 5
+  }
+}

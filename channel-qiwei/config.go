@@ -11,15 +11,25 @@ import (
 var ErrInvalidConfig = errors.New("invalid qiwei config")
 
 type Config struct {
-	APIBaseURL    string
-	Token         string
-	GUID          string
-	Port          string
-	AgentEnabled  bool
-	AgentServer   string
-	AgentID       string
-	LogLevel      string
-	RequestTimout int
+	APIBaseURL           string
+	Token                string
+	GUID                 string
+	Port                 string
+	AgentEnabled         bool
+	AgentServer          string
+	AgentID              string
+	LogLevel             string
+	RequestTimout        int
+	VolcArkBaseURL       string
+	VolcArkAPIKey        string
+	VolcVisionModel      string
+	VolcDocumentModel    string
+	VolcSpeechAppKey     string
+	VolcSpeechAccessKey  string
+	VolcSpeechResourceID string
+	VolcSpeechSubmitURL  string
+	VolcSpeechQueryURL   string
+	OSSPublicBaseURL     string
 }
 
 func LoadConfig() Config {
@@ -29,15 +39,25 @@ func LoadConfig() Config {
 	agentEnabled := strings.ToLower(getenv("AGENT_ENABLED", "true")) != "false"
 
 	return Config{
-		APIBaseURL:    strings.TrimRight(getenv("QIWEI_API_BASE_URL", "http://manager.qiweapi.com/qiwe"), "/"),
-		Token:         getenv("QIWEI_TOKEN", ""),
-		GUID:          getenv("QIWEI_GUID", ""),
-		Port:          getenv("QIWEI_BOT_PORT", "2000"),
-		AgentEnabled:  agentEnabled,
-		AgentServer:   strings.TrimRight(getenv("AGENT_SERVER_URL", "http://localhost:1997"), "/"),
-		AgentID:       getenv("AGENT_ID", ""),
-		LogLevel:      strings.ToLower(getenv("QIWEI_LOG_LEVEL", "info")),
-		RequestTimout: parseIntOrDefault(getenv("QIWEI_HTTP_TIMEOUT_SECONDS", "25"), 25),
+		APIBaseURL:           strings.TrimRight(getenv("QIWEI_API_BASE_URL", "http://manager.qiweapi.com/qiwe"), "/"),
+		Token:                getenv("QIWEI_TOKEN", ""),
+		GUID:                 getenv("QIWEI_GUID", ""),
+		Port:                 getenv("QIWEI_BOT_PORT", "2000"),
+		AgentEnabled:         agentEnabled,
+		AgentServer:          strings.TrimRight(getenv("AGENT_SERVER_URL", "http://localhost:1997"), "/"),
+		AgentID:              getenv("AGENT_ID", ""),
+		LogLevel:             strings.ToLower(getenv("QIWEI_LOG_LEVEL", "info")),
+		RequestTimout:        parseIntOrDefault(getenv("QIWEI_HTTP_TIMEOUT_SECONDS", "25"), 25),
+		VolcArkBaseURL:       strings.TrimRight(getenv("VOLC_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"), "/"),
+		VolcArkAPIKey:        getenv("VOLC_ARK_API_KEY", ""),
+		VolcVisionModel:      getenv("VOLC_VISION_MODEL", ""),
+		VolcDocumentModel:    getenv("VOLC_DOCUMENT_MODEL", ""),
+		VolcSpeechAppKey:     getenv("VOLC_SPEECH_APP_KEY", ""),
+		VolcSpeechAccessKey:  getenv("VOLC_SPEECH_ACCESS_KEY", ""),
+		VolcSpeechResourceID: getenv("VOLC_SPEECH_RESOURCE_ID", ""),
+		VolcSpeechSubmitURL:  strings.TrimRight(getenv("VOLC_SPEECH_SUBMIT_URL", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"), "/"),
+		VolcSpeechQueryURL:   strings.TrimRight(getenv("VOLC_SPEECH_QUERY_URL", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"), "/"),
+		OSSPublicBaseURL:     strings.TrimRight(getenv("OSS_PUBLIC_BASE_URL", ""), "/"),
 	}
 }
 

@@ -23,19 +23,29 @@ type outgoingMessage struct {
 	ChannelMeta             map[string]any `json:"channelMeta,omitempty"`
 }
 
+type incomingAttachment struct {
+	ID                string `json:"id"`
+	Kind              string `json:"kind"`
+	ResourceURI       string `json:"resourceUri"`
+	DisplayName       string `json:"displayName,omitempty"`
+	MIMEType          string `json:"mimeType,omitempty"`
+	SourceMessageType string `json:"sourceMessageType,omitempty"`
+}
+
 type incomingMessage struct {
-	Channel                 string         `json:"channel"`
-	ChannelUserID           string         `json:"channelUserId"`
-	ChannelMessageID        string         `json:"channelMessageId"`
-	ChannelConversationID   string         `json:"channelConversationId,omitempty"`
-	ChannelConversationName string         `json:"channelConversationName,omitempty"`
-	ConversationType        string         `json:"conversationType,omitempty"`
-	MessageType             string         `json:"messageType"`
-	Content                 string         `json:"content"`
-	SenderName              string         `json:"senderName,omitempty"`
-	Timestamp               int64          `json:"timestamp"`
-	ChannelMeta             map[string]any `json:"channelMeta,omitempty"`
-	AgentID                 string         `json:"agentId,omitempty"`
+	Channel                 string               `json:"channel"`
+	ChannelUserID           string               `json:"channelUserId"`
+	ChannelMessageID        string               `json:"channelMessageId"`
+	ChannelConversationID   string               `json:"channelConversationId,omitempty"`
+	ChannelConversationName string               `json:"channelConversationName,omitempty"`
+	ConversationType        string               `json:"conversationType,omitempty"`
+	MessageType             string               `json:"messageType"`
+	Content                 string               `json:"content"`
+	SenderName              string               `json:"senderName,omitempty"`
+	Timestamp               int64                `json:"timestamp"`
+	ChannelMeta             map[string]any       `json:"channelMeta,omitempty"`
+	Attachments             []incomingAttachment `json:"attachments,omitempty"`
+	AgentID                 string               `json:"agentId,omitempty"`
 }
 
 type qiweiCallbackBody struct {
