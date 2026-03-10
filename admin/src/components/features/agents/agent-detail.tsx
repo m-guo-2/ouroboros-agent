@@ -140,9 +140,9 @@ export function AgentDetail() {
     navigate("/agents")
   }
 
-  const toggleSkill = (skillName: string) => {
+  const toggleSkill = (skillId: string) => {
     setSelectedSkills((prev) =>
-      prev.includes(skillName) ? prev.filter((s) => s !== skillName) : [...prev, skillName]
+      prev.includes(skillId) ? prev.filter((s) => s !== skillId) : [...prev, skillId]
     )
   }
 
@@ -337,8 +337,8 @@ export function AgentDetail() {
                         <p className="text-xs text-slate-500 mt-0.5">{skill.description}</p>
                       </div>
                       <Switch
-                        checked={selectedSkills.includes(skill.name)}
-                        onCheckedChange={() => toggleSkill(skill.name)}
+                        checked={selectedSkills.includes(skill.id)}
+                        onCheckedChange={() => toggleSkill(skill.id)}
                       />
                     </label>
                   ))}
