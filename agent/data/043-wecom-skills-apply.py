@@ -28,53 +28,79 @@ def P(typ, desc, **kw):
 WECOM_CORE_TOOLS = [
     {
         "name": "wecom_send_message",
-        "description": "向指定企微联系人或群聊主动发送消息。支持文字(text)、图片(image)、文件(file)三种消息类型。私聊时填 channelUserId，群聊时填 channelConversationId；如果只需回复当前会话用户，请优先使用 send_channel_message 而非此工具。messageType 默认为 text。发送图片时 content 填图片 URL，发送文件时 content 填文件 URL 并在 channelMeta 中指定 fileName。",
+        "description": "向指定企微联系人或群聊主动发送消息。支持 text、rich_text、image、file、voice。私聊时填 channelUserId，群聊时填 channelConversationId；如果只是回复当前会话，请优先使用 send_channel_message。这个工具屏蔽了企微底层 sendText/sendHyperText/sendFile 等差异，是 agent 主动沟通的统一发送入口。",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "channelConversationId": P("string", "群聊 ID（群消息时填写）"),
                 "channelUserId": P("string", "联系人 ID（私聊时填写）"),
-                "messageType": P("string", "消息类型：text（默认）/ image / file"),
-                "content": P("string", "消息内容。text 填文字；image 填图片 URL；file 填文件 URL"),
+                "messageType": P("string", "消息类型：text（默认）/ rich_text / image / file / voice"),
+                "content": P("string", "消息内容。text/rich_text 填文字或富文本内容；image/file/voice 填可访问 URL"),
                 "channelMeta": P("object", "附加信息，如 file 类型时传 {\"fileName\": \"报告.pdf\"}"),
             },
             "required": ["content"],
         },
-        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/send", "method": "POST"},
+        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/send_message", "method": "POST"},
     },
     {
-        "name": "wecom_search_contact",
-        "description": "搜索企微联系人。输入关键词（姓名、备注、手机号等），返回匹配的联系人列表，每个结果包含 userId、昵称、备注等信息。这是定位联系人 ID 的主要方式——后续发消息、拉群、修改备注等操作都需要先通过此工具获取目标用户的 userId。搜索范围覆盖个人微信好友和企业微信联系人。",
+        "name": "wecom_search_targets",
+        "description": "搜索企微中的沟通对象，统一覆盖联系人和群聊。输入关键词后返回可直接沟通的 targets，每个结果都带 type、id、name，避免模型先记联系人接口、再记群接口。适用于“找张三”“找产品群”“看看有没有这个客户”这类定位目标场景。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "params": {
-                    "type": "object",
-                    "description": "搜索参数",
-                    "properties": {
-                        "keyword": P("string", "搜索关键词，可以是姓名、备注、手机号或微信号"),
-                    },
-                    "required": ["keyword"],
-                },
+                "query": P("string", "搜索关键词，可以是姓名、备注、手机号、企业名或群名。不填时返回默认列表"),
+                "limit": P("integer", "返回结果上限，默认 20"),
+                "includeContacts": P("boolean", "是否搜索联系人，默认 true"),
+                "includeGroups": P("boolean", "是否搜索群聊，默认 true"),
             },
-            "required": ["params"],
         },
-        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/contact/search", "method": "POST"},
+        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/search_targets", "method": "POST"},
     },
     {
-        "name": "wecom_list_groups",
-        "description": "获取企微所有群聊列表。返回当前账号加入的全部群聊信息，包括群 ID（roomId）、群名称等。这是群管理操作的起点——后续发群消息、管理群成员、修改群设置等都需要先获取 roomId。如需群的详细信息（成员列表、群主、公告等），加载 wecom-group-mgmt 技能使用 batch_get_room_detail。",
+        "name": "wecom_list_or_get_conversations",
+        "description": "统一处理企微会话读取。不给 conversationId 时，返回最近会话列表；给了 conversationId 时，返回该会话的历史消息。这样模型只需记住一个会话工具，不需要分别记 list_sessions 和 sync_history。适用于先浏览最近对话，再深入读取某个会话上下文。",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "params": P("object", "查询参数（可选）"),
+                "conversationId": P("string", "目标会话 ID。留空时列最近会话；填写后读取该会话历史消息"),
+                "msgSvrId": P("string", "读取历史消息时的翻页起点。留空则从最新消息开始"),
+                "currentSeq": P("number", "列会话时的分页游标，首次传 0"),
+                "pageSize": P("number", "列会话时每页数量，默认使用服务端默认值"),
             },
         },
-        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/group/list", "method": "POST"},
+        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/list_or_get_conversations", "method": "POST"},
+    },
+    {
+        "name": "wecom_parse_message",
+        "description": "解析企微消息内容，统一处理文本、图片、文件、语音等输入。可传原始 message、messageType+msgData，或直接传 qiwei 已准备好的 resourceUri；旧的 localPath 仍兼容。语音默认返回转写文本；图片/文件在拿到资源地址后可进一步解析内容。适用于非纯文本消息，尤其是图片、文件、语音需要进一步理解时。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": P("object", "原始消息对象。推荐直接传 list_or_get_conversations 返回的某条 raw message"),
+                "messageType": P("string", "消息类型。若未传 message，可单独传 text / image / file / voice / rich_text"),
+                "msgData": P("object", "消息载荷。若未传完整 message，可用这个字段传原始 msgData"),
+                "resourceUri": P("string", "qiwei 已准备好的资源地址，例如 oss://bucket/key。适合对图片/文件做二次理解时直接传入"),
+                "localPath": P("string", "兼容旧参数，效果等同于 resourceUri"),
+            },
+        },
+        "executor": {"type": "http", "url": "http://localhost:2000/api/qiwei/parse_message", "method": "POST"},
+    },
+    {
+        "name": "inspect_attachment",
+        "description": "按 attachmentId 按需分析当前会话里的结构化附件。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document；语音已经在入口层前置转写，不需要通过这个工具处理。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "attachmentId": P("string", "附件 ID。来自用户消息 [attachments] 段中的 id 字段"),
+                "task": P("string", "分析任务：describe_image / ocr_image / extract_text / summarize_document / summarize_video"),
+            },
+            "required": ["attachmentId"],
+        },
+        "executor": {"type": "builtin", "handler": "inspect_attachment"},
     },
     {
         "name": "wecom_api",
-        "description": "企微通用 API 透传工具。当通过 load_skill 加载扩展技能后，按照技能文档中的 tool 定义，传入对应的 method（API 方法路径）和 params（参数对象）执行操作。method 格式如 /room/createRoom、/msg/revokeMsg 等。params 中无需传 guid，系统自动注入。当没有专用工具可用时，此工具是执行所有企微操作的通道。",
+        "description": "兼容入口：企微通用 API 透传工具。仅当 load_skill 加载的旧扩展技能明确要求 method + params 调用时再使用。日常沟通优先使用 wecom_search_targets、wecom_list_or_get_conversations、inspect_attachment、wecom_parse_message、wecom_send_message 这些语义化工具。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -94,14 +120,20 @@ WECOM_CORE_README = """## 企微核心工具
 - 回复当前对话用户 → send_channel_message
 - 主动找人/找群发消息 → wecom_send_message
 
-### wecom_search_contact
-搜索联系人获取 userId。几乎所有操作的第一步都是「找到这个人的 ID」。
+### wecom_search_targets
+统一搜索联系人和群聊，先定位沟通对象，再进行发送或读历史。
 
-### wecom_list_groups
-获取群列表获取 roomId。群操作的第一步。
+### wecom_list_or_get_conversations
+统一读取会话。不给 conversationId 时看最近会话，给 conversationId 时看该会话历史消息。
+
+### wecom_parse_message
+统一解析企微消息，尤其用于图片、文件、语音等非纯文本内容。
+
+### inspect_attachment
+按 attachmentId 按需分析当前会话里的结构化附件。优先用于图片、文件、视频的进一步理解；如果只是看当前消息正文里的链接，不要自行猜参数，优先使用这个工具。
 
 ### wecom_api
-万能通道。加载扩展技能后，按技能中的 tool 定义传入 method 和 params 执行。"""
+兼容旧扩展技能的透传入口。只有 load_skill 文档明确要求 method + params 时才使用，日常沟通不要优先选它。"""
 
 # ============================================================
 # wecom-group-mgmt — 19 工具
@@ -571,7 +603,7 @@ WECOM_SESSION_README = """## 会话管理
 # ============================================================
 ALL_SKILLS = [
     {"id": "wecom-core", "name": "企微核心能力",
-     "description": "日常沟通基础：发消息、查联系人、查群列表、通用 API 调用",
+     "description": "面向 agent-human communication 的 4 个企微语义化工具：搜索对象、读取会话、解析消息、发送消息",
      "type": "action", "tools": WECOM_CORE_TOOLS, "readme": WECOM_CORE_README},
     {"id": "wecom-group-mgmt", "name": "群管理",
      "description": "创建群聊、管理群成员、设置群公告、转让群主等群组管理操作",

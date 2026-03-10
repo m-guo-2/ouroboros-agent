@@ -17,16 +17,17 @@ import (
 
 // IncomingMessage is the normalised payload sent by a channel adapter.
 type IncomingMessage struct {
-	Channel                 string `json:"channel"`
-	ChannelUserID           string `json:"channelUserId"`
-	ChannelMessageID        string `json:"channelMessageId"`
-	ChannelConversationID   string `json:"channelConversationId,omitempty"`
-	ChannelConversationName string `json:"channelConversationName,omitempty"`
-	SenderName              string `json:"senderName,omitempty"`
-	Content                 string `json:"content"`
-	MessageType             string `json:"messageType,omitempty"`
-	AgentID                 string `json:"agentId,omitempty"`
-	Timestamp               int64  `json:"timestamp,omitempty"`
+	Channel                 string                   `json:"channel"`
+	ChannelUserID           string                   `json:"channelUserId"`
+	ChannelMessageID        string                   `json:"channelMessageId"`
+	ChannelConversationID   string                   `json:"channelConversationId,omitempty"`
+	ChannelConversationName string                   `json:"channelConversationName,omitempty"`
+	SenderName              string                   `json:"senderName,omitempty"`
+	Content                 string                   `json:"content"`
+	MessageType             string                   `json:"messageType,omitempty"`
+	AgentID                 string                   `json:"agentId,omitempty"`
+	Timestamp               int64                    `json:"timestamp,omitempty"`
+	Attachments             []storage.AttachmentData `json:"attachments,omitempty"`
 }
 
 // DispatchResult is returned synchronously to the caller.
@@ -107,6 +108,9 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	if session == nil {
 		// Create new session.
 		title := msg.Content
+		if title == "" && len(msg.Attachments) > 0 {
+			title = "[" + msg.Attachments[0].Kind + "]"
+		}
 		if len(title) > 30 {
 			title = title[:30] + "..."
 		}
@@ -166,6 +170,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"initiator":        "user",
 		"senderName":       msg.SenderName,
 		"senderId":         msg.ChannelUserID,
+		"attachments":      msg.Attachments,
 	})
 
 	// 6. Update session to processing and enqueue.
@@ -183,6 +188,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		ChannelMessageID:      msg.ChannelMessageID,
 		SenderName:            msg.SenderName,
 		MessageType:           msg.MessageType,
+		Attachments:           msg.Attachments,
 		MessageID:             msgID,
 		SessionID:             session.ID,
 		TraceID:               traceID,
@@ -213,10 +219,10 @@ func HandleIncoming(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if msg.Channel == "" || msg.ChannelUserID == "" || msg.ChannelMessageID == "" || msg.Content == "" {
+	if msg.Channel == "" || msg.ChannelUserID == "" || msg.ChannelMessageID == "" || (msg.Content == "" && len(msg.Attachments) == 0) {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"success": false,
-			"error":   "missing required fields: channel, channelUserId, channelMessageId, content",
+			"error":   "missing required fields: channel, channelUserId, channelMessageId, and one of content or attachments",
 		})
 		return
 	}

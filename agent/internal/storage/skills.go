@@ -109,7 +109,7 @@ type dbSkillTool struct {
 //
 // agentSkills controls which skills are "active" (tools registered + readme in prompt):
 //   - non-empty: only skills whose ID is in agentSkills are active
-//   - empty/nil: all enabled skills are active (backward compatible)
+//   - empty/nil: no skills are active by default
 //
 // Skills that are enabled but not active become "deferred": their docs are
 // available via load_skill, and a brief index is appended to the system prompt.
@@ -128,7 +128,6 @@ func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, erro
 	for _, id := range agentSkills {
 		activeSet[id] = true
 	}
-	hasFilter := len(activeSet) > 0
 
 	ctx := &SkillContext{
 		Tools:         []types.ToolDefinition{},
@@ -145,7 +144,7 @@ func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, erro
 			ctx.SkillDocs[s.ID] = s.Readme
 		}
 
-		isActive := !hasFilter || activeSet[s.ID]
+		isActive := activeSet[s.ID]
 
 		var dbTools []dbSkillTool
 		toolsJSON, _ := json.Marshal(s.Tools)

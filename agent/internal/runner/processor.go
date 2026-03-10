@@ -128,9 +128,16 @@ func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.Ag
 	return messages[startIndex:]
 }
 
-func formatUserMessage(senderName, channel, messageType, channelMessageID, content string) string {
+func formatUserMessage(senderName, channel, messageType, channelMessageID, content string, attachments []storage.AttachmentData) string {
 	if senderName != "" && !strings.HasPrefix(content, senderName+": ") {
 		content = senderName + ": " + content
+	}
+	if rendered := renderAttachmentsForPrompt(attachments); rendered != "" {
+		if content != "" {
+			content += "\n\n" + rendered
+		} else {
+			content = rendered
+		}
 	}
 
 	var meta []string
@@ -149,6 +156,111 @@ func formatUserMessage(senderName, channel, messageType, channelMessageID, conte
 	return fmt.Sprintf("[%s]\n%s", strings.Join(meta, " | "), content)
 }
 
+func renderAttachmentsForPrompt(attachments []storage.AttachmentData) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	lines := []string{"[attachments]"}
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.ID) == "" || strings.TrimSpace(attachment.Kind) == "" {
+			continue
+		}
+		parts := []string{
+			fmt.Sprintf("id=%s", strings.TrimSpace(attachment.ID)),
+			fmt.Sprintf("kind=%s", strings.TrimSpace(attachment.Kind)),
+		}
+		if name := strings.TrimSpace(attachment.DisplayName); name != "" {
+			parts = append(parts, fmt.Sprintf("name=%s", name))
+		}
+		if mimeType := strings.TrimSpace(attachment.MIMEType); mimeType != "" {
+			parts = append(parts, fmt.Sprintf("mime_type=%s", mimeType))
+		}
+		if resourceURI := strings.TrimSpace(attachment.ResourceURI); resourceURI != "" {
+			parts = append(parts, fmt.Sprintf("resource_uri=%s", resourceURI))
+		}
+		lines = append(lines, "- "+strings.Join(parts, ", "))
+	}
+	if len(lines) == 1 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shouldRequireAttachmentInspection(content string, attachments []storage.AttachmentData) bool {
+	if len(attachments) == 0 {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	for _, attachment := range attachments {
+		switch attachment.Kind {
+		case "image":
+			if containsAny(lower, "图", "图片", "照片", "截图", "看图", "看下", "识别", "ocr", "image", "picture", "photo", "screenshot", "what is in") {
+				return true
+			}
+		case "file":
+			if containsAny(lower, "文件", "文档", "附件", "pdf", "word", "excel", "内容", "总结", "摘要", "读一下", "extract", "read", "summarize", "summary") {
+				return true
+			}
+		case "video":
+			if containsAny(lower, "视频", "video", "讲了什么", "内容", "总结", "摘要", "summarize") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(needle))) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAttachmentInspectionUse(messages []types.AgentMessage, attachmentIDs []string) bool {
+	if len(attachmentIDs) == 0 {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+	for _, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "tool_use" || block.Name != "inspect_attachment" {
+				continue
+			}
+			if id, _ := block.Input["attachmentId"].(string); id != "" {
+				if _, ok := allowed[id]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func buildAttachmentInspectionReminder(attachments []storage.AttachmentData) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	lines := []string{"[runtime guard]", "本轮回答依赖附件内容，请先调用 inspect_attachment 分析以下附件后再回复用户："}
+	for _, attachment := range attachments {
+		lines = append(lines, fmt.Sprintf("- attachmentId=%s kind=%s", attachment.ID, attachment.Kind))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
 	dbMessages, err := storage.GetSessionMessages(sessionID, 100)
 	if err != nil || len(dbMessages) == 0 {
@@ -162,7 +274,7 @@ func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
 			if msg.MessageType == "structured" {
 				continue
 			}
-			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content)
+			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content, msg.Attachments)
 			result = append(result, types.AgentMessage{
 				Role:    "user",
 				Content: []types.ContentBlock{{Type: "text", Text: text}},
@@ -514,6 +626,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		}, nil
 	})
 
+	registerWecomBuiltinTools(registry, request.ProcessRequest)
+
 	internalHandlers := map[string]types.ToolExecutor{
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)
@@ -555,7 +669,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	historyMessages = truncateByFullTurns(historyMessages, 10)
 
-	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content)
+	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content, request.Attachments)
 
 	messages := append(historyMessages, types.AgentMessage{
 		Role:    "user",
@@ -604,27 +718,45 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	for absorbRound := 0; ; absorbRound++ {
 		// === Execute ===
-		loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
-			LLMClient:     llmClient,
-			SystemPrompt:  systemPrompt,
-			Messages:      messages,
-			Tools:         tools,
-			Model:         modelName,
-			MaxIterations: 25,
-			OnNewMessages: onNewMessages,
-		})
-		if err != nil {
-			logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
-			return err
-		}
-
-		messages = loopResult.Messages
-
-		if loopResult.FinalText != "" {
-			messages = append(messages, types.AgentMessage{
-				Role:    "assistant",
-				Content: []types.ContentBlock{{Type: "text", Text: loopResult.FinalText}},
+		guardRetries := 0
+		for {
+			loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
+				LLMClient:     llmClient,
+				SystemPrompt:  systemPrompt,
+				Messages:      messages,
+				Tools:         tools,
+				Model:         modelName,
+				MaxIterations: 25,
+				OnNewMessages: onNewMessages,
 			})
+			if err != nil {
+				logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
+				return err
+			}
+
+			messages = loopResult.Messages
+
+			requiresInspection := shouldRequireAttachmentInspection(request.Content, request.Attachments)
+			if loopResult.FinalText != "" && requiresInspection && !hasAttachmentInspectionUse(messages, attachmentIDs(request.Attachments)) && guardRetries < 1 {
+				guardRetries++
+				messages = append(messages, types.AgentMessage{
+					Role:    "user",
+					Content: []types.ContentBlock{{Type: "text", Text: buildAttachmentInspectionReminder(request.Attachments)}},
+				})
+				logger.Business(ctx, "附件分析守卫触发",
+					"traceEvent", "attachment_guard",
+					"retry", guardRetries,
+					"attachmentCount", len(request.Attachments))
+				continue
+			}
+
+			if loopResult.FinalText != "" {
+				messages = append(messages, types.AgentMessage{
+					Role:    "assistant",
+					Content: []types.ContentBlock{{Type: "text", Text: loopResult.FinalText}},
+				})
+			}
+			break
 		}
 
 		if cwd := shellSession.CWD(); cwd != "" && cwd != worker.WorkDir {
@@ -694,7 +826,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		var parts []string
 		parts = append(parts, fmt.Sprintf("[以下 %d 条消息在处理期间到达]", len(pending)))
 		for _, p := range pending {
-			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content))
+			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content, p.Attachments))
 		}
 		merged := strings.Join(parts, "\n\n")
 		messages = append(messages, types.AgentMessage{
@@ -708,4 +840,14 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	}
 
 	return nil
+}
+
+func attachmentIDs(attachments []storage.AttachmentData) []string {
+	ids := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		if trimmed := strings.TrimSpace(attachment.ID); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	return ids
 }

@@ -63,18 +63,28 @@ type SessionData struct {
 	Context               string `json:"-"`
 }
 
+type AttachmentData struct {
+	ID                string `json:"id"`
+	Kind              string `json:"kind"`
+	ResourceURI       string `json:"resourceUri"`
+	DisplayName       string `json:"displayName,omitempty"`
+	MIMEType          string `json:"mimeType,omitempty"`
+	SourceMessageType string `json:"sourceMessageType,omitempty"`
+}
+
 // MessageData represents a single stored message.
 type MessageData struct {
-	ID               string `json:"id"`
-	SessionID        string `json:"sessionId"`
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	MessageType      string `json:"messageType"`
-	Channel          string `json:"channel"`
-	ChannelMessageID string `json:"channelMessageId"`
-	TraceID          string `json:"traceId"`
-	Initiator        string `json:"initiator"`
-	SenderName       string `json:"senderName"`
-	SenderID         string `json:"senderId"`
-	CreatedAt        string `json:"createdAt"`
+	ID               string           `json:"id"`
+	SessionID        string           `json:"sessionId"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	MessageType      string           `json:"messageType"`
+	Channel          string           `json:"channel"`
+	ChannelMessageID string           `json:"channelMessageId"`
+	TraceID          string           `json:"traceId"`
+	Initiator        string           `json:"initiator"`
+	SenderName       string           `json:"senderName"`
+	SenderID         string           `json:"senderId"`
+	Attachments      []AttachmentData `json:"attachments,omitempty"`
+	CreatedAt        string           `json:"createdAt"`
 }

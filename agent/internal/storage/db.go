@@ -165,6 +165,7 @@ func runSchema(db *sql.DB) error {
 			initiator TEXT,
 			sender_name TEXT,
 			sender_id TEXT,
+			attachments_json TEXT DEFAULT '[]',
 			status TEXT DEFAULT 'sent',
 			created_at TEXT DEFAULT CURRENT_TIMESTAMP
 		)`,
@@ -222,6 +223,7 @@ func runSchema(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN initiator TEXT`,
 		`ALTER TABLE messages ADD COLUMN sender_name TEXT`,
 		`ALTER TABLE messages ADD COLUMN sender_id TEXT`,
+		`ALTER TABLE messages ADD COLUMN attachments_json TEXT DEFAULT '[]'`,
 		`ALTER TABLE agent_configs ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_configs ADD COLUMN provider TEXT`,
 		`ALTER TABLE agent_configs ADD COLUMN model TEXT`,

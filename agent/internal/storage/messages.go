@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -26,10 +27,10 @@ func GetMessageByID(msgID string) (*MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
 		 FROM messages WHERE id = ?`, msgID,
 	).Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.MessageType, &m.Channel,
-		&m.ChannelMessageID, &m.TraceID, &m.Initiator, &m.SenderName, &m.SenderID, &m.CreatedAt)
+		&m.ChannelMessageID, &m.TraceID, &m.Initiator, &m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -43,7 +44,7 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
 		 FROM messages WHERE session_id = ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, limit,
@@ -60,7 +61,7 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, &m.CreatedAt,
+			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -76,7 +77,7 @@ func GetMessagesBefore(sessionID, beforeTime string, limit int) ([]MessageData, 
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
 		 FROM messages WHERE session_id = ? AND created_at < ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, beforeTime, limit,
@@ -93,7 +94,7 @@ func GetMessagesBefore(sessionID, beforeTime string, limit int) ([]MessageData, 
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, &m.CreatedAt,
+			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -109,7 +110,7 @@ func SearchMessages(sessionID, query, beforeTime string, limit int) ([]MessageDa
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
 		 FROM messages
 		 WHERE session_id = ? AND created_at < ? AND content LIKE ?
 		 ORDER BY created_at DESC LIMIT ?`,
@@ -127,7 +128,7 @@ func SearchMessages(sessionID, query, beforeTime string, limit int) ([]MessageDa
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, &m.CreatedAt,
+			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -152,16 +153,33 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	initiator, _ := params["initiator"].(string)
 	senderName, _ := params["senderName"].(string)
 	senderID, _ := params["senderId"].(string)
+	var attachments []AttachmentData
+	switch v := params["attachments"].(type) {
+	case []AttachmentData:
+		attachments = v
+	case []*AttachmentData:
+		for _, item := range v {
+			if item != nil {
+				attachments = append(attachments, *item)
+			}
+		}
+	}
 
-	if sessionID == "" || role == "" || content == "" {
-		return nil, fmt.Errorf("sessionId, role, content are required")
+	if sessionID == "" || role == "" || (content == "" && len(attachments) == 0) {
+		return nil, fmt.Errorf("sessionId, role, and one of content or attachments are required")
+	}
+	attachmentsJSON := "[]"
+	if len(attachments) > 0 {
+		if raw, err := json.Marshal(attachments); err == nil {
+			attachmentsJSON = string(raw)
+		}
 	}
 
 	_, err := DB.Exec(
 		`INSERT INTO messages
-		 (id, session_id, role, content, message_type, channel, channel_message_id, trace_id, initiator, sender_name, sender_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, sessionID, role, content, msgType, channel, channelMessageID, traceID, initiator, senderName, senderID,
+		 (id, session_id, role, content, message_type, channel, channel_message_id, trace_id, initiator, sender_name, sender_id, attachments_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, sessionID, role, content, msgType, channel, channelMessageID, traceID, initiator, senderName, senderID, attachmentsJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -178,5 +196,30 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 		Initiator:        initiator,
 		SenderName:       senderName,
 		SenderID:         senderID,
+		Attachments:      attachments,
 	}, nil
+}
+
+type jsonStringSliceAttachment []AttachmentData
+
+func (a *jsonStringSliceAttachment) Scan(src interface{}) error {
+	raw, ok := src.(string)
+	if !ok {
+		if bytes, ok := src.([]byte); ok {
+			raw = string(bytes)
+		} else {
+			*a = nil
+			return nil
+		}
+	}
+	if raw == "" {
+		*a = nil
+		return nil
+	}
+	var attachments []AttachmentData
+	if err := json.Unmarshal([]byte(raw), &attachments); err != nil {
+		return err
+	}
+	*a = attachments
+	return nil
 }

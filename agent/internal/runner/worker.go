@@ -11,18 +11,19 @@ import (
 )
 
 type ProcessRequest struct {
-	UserID                string `json:"userId"`
-	AgentID               string `json:"agentId"`
-	Content               string `json:"content"`
-	Channel               string `json:"channel"`
-	ChannelUserID         string `json:"channelUserId"`
-	ChannelConversationID string `json:"channelConversationId,omitempty"`
-	ChannelMessageID      string `json:"channelMessageId,omitempty"`
-	SenderName            string `json:"senderName,omitempty"`
-	MessageType           string `json:"messageType,omitempty"`
-	MessageID             string `json:"messageId"`
-	SessionID             string `json:"sessionId,omitempty"`
-	TraceID               string `json:"traceId,omitempty"`
+	UserID                string                   `json:"userId"`
+	AgentID               string                   `json:"agentId"`
+	Content               string                   `json:"content"`
+	Channel               string                   `json:"channel"`
+	ChannelUserID         string                   `json:"channelUserId"`
+	ChannelConversationID string                   `json:"channelConversationId,omitempty"`
+	ChannelMessageID      string                   `json:"channelMessageId,omitempty"`
+	SenderName            string                   `json:"senderName,omitempty"`
+	MessageType           string                   `json:"messageType,omitempty"`
+	Attachments           []storage.AttachmentData `json:"attachments,omitempty"`
+	MessageID             string                   `json:"messageId"`
+	SessionID             string                   `json:"sessionId,omitempty"`
+	TraceID               string                   `json:"traceId,omitempty"`
 }
 
 type QueuedRequest struct {
