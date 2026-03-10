@@ -58,3 +58,14 @@
 | [051](./051-rename-brand-default-to-moli.md) | 默认品牌名切换为 Moli | 讨论结论 | 2026-03-06 |
 | [052](./052-repo-and-local-dir-rename-to-moli.md) | GitHub 仓库名与本地目录规划为 moli | 讨论结论 | 2026-03-06 |
 | [051](./051-tavily-builtin-capability.md) | Tavily 内置联网研究能力 | 架构决策 | 2026-03-06 |
+| [053](./053-qiwei-four-facade-communication-tools.md) | 企微四接口沟通门面 | 架构决策 / 代码变更 | 2026-03-09 |
+| [054](./054-qiwei-send-observability-and-history-fix.md) | 企微发送可观测性与历史消息修复 | Bug 修复 | 2026-03-09 |
+| [055](./055-qiwei-media-pipeline-refactor.md) | 企微富媒体管线重构方案 | 架构决策 | 2026-03-09 |
+| [056](./056-qiwei-agent-local-media-address.md) | 企微富媒体向 Agent 暴露资源地址 | 讨论结论 | 2026-03-09 |
+| [057](./057-shared-oss-module-proposal.md) | 共享 OSS 模块提案 | 架构决策 | 2026-03-10 |
+| [058](./058-shared-oss-module-implementation.md) | 共享 OSS 模块实现 | 架构决策 / 代码变更 | 2026-03-10 |
+| [059](./059-qiwei-media-oss-materialization.md) | 企微富媒体改为 OSS 物化 | 架构决策 / 代码变更 | 2026-03-10 |
+| [060](./060-qiwei-attachment-on-demand-inspection.md) | 企微附件按需解析与语音前置转写边界 | 讨论结论 | 2026-03-10 |
+| [061](./061-qiwei-multimodal-live-tests.md) | 企微多模态能力 Live 测试与文档理解补齐 | 代码变更 | 2026-03-10 |
+| [062](./062-agent-skill-binding-wysiwyg.md) | Agent 技能绑定所见即所得修复 | Bug 修复 | 2026-03-10 |
+| [063](./063-qiwei-voice-oss-asr-and-event-format.md) | 企微语音改为 OSS 中转识别并统一事件文案 | 架构决策 / 代码变更 | 2026-03-10 |
