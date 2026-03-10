@@ -23,12 +23,10 @@ var userMessageTypeMap = map[int]string{
 	23:  "video",
 	34:  "voice",
 	43:  "video",
-	47:  "sticker",
 	49:  "file",
 	101: "image",
 	102: "file",
 	103: "video",
-	104: "sticker",
 }
 
 func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
@@ -109,12 +107,19 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 		if prepared.MessageType != "" {
 			messageType = prepared.MessageType
 		}
-		content = prepared.Content
-		attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, messageType, prepared)
-		if len(attachments) > 0 {
-			if incomingContent := forwardedAttachmentPlaceholder(messageType, prepared.Name); incomingContent != "" {
-				content = incomingContent
+		if messageType == "voice" {
+			content = strings.TrimSpace(prepared.Content)
+		} else {
+			if strings.TrimSpace(prepared.ResourceURI) == "" {
+				a.log.Error("media upload failed, skipping",
+					"tag", tagCallback,
+					"msg", msg.MsgSvrID,
+					"type", messageType,
+				)
+				return nil
 			}
+			content = strings.TrimSpace(prepared.ResourceURI)
+			attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, messageType, prepared)
 		}
 	}
 
@@ -122,10 +127,15 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	if senderName == "" && msg.SenderID != "" {
 		senderName = a.resolveUserName(ctx, msg.SenderID)
 	}
-	if messageType == "voice" && strings.TrimSpace(content) != "" {
-		content = formatVoiceTranscriptEvent(senderName, msg.SenderID, content)
-	} else if senderName != "" {
-		content = senderName + ": " + content
+	msgTime := time.Now()
+	if msg.CreateTime > 0 {
+		msgTime = time.Unix(msg.CreateTime, 0)
+	}
+	prefix := formatSenderPrefix(senderName, msg.SenderID, msgTime)
+	if messageType == "voice" {
+		content = formatVoiceContent(prefix, content)
+	} else {
+		content = prefix + content
 	}
 
 	replyToID := msg.SenderID
@@ -192,35 +202,25 @@ func attachmentsFromPreparedMedia(messageID, messageType string, prepared prepar
 	}}
 }
 
-func forwardedAttachmentPlaceholder(messageType, name string) string {
-	switch strings.TrimSpace(messageType) {
-	case "image":
-		if strings.TrimSpace(name) != "" {
-			return "[收到图片]\n名称: " + strings.TrimSpace(name)
-		}
-		return "[收到图片]"
-	case "file":
-		if strings.TrimSpace(name) != "" {
-			return "[收到文件]\n名称: " + strings.TrimSpace(name)
-		}
-		return "[收到文件]"
-	case "video":
-		if strings.TrimSpace(name) != "" {
-			return "[收到视频]\n名称: " + strings.TrimSpace(name)
-		}
-		return "[收到视频]"
-	default:
-		return ""
+func formatSenderPrefix(name, id string, t time.Time) string {
+	name = strings.TrimSpace(name)
+	id = strings.TrimSpace(id)
+	if name == "" {
+		name = firstNonEmpty(id, "未知用户")
 	}
+	ts := t.Local().Format("2006-01-02 15:04:05")
+	if id == "" {
+		return name + " " + ts + ":"
+	}
+	return name + "[" + id + "] " + ts + ":"
 }
 
-func formatVoiceTranscriptEvent(senderName, senderID, transcript string) string {
-	name := strings.TrimSpace(firstNonEmpty(senderName, senderID, "未知用户"))
+func formatVoiceContent(prefix, transcript string) string {
 	transcript = strings.TrimSpace(transcript)
 	if transcript == "" {
-		return name + "(用户)发送了语音消息"
+		return prefix + "转写失败(语音消息)"
 	}
-	return name + "(用户)发送了语音消息，转换为文字是：" + transcript
+	return prefix + transcript + "(语音消息)"
 }
 
 func (a *app) resolveUserName(ctx context.Context, userID string) string {
