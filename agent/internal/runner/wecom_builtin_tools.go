@@ -13,6 +13,8 @@ import (
 	"agent/internal/engine"
 	"agent/internal/storage"
 	"agent/internal/types"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessRequest) {
@@ -110,7 +112,7 @@ func createWecomHTTPToolExecutor(path string) types.ToolExecutor {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := sharedlogger.NewClient("wecom-tool", 30*time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err

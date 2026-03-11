@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 type mediaSource string
@@ -302,31 +304,31 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 
 	desc, err := normalizeMediaDescriptor(msgType, fallbackType, msgData)
 	if err != nil {
-		a.log.Warn("media prepare failed",
+		logger.Warn(ctx, "媒体处理失败",
 			"stage", "normalize",
 			"msgType", msgType,
 			"messageType", classification.MessageType,
 			"source", string(classification.Source),
 			"kind", string(classification.Kind),
-			"err", err,
+			"error", err.Error(),
 		)
 		return preparedMedia{MessageType: classification.MessageType, Content: mediaPlaceholder(classification)}
 	}
 
 	plan, err := planMediaDownload(desc)
 	if err != nil {
-		a.log.Warn("media prepare failed",
+		logger.Warn(ctx, "媒体处理失败",
 			"stage", "plan",
 			"msgType", msgType,
 			"messageType", classification.MessageType,
 			"source", string(classification.Source),
 			"kind", string(classification.Kind),
-			"err", err,
+			"error", err.Error(),
 		)
 		return preparedMedia{MessageType: classification.MessageType, Content: mediaPlaceholder(classification)}
 	}
 
-	a.log.Info("media plan selected",
+	logger.Business(ctx, "媒体下载计划",
 		"msgType", msgType,
 		"messageType", classification.MessageType,
 		"source", string(classification.Source),
@@ -337,7 +339,7 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 
 	resolvedURL, err := a.executeMediaDownloadPlan(ctx, plan)
 	if err != nil {
-		a.log.Warn("media prepare failed",
+		logger.Warn(ctx, "媒体处理失败",
 			"stage", "resolve",
 			"msgType", msgType,
 			"messageType", classification.MessageType,
@@ -345,7 +347,7 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 			"kind", string(classification.Kind),
 			"strategy", plan.Name,
 			"method", plan.Method,
-			"err", err,
+			"error", err.Error(),
 		)
 		return preparedMedia{MessageType: classification.MessageType, Content: mediaPlaceholder(classification)}
 	}
@@ -353,14 +355,14 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 	if classification.Kind == mediaKindVoice {
 		transcript, err := a.transcribePreparedVoice(ctx, desc, resolvedURL)
 		if err != nil {
-			a.log.Warn("media prepare failed",
+			logger.Warn(ctx, "媒体处理失败",
 				"stage", "transcribe",
 				"msgType", msgType,
 				"messageType", classification.MessageType,
 				"source", string(classification.Source),
 				"kind", string(classification.Kind),
 				"strategy", plan.Name,
-				"err", err,
+				"error", err.Error(),
 			)
 			return preparedMedia{MessageType: classification.MessageType, Content: mediaPlaceholder(classification)}
 		}
@@ -372,15 +374,15 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 
 	resourceURI, mimeType, err := a.materializePreparedMedia(ctx, desc, resolvedURL)
 	if err != nil {
-		a.log.Warn("media prepare failed",
+		logger.Warn(ctx, "媒体处理失败",
 			"stage", "materialize",
 			"msgType", msgType,
 			"messageType", classification.MessageType,
 			"source", string(classification.Source),
 			"kind", string(classification.Kind),
 			"strategy", plan.Name,
-			"resolvedURL", truncateBody([]byte(resolvedURL), 120),
-			"err", err,
+			"resolvedURL", resolvedURL,
+			"error", err.Error(),
 		)
 		return preparedMedia{MessageType: classification.MessageType, Content: mediaPlaceholder(classification)}
 	}
@@ -451,7 +453,7 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 		audioData = wav
 		audioName = replaceExtToWav(name)
 		audioMIME = "audio/wav"
-		a.log.Info("silk converted to wav", "originalName", name, "wavSize", len(wav))
+		logger.Business(ctx, "silk 转换为 wav", "originalName", name, "wavSize", len(wav))
 	}
 
 	attachment := parsedAttachment{

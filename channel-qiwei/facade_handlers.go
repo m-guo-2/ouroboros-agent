@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 type searchTargetsRequest struct {
@@ -317,41 +319,41 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.log.Info("facade send start",
+	logger.Business(r.Context(), "facade 发送开始",
 		"method", method,
 		"toId", toID,
 		"messageType", firstNonEmpty(req.MessageType, "text"),
-		"contentPreview", truncateBody([]byte(req.Content), 120),
+		"content", req.Content,
 	)
 
 	res, err := a.client.doAPIRaw(r.Context(), method, params)
 	if err != nil {
-		a.log.Error("facade send failed",
+		logger.Error(r.Context(), "facade 发送失败",
 			"method", method,
 			"toId", toID,
-			"err", err,
+			"error", err.Error(),
 		)
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
 	}
 	data, err := decodeAPIData(res.Data)
 	if err != nil {
-		a.log.Error("facade send decode failed",
+		logger.Error(r.Context(), "facade 发送解码失败",
 			"method", method,
 			"toId", toID,
-			"err", err,
-			"rawData", truncateBody(res.Data, 400),
+			"error", err.Error(),
+			"rawData", string(res.Data),
 		)
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
 	}
 
-	a.log.Info("facade send success",
+	logger.Business(r.Context(), "facade 发送成功",
 		"method", method,
 		"toId", toID,
 		"code", res.Code,
 		"msg", res.Msg,
-		"data", truncateBody(res.Data, 400),
+		"data", string(res.Data),
 	)
 
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: map[string]any{
@@ -698,10 +700,8 @@ type volcengineRecognizer struct {
 
 func newVolcengineRecognizer(cfg Config) recognizer {
 	return &volcengineRecognizer{
-		cfg: cfg,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		cfg:        cfg,
+		httpClient: logger.NewClient("volcengine", 30*time.Second),
 	}
 }
 

@@ -22,6 +22,8 @@ import (
 	"agent/internal/logger"
 	"agent/internal/runner"
 	"agent/internal/storage"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 var (
@@ -89,9 +91,13 @@ func main() {
 		logger.Boundary(ctx, "Admin SPA 已挂载", "dir", adminDir)
 	}
 
+	logMiddleware := sharedlogger.Middleware(sharedlogger.MiddlewareOptions{
+		SkipPaths: map[string]bool{"/health": true},
+	})
+
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Handler: logMiddleware(mux),
 	}
 
 	go func() {

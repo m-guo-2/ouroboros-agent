@@ -6,7 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
+
+var modelFetchClient = sharedlogger.NewClient("model-discovery", 15*time.Second)
 
 type availableModel struct {
 	ID          string  `json:"id"`
@@ -37,8 +41,7 @@ func fetchClaudeModels(apiKey string) ([]availableModel, error) {
 	req, _ := http.NewRequest(http.MethodGet, base+"/v1/models?limit=100", nil)
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := modelFetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +75,7 @@ func fetchOpenAIModels(apiKey string) ([]availableModel, error) {
 	base := "https://api.openai.com/v1"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := modelFetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -102,8 +104,7 @@ func fetchKimiModels(apiKey string) ([]availableModel, error) {
 	base := "https://api.moonshot.cn/v1"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := modelFetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +131,7 @@ func fetchGLMModels(apiKey string) ([]availableModel, error) {
 	base := "https://open.bigmodel.cn/api/paas/v4"
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := modelFetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

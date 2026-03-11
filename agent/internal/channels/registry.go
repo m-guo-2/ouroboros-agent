@@ -13,6 +13,8 @@ import (
 
 	"agent/internal/config"
 	"agent/internal/storage"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 // OutgoingMessage mirrors the TS OutgoingMessage type sent to channel adapters.
@@ -138,7 +140,7 @@ type HTTPAdapter struct {
 
 func (a *HTTPAdapter) httpClient() *http.Client {
 	if a.client == nil {
-		a.client = &http.Client{Timeout: 15 * time.Second}
+		a.client = sharedlogger.NewClient("channel-adapter", 15*time.Second)
 	}
 	return a.client
 }

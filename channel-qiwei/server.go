@@ -1,20 +1,19 @@
 package main
 
 import (
-	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"channel-qiwei/internal/modules"
 	sharedoss "github.com/m-guo-2/ouroboros-agent/shared/oss"
+
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 type app struct {
 	cfg           Config
-	log           *slog.Logger
 	client        *qiweiClient
 	http          *http.Client
 	recognizer    recognizer
@@ -29,13 +28,12 @@ type app struct {
 }
 
 func newApp(cfg Config) *app {
-	log := newLogger(cfg.LogLevel)
-	storageRuntime := newObjectStorage(log, cfg.OSS)
+	logger.Init(cfg.LogDir, "channel-qiwei")
+	storageRuntime := newObjectStorage(cfg.OSS)
 	return &app{
 		cfg:           cfg,
-		log:           log,
-		client:        newQiweiClient(cfg, log),
-		http:          &http.Client{Timeout: time.Duration(cfg.RequestTimout) * time.Second},
+		client:        newQiweiClient(cfg),
+		http:          logger.NewClient("http-download", time.Duration(cfg.RequestTimout)*time.Second),
 		recognizer:    newVolcengineRecognizer(cfg),
 		storage:       storageRuntime.store,
 		storageConfig: storageRuntime.cfg,
@@ -43,21 +41,6 @@ func newApp(cfg Config) *app {
 		dedupe:        newTTLSet(5 * time.Minute),
 		nameCache:     newTTLCache(10 * time.Minute),
 	}
-}
-
-func newLogger(level string) *slog.Logger {
-	var lv slog.Level
-	switch level {
-	case "debug":
-		lv = slog.LevelDebug
-	case "warn":
-		lv = slog.LevelWarn
-	case "error":
-		lv = slog.LevelError
-	default:
-		lv = slog.LevelInfo
-	}
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lv}))
 }
 
 func (a *app) routes() http.Handler {
@@ -72,7 +55,11 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/qiwei/send", a.handleSend)
 	mux.HandleFunc("/api/qiwei/do", a.handleDoAPI)
 	mux.HandleFunc("/api/qiwei/", a.handleModuleAction)
-	return withJSONMiddleware(mux)
+
+	logMiddleware := logger.Middleware(logger.MiddlewareOptions{
+		SkipPaths: map[string]bool{"/health": true, "/api/health": true},
+	})
+	return logMiddleware(withJSONMiddleware(mux))
 }
 
 func withJSONMiddleware(next http.Handler) http.Handler {

@@ -147,9 +147,12 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		}
 	}
 
-	// Generate trace ID.
+	// Generate trace ID and carry upstream request ID if present.
 	traceID := fmt.Sprintf("trace-%x", randBytes(8))
 	dispatchCtx := logger.WithTrace(ctx, traceID, session.ID)
+	if upstreamReqID := logger.GetRequestID(ctx); upstreamReqID != "" {
+		dispatchCtx = logger.WithRequestID(dispatchCtx, upstreamReqID)
+	}
 
 	logger.Business(dispatchCtx, "消息派发",
 		"traceEvent", "start",

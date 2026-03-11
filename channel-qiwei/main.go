@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 func main() {
@@ -18,7 +20,8 @@ func main() {
 	}
 
 	app := newApp(cfg)
-	log := app.log
+
+	ctx := context.Background()
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -29,14 +32,14 @@ func main() {
 	}
 
 	go func() {
-		log.Info("service started",
+		logger.Boundary(ctx, "服务启动",
 			"port", cfg.Port,
 			"logLevel", cfg.LogLevel,
 			"agentEnabled", cfg.AgentEnabled,
 			"agentServer", cfg.AgentServer,
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("server error", "err", err)
+			logger.Error(ctx, "服务启动失败", "error", err.Error())
 			os.Exit(1)
 		}
 	}()
@@ -45,8 +48,9 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	log.Info("shutting down")
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	logger.Boundary(ctx, "收到终止信号，开始关闭")
+	shutdownCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	_ = server.Shutdown(ctx)
+	_ = server.Shutdown(shutdownCtx)
+	logger.Flush()
 }

@@ -18,6 +18,7 @@ type Config struct {
 	GUID        string `yaml:"guid"`
 	Port        string `yaml:"port"`
 	LogLevel    string `yaml:"log_level"`
+	LogDir      string `yaml:"log_dir"`
 	HTTPTimeout int    `yaml:"http_timeout"`
 
 	Agent AgentConfig `yaml:"agent"`

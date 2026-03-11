@@ -6,11 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"agent/internal/logger"
 	"net/http"
 	"strings"
+	"time"
 
+	"agent/internal/logger"
 	"agent/internal/types"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
+)
+
+var (
+	anthropicHTTPClient = sharedlogger.NewClient("anthropic", 120*time.Second)
+	openaiHTTPClient    = sharedlogger.NewClient("openai", 120*time.Second)
 )
 
 type LLMResponse struct {
@@ -196,7 +204,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := anthropicHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +389,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := openaiHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

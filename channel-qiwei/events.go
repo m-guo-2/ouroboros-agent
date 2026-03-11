@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 const tagCallback = "callback"
@@ -35,6 +37,8 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "ok"})
@@ -42,21 +46,25 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, err := parseCallbackMessages(rawBody)
 	if err != nil {
-		a.log.Warn("callback parse failed", "tag", tagCallback, "err", err, "body", truncateBody(rawBody, 600))
+		logger.Warn(ctx, "callback 解析失败", "tag", tagCallback, "error", err.Error(), "body", string(rawBody))
 		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "ok"})
 		return
 	}
-	a.log.Info("callback received", "tag", tagCallback, "messages", len(messages))
+	logger.Business(ctx, "callback 接收", "tag", tagCallback, "messages", len(messages))
 
 	writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "ok"})
 
 	for _, msg := range messages {
 		msg := msg
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			msgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if err := a.handleCallbackMessage(ctx, msg); err != nil {
-				a.log.Error("callback process failed", "tag", tagCallback, "msg", msg.MsgSvrID, "err", err)
+			// Carry requestId from the webhook request into the async goroutine.
+			if rid := logger.GetRequestID(ctx); rid != "" {
+				msgCtx = logger.WithRequestID(msgCtx, rid)
+			}
+			if err := a.handleCallbackMessage(msgCtx, msg); err != nil {
+				logger.Error(msgCtx, "callback 处理失败", "tag", tagCallback, "msg", msg.MsgSvrID, "error", err.Error())
 			}
 		}()
 	}
@@ -64,20 +72,20 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessage) error {
 	if msg.MsgSvrID != "" && a.dedupe.Seen(msg.MsgSvrID) {
-		a.log.Info("skip duplicate", "tag", tagCallback, "msg", msg.MsgSvrID)
+		logger.Detail(ctx, "跳过重复消息", "tag", tagCallback, "msg", msg.MsgSvrID)
 		return nil
 	}
 
 	messageType := userMessageTypeMap[msg.MsgType]
 	if messageType == "" {
 		rawMsgData, _ := json.Marshal(msg.MsgData)
-		a.log.Warn("skip unsupported msgType",
+		logger.Warn(ctx, "跳过不支持的消息类型",
 			"tag", tagCallback,
 			"msgType", msg.MsgType,
 			"msg", msg.MsgSvrID,
 			"senderId", msg.SenderID,
 			"fromRoomId", msg.FromRoomID,
-			"msgData", truncateBody(rawMsgData, 400),
+			"msgData", string(rawMsgData),
 		)
 		return nil
 	}
@@ -93,12 +101,12 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 		content = strings.TrimSpace(stringValue(msg.MsgData["content"]))
 		if content == "" {
 			rawMsgData, _ := json.Marshal(msg.MsgData)
-			a.log.Warn("skip empty text",
+			logger.Warn(ctx, "跳过空文本消息",
 				"tag", tagCallback,
 				"msg", msg.MsgSvrID,
 				"senderId", msg.SenderID,
 				"fromRoomId", msg.FromRoomID,
-				"msgData", truncateBody(rawMsgData, 400),
+				"msgData", string(rawMsgData),
 			)
 			return nil
 		}
@@ -111,7 +119,7 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 			content = strings.TrimSpace(prepared.Content)
 		} else {
 			if strings.TrimSpace(prepared.ResourceURI) == "" {
-				a.log.Error("media upload failed, skipping",
+				logger.Error(ctx, "媒体上传失败，跳过",
 					"tag", tagCallback,
 					"msg", msg.MsgSvrID,
 					"type", messageType,
@@ -144,7 +152,7 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	}
 
 	if !a.cfg.AgentEnabled {
-		a.log.Info("echo mode", "tag", tagCallback, "msg", msg.MsgSvrID, "to", replyToID, "type", messageType)
+		logger.Business(ctx, "echo 模式", "tag", tagCallback, "msg", msg.MsgSvrID, "to", replyToID, "type", messageType)
 		if msg.MsgType == 1 {
 			_, err := a.client.doAPIRaw(ctx, "/msg/sendText", map[string]any{
 				"toId":    replyToID,
@@ -173,12 +181,18 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 		Attachments:             attachments,
 		AgentID:                 a.cfg.AgentID,
 	}
-	a.log.Info("forwarding to agent", "tag", tagCallback, "msg", msg.MsgSvrID, "conversation", in.ChannelConversationID, "type", in.MessageType, "sender", senderName)
+	logger.Business(ctx, "转发消息到 agent",
+		"tag", tagCallback,
+		"msg", msg.MsgSvrID,
+		"conversation", in.ChannelConversationID,
+		"type", in.MessageType,
+		"sender", senderName,
+	)
 	err := a.forwardToAgent(ctx, in)
 	if err != nil {
 		return err
 	}
-	a.log.Debug("forwarded", "tag", tagCallback, "msg", msg.MsgSvrID)
+	logger.Detail(ctx, "转发完成", "tag", tagCallback, "msg", msg.MsgSvrID)
 	return nil
 }
 
@@ -227,19 +241,13 @@ func (a *app) resolveUserName(ctx context.Context, userID string) string {
 	if v, ok := a.nameCache.Get(userID); ok {
 		return v
 	}
-
-	// batchGetUserinfo only returns the bot's own profile, not arbitrary users.
-	// Load the full contact lists and cache every userId → name mapping.
 	a.loadContactsOnce(ctx)
-
 	if v, ok := a.nameCache.Get(userID); ok {
 		return v
 	}
 	return ""
 }
 
-// loadContactsOnce fetches external + internal contact lists and populates nameCache.
-// Guarded by contactsLoaded to avoid repeated bulk fetches within the cache TTL window.
 func (a *app) loadContactsOnce(ctx context.Context) {
 	a.contactsMu.Lock()
 	if time.Since(a.contactsLoadedAt) < 5*time.Minute {
@@ -259,13 +267,13 @@ func (a *app) loadContactsOnce(ctx context.Context) {
 func (a *app) loadExternalContacts(ctx context.Context) {
 	res, err := a.client.doAPIRaw(ctx, "/contact/getWxContactList", nil)
 	if err != nil {
-		a.log.Warn("loadExternalContacts failed", "err", err)
+		logger.Warn(ctx, "加载外部联系人失败", "error", err.Error())
 		return
 	}
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
 		return
 	}
 	for _, c := range wrapper.ContactList {
@@ -280,19 +288,19 @@ func (a *app) loadExternalContacts(ctx context.Context) {
 			a.nameCache.Set(uid, name)
 		}
 	}
-	a.log.Info("loadExternalContacts", "cached", len(wrapper.ContactList))
+	logger.Business(ctx, "加载外部联系人", "cached", len(wrapper.ContactList))
 }
 
 func (a *app) loadInternalContacts(ctx context.Context) {
 	res, err := a.client.doAPIRaw(ctx, "/contact/getWxWorkContactList", nil)
 	if err != nil {
-		a.log.Warn("loadInternalContacts failed", "err", err)
+		logger.Warn(ctx, "加载内部联系人失败", "error", err.Error())
 		return
 	}
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
 		return
 	}
 	cached := 0
@@ -309,7 +317,7 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 			cached++
 		}
 	}
-	a.log.Info("loadInternalContacts", "cached", cached)
+	logger.Business(ctx, "加载内部联系人", "cached", cached)
 }
 
 func (a *app) forwardToAgent(ctx context.Context, in incomingMessage) error {
@@ -319,13 +327,15 @@ func (a *app) forwardToAgent(ctx context.Context, in incomingMessage) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("agent server error: %d", resp.StatusCode)
+		return fmt.Errorf("agent server error: %d body=%s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -341,10 +351,13 @@ func parseCallbackMessages(raw []byte) ([]qiweiCallbackMessage, error) {
 		return nil, nil
 	}
 
-	// Use UseNumber() to preserve full precision for large numeric IDs
-	// (roomId/senderId can exceed 2^53 and lose precision via float64).
+	var standard qiweiCallbackBody
+	if err := json.Unmarshal(trimmed, &standard); err == nil && len(standard.Data) > 0 {
+		return standard.Data, nil
+	}
+
 	var payload any
-	if err := unmarshalSafe(trimmed, &payload); err != nil {
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
 		return nil, err
 	}
 
@@ -355,7 +368,6 @@ func parseCallbackMessages(raw []byte) ([]qiweiCallbackMessage, error) {
 		if isVerificationPayload(v) {
 			return nil, nil
 		}
-		// Verification callback may only contain a text prompt.
 		if strings.Contains(stringValue(v["content"]), "验证回调地址是否可用") {
 			return nil, nil
 		}
@@ -377,7 +389,6 @@ func parseCallbackMessages(raw []byte) ([]qiweiCallbackMessage, error) {
 			}
 		}
 
-		// Some callback implementations may push a single message directly.
 		if _, hasMsgType := v["msgType"]; hasMsgType {
 			msg, err := decodeOneMessage(v)
 			if err != nil {
@@ -424,8 +435,6 @@ func decodeMessageArray(items []any) ([]qiweiCallbackMessage, error) {
 }
 
 func decodeOneMessage(in map[string]any) (qiweiCallbackMessage, error) {
-	// QiWe callback fields are not stable across versions:
-	// some ids may be numeric, and field names may use msgServerId/timestamp/senderName.
 	msg := qiweiCallbackMessage{
 		GUID:           anyToString(in["guid"]),
 		MsgType:        int(anyToInt64(in["msgType"])),

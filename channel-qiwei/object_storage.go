@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"net/url"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 	sharedoss "github.com/m-guo-2/ouroboros-agent/shared/oss"
 )
 
@@ -23,7 +23,7 @@ type objectStorageRuntime struct {
 	cfg   sharedoss.Config
 }
 
-func newObjectStorage(logger *slog.Logger, ossCfg OSSConfig) objectStorageRuntime {
+func newObjectStorage(ossCfg OSSConfig) objectStorageRuntime {
 	cfg := sharedoss.Config{
 		Endpoint:  ossCfg.Endpoint,
 		Bucket:    ossCfg.Bucket,
@@ -37,15 +37,16 @@ func newObjectStorage(logger *slog.Logger, ossCfg OSSConfig) objectStorageRuntim
 		return objectStorageRuntime{}
 	}
 
+	ctx := context.Background()
 	normalized, err := cfg.Normalized()
 	if err != nil {
-		logger.Warn("oss storage disabled", "err", err)
+		logger.Warn(ctx, "OSS 存储已禁用", "error", err.Error())
 		return objectStorageRuntime{}
 	}
 
 	store, err := sharedoss.NewMinIOStorage(normalized)
 	if err != nil {
-		logger.Warn("oss storage init failed", "err", err)
+		logger.Warn(ctx, "OSS 存储初始化失败", "error", err.Error())
 		return objectStorageRuntime{}
 	}
 	return objectStorageRuntime{

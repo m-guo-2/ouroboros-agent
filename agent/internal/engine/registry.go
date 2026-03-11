@@ -14,6 +14,8 @@ import (
 
 	"agent/internal/storage"
 	"agent/internal/types"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 type McpServerConfig struct {
@@ -82,7 +84,7 @@ func createSkillHTTPExecutor(executor storage.SkillToolExecutor) types.ToolExecu
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := sharedlogger.NewClient("skill-http", 30*time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
@@ -125,7 +127,7 @@ func createMcpToolExecutor(config McpServerConfig, toolName string) types.ToolEx
 			req.Header.Set("Authorization", "Bearer "+config.APIKey)
 		}
 
-		client := &http.Client{Timeout: 60 * time.Second}
+		client := sharedlogger.NewClient("mcp-tool", 60*time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
@@ -288,7 +290,7 @@ func (r *ToolRegistry) RegisterMcpServer(ctx context.Context, config McpServerCo
 		req.Header.Set("Authorization", "Bearer "+config.APIKey)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := sharedlogger.NewClient("mcp-list", 10*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0

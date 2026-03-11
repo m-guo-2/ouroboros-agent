@@ -3,6 +3,7 @@ module channel-qiwei
 go 1.24.0
 
 require (
+	github.com/m-guo-2/ouroboros-agent/shared/logger v0.0.0
 	github.com/m-guo-2/ouroboros-agent/shared/oss v0.0.0
 	github.com/youthlin/silk v0.0.4
 )
@@ -28,4 +29,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/m-guo-2/ouroboros-agent/shared/oss => ../shared/oss
+replace (
+	github.com/m-guo-2/ouroboros-agent/shared/logger => ../shared/logger
+	github.com/m-guo-2/ouroboros-agent/shared/oss => ../shared/oss
+)

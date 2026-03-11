@@ -13,6 +13,8 @@ import (
 
 	"agent/internal/storage"
 	"agent/internal/types"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 const (
@@ -113,7 +115,7 @@ func RegisterTavilyTool(registry *ToolRegistry) {
 			client := TavilyClient{
 				APIKey:  cfg.APIKey,
 				BaseURL: cfg.BaseURL,
-				Client:  &http.Client{Timeout: 20 * time.Second},
+				Client:  sharedlogger.NewClient("tavily", 20*time.Second),
 			}
 			resp, err := client.Search(ctx, tavilySearchRequest{
 				Query:         query,
@@ -182,7 +184,7 @@ func (c TavilyClient) Search(ctx context.Context, req tavilySearchRequest) (*tav
 
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = sharedlogger.NewClient("tavily", 20*time.Second)
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {

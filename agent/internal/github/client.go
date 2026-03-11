@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"agent/internal/config"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 type Client struct {
@@ -63,7 +65,7 @@ func NewClient(token, owner, repo, branch string) *Client {
 		owner:  owner,
 		repo:   repo,
 		branch: branch,
-		http:   &http.Client{Timeout: 15 * time.Second},
+		http:   sharedlogger.NewClient("github", 15*time.Second),
 	}
 }
 
