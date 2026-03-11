@@ -1,12 +1,14 @@
 package github
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"agent/internal/config"
 )
@@ -58,6 +60,8 @@ type Store struct {
 
 	mu    sync.RWMutex
 	cache map[string]*cachedEntry
+
+	cancel context.CancelFunc
 }
 
 // DefaultStore is the package-level singleton, set by InitStore.
@@ -155,6 +159,49 @@ func (s *Store) refresh() error {
 	s.cache = next
 	s.mu.Unlock()
 	return nil
+}
+
+// Refresh reloads skills from the GitHub repo. Safe for concurrent use.
+func (s *Store) Refresh() error {
+	return s.refresh()
+}
+
+// StartSync begins periodic background refresh at the given interval.
+// It is a no-op if interval <= 0.
+func (s *Store) StartSync(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.refresh(); err != nil {
+					log.Printf("⚠️  skill sync failed: %s", err)
+				} else {
+					s.mu.RLock()
+					n := len(s.cache)
+					s.mu.RUnlock()
+					log.Printf("🔄 skill sync complete: %d skills", n)
+				}
+			}
+		}
+	}()
+	log.Printf("🔄 skill sync started: interval %s", interval)
+}
+
+// StopSync stops the background sync goroutine. Safe to call if sync was never started.
+func (s *Store) StopSync() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // GetAll returns a copy of all cached skills.

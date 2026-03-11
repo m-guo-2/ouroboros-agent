@@ -48,6 +48,11 @@ func store() *github.Store {
 	return github.DefaultStore
 }
 
+// RefreshSkills forces a re-read of all skills from the GitHub repository.
+func RefreshSkills() error {
+	return store().Refresh()
+}
+
 // GetAllSkills returns all skills ordered by name.
 func GetAllSkills() ([]SkillRecord, error) {
 	all := store().GetAll()

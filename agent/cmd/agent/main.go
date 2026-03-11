@@ -57,6 +57,7 @@ func main() {
 		logger.Error(ctx, "GitHub skill store 初始化失败", "error", err.Error())
 		os.Exit(1)
 	}
+	github.DefaultStore.StartSync(cfg.GitHub.ParseSyncInterval())
 
 	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
 	go runner.StartDelayedTaskScheduler(schedulerCtx)
@@ -113,6 +114,7 @@ func main() {
 	<-stop
 
 	logger.Boundary(ctx, "收到终止信号，开始优雅关闭")
+	github.DefaultStore.StopSync()
 	cancelScheduler()
 	runner.GracefulShutdown()
 

@@ -187,7 +187,9 @@ func runSchema(db *sql.DB) error {
 			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 		)`,
 
-		// Skills
+		// Skills storage has moved to GitHub (see github.Store).
+		// The local skills table is kept only for backward compatibility
+		// with older deployments; runtime reads come from GitHub exclusively.
 		`CREATE TABLE IF NOT EXISTS skills (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,

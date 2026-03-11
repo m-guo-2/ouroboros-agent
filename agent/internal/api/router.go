@@ -32,6 +32,7 @@ func Mount(mux *http.ServeMux, logDir string) {
 
 	// Skills
 	mux.HandleFunc("/api/skills", handleSkills)
+	mux.HandleFunc("/api/skills/refresh", handleSkillsRefresh)
 	mux.HandleFunc("/api/skills/", handleSkillsWithID)
 
 	// Users

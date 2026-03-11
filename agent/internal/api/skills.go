@@ -77,6 +77,20 @@ func handleSkills(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// POST /api/skills/refresh — force re-sync from GitHub
+func handleSkillsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := storage.RefreshSkills(); err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	skills, _ := storage.GetAllSkills()
+	ok(w, map[string]interface{}{"refreshed": len(skills)})
+}
+
 // GET/PUT/DELETE /api/skills/{id}[/context]
 func handleSkillsWithID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/skills/")

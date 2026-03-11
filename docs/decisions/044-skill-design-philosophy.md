@@ -298,7 +298,7 @@ v3: 模型 → 看 tool 定义（inputSchema）→ 直接 tool_use 调用
 | Tool description 长度 | 3-4 句 | 自足但不冗余 |
 | README 定位 | 工作流指南 | 不重复 tool 定义，专注于串联逻辑 |
 | 执行器 | wecom_api 透传（过渡）→ 动态注册（目标） | 减少间接层，提高准确率 |
-| 存储 | 数据库（当前）→ GitHub 仓库 + 文件系统（规划） | 版本控制、协作、可审计 |
+| 存储 | GitHub 仓库（已实现）+ 周期同步 + 手动刷新 API | 版本控制、协作、可审计 |
 | 基础设施操作 | 不暴露给 Agent | Login/Instance/Logout 是运维行为，不是用户能力 |
 
 ## 影响
