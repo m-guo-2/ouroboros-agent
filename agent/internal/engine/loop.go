@@ -66,9 +66,12 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		toolDefs = append(toolDefs, t.Definition)
 	}
 
+	const maxEmptyResponseRetries = 3
+
 	var totalInputTokens, totalOutputTokens int
 	var totalCostUsd float64
 	iteration := 0
+	emptyResponseRetries := 0
 	var finalText string
 	hitMaxIterations := false
 
@@ -135,7 +138,21 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			for _, b := range textBlocks {
 				texts = append(texts, b.Text)
 			}
-			finalText = strings.Join(texts, "\n")
+			joined := strings.Join(texts, "\n")
+
+			if strings.Contains(joined, "Empty response:") && emptyResponseRetries < maxEmptyResponseRetries {
+				emptyResponseRetries++
+				iteration--
+				logger.Warn(ctx, "LLM 返回空响应，立即重试",
+					"traceEvent", "empty_response_retry",
+					"iteration", iteration,
+					"retryCount", emptyResponseRetries,
+					"maxRetries", maxEmptyResponseRetries,
+					"responseText", joined)
+				continue
+			}
+
+			finalText = joined
 			break
 		}
 
