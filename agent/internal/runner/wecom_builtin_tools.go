@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"agent/internal/config"
 	"agent/internal/engine"
 	"agent/internal/storage"
 	"agent/internal/types"
@@ -94,11 +95,10 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 
 func createWecomHTTPToolExecutor(path string) types.ToolExecutor {
 	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-		port, _ := storage.GetSettingValue("general.qiwei_port")
-		if port == "" {
-			port = "2000"
-		}
-		url := fmt.Sprintf("http://localhost:%s/api/qiwei/%s", port, path)
+		url := fmt.Sprintf("%s/api/qiwei/%s", config.ResolveQiweiBaseURL(func(key string) string {
+			v, _ := storage.GetSettingValue(key)
+			return v
+		}), path)
 
 		body, err := json.Marshal(input)
 		if err != nil {

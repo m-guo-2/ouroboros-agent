@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/config"
 	"agent/internal/storage"
 )
 
@@ -116,13 +117,10 @@ func InitBuiltinAdapters(getSetting func(key string) string) {
 		HealthURL: fmt.Sprintf("http://localhost:%s/api/health", feishuPort),
 	})
 
-	qiweiPort := getSetting("general.qiwei_port")
-	if qiweiPort == "" {
-		qiweiPort = "2000"
-	}
+	qiweiBaseURL := config.ResolveQiweiBaseURL(getSetting)
 	Register("qiwei", &HTTPAdapter{
-		SendURL:   fmt.Sprintf("http://localhost:%s/api/qiwei/send", qiweiPort),
-		HealthURL: fmt.Sprintf("http://localhost:%s/api/health", qiweiPort),
+		SendURL:   qiweiBaseURL + "/api/qiwei/send",
+		HealthURL: qiweiBaseURL + "/api/health",
 	})
 
 	Register("webui", WebuiSingleton)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,8 +17,13 @@ type Config struct {
 	LogDir     string `yaml:"log_dir"`
 	DBPath     string `yaml:"db_path"`
 	AdminDist  string `yaml:"admin_dist"`
+	Qiwei      Qiwei  `yaml:"qiwei"`
 	GitHub     GitHub `yaml:"github"`
 	ConfigPath string `yaml:"-"`
+}
+
+type Qiwei struct {
+	BaseURL string `yaml:"base_url"`
 }
 
 type GitHub struct {
@@ -64,6 +70,7 @@ func Load() (Config, error) {
 	}
 
 	if configPath == "" {
+		current = cfg
 		return cfg, nil
 	}
 
@@ -77,5 +84,28 @@ func Load() (Config, error) {
 	}
 
 	cfg.ConfigPath = configPath
+	current = cfg
 	return cfg, nil
+}
+
+var current Config
+
+func Current() Config {
+	return current
+}
+
+func ResolveQiweiBaseURL(getSetting func(string) string) string {
+	if baseURL := normalizeBaseURL(Current().Qiwei.BaseURL); baseURL != "" {
+		return baseURL
+	}
+
+	port := strings.TrimSpace(getSetting("general.qiwei_port"))
+	if port == "" {
+		port = "2000"
+	}
+	return fmt.Sprintf("http://localhost:%s", port)
+}
+
+func normalizeBaseURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
 }
