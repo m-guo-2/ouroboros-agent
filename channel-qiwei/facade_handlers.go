@@ -557,7 +557,7 @@ func decodeAPIData(raw json.RawMessage) (any, error) {
 		return nil, nil
 	}
 	var data any
-	if err := json.Unmarshal(raw, &data); err != nil {
+	if err := unmarshalSafe(raw, &data); err != nil {
 		return nil, err
 	}
 	return data, nil

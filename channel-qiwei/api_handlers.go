@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -45,7 +44,7 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	var data any
 	if len(res.Data) > 0 {
-		_ = json.Unmarshal(res.Data, &data)
+		_ = unmarshalSafe(res.Data, &data)
 	}
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: data})
 }
@@ -140,7 +139,7 @@ func (a *app) handleModuleCall(w http.ResponseWriter, ctx context.Context, metho
 	}
 	var data any
 	if len(res.Data) > 0 {
-		_ = json.Unmarshal(res.Data, &data)
+		_ = unmarshalSafe(res.Data, &data)
 	}
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: map[string]any{
 		"code":   res.Code,

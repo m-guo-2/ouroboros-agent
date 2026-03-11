@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -80,6 +81,15 @@ func decodeJSON(body io.Reader, out any) error {
 	dec := json.NewDecoder(body)
 	dec.UseNumber()
 	return dec.Decode(out)
+}
+
+// unmarshalSafe decodes JSON bytes using UseNumber() so that numeric values
+// are preserved as json.Number instead of float64. This prevents silent
+// precision loss for large integer IDs (> 2^53) from QiWe.
+func unmarshalSafe(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
 }
 
 func parseIntOrDefault(v string, fallback int) int {

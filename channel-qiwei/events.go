@@ -265,7 +265,7 @@ func (a *app) loadExternalContacts(ctx context.Context) {
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
 		return
 	}
 	for _, c := range wrapper.ContactList {
@@ -292,7 +292,7 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
 		return
 	}
 	cached := 0
@@ -341,15 +341,10 @@ func parseCallbackMessages(raw []byte) ([]qiweiCallbackMessage, error) {
 		return nil, nil
 	}
 
-	// Fast path: standard callback envelope {code,msg,data:[...]}
-	var standard qiweiCallbackBody
-	if err := json.Unmarshal(trimmed, &standard); err == nil && len(standard.Data) > 0 {
-		return standard.Data, nil
-	}
-
-	// Compatibility path: tolerate data object/string/single message payload.
+	// Use UseNumber() to preserve full precision for large numeric IDs
+	// (roomId/senderId can exceed 2^53 and lose precision via float64).
 	var payload any
-	if err := json.Unmarshal(trimmed, &payload); err != nil {
+	if err := unmarshalSafe(trimmed, &payload); err != nil {
 		return nil, err
 	}
 
