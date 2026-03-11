@@ -79,7 +79,7 @@ type parsedMessage struct {
 type recognizer interface {
 	ParseImage(ctx context.Context, attachment parsedAttachment) (parsedAttachment, error)
 	ParseDocument(ctx context.Context, attachment parsedAttachment) (parsedAttachment, error)
-	SubmitAudioTranscription(ctx context.Context, attachment parsedAttachment) (string, error)
+	SubmitAudioTranscription(ctx context.Context, audioData []byte, audioFormat string) (string, error)
 	QueryAudioTranscription(ctx context.Context, taskID string) (parsedAttachment, bool, error)
 }
 
@@ -515,18 +515,24 @@ func toFacadeQiweiMessageRequest(msg facadeSendMessageRequest, toID string) (str
 	if messageType == "" {
 		messageType = "text"
 	}
+	meta := msg.ChannelMeta
+	if meta == nil {
+		meta = map[string]any{}
+	}
 
 	switch messageType {
 	case "text":
-		return "/msg/sendText", map[string]any{
-			"toId":    toID,
-			"content": msg.Content,
-		}, nil
+		params := map[string]any{"toId": toID, "content": msg.Content}
+		if reply := mapValue(meta["reply"]); len(reply) > 0 {
+			params["reply"] = reply
+		}
+		return "/msg/sendText", params, nil
 	case "rich_text", "hyper_text":
-		return "/msg/sendHyperText", map[string]any{
-			"toId":    toID,
-			"content": msg.Content,
-		}, nil
+		params := map[string]any{"toId": toID, "content": msg.Content}
+		if reply := mapValue(meta["reply"]); len(reply) > 0 {
+			params["reply"] = reply
+		}
+		return "/msg/sendHyperText", params, nil
 	case "image":
 		return "/msg/sendImage", map[string]any{
 			"toId":   toID,
@@ -534,10 +540,8 @@ func toFacadeQiweiMessageRequest(msg facadeSendMessageRequest, toID string) (str
 		}, nil
 	case "file":
 		fileName := "file"
-		if msg.ChannelMeta != nil {
-			if v, ok := msg.ChannelMeta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
-				fileName = v
-			}
+		if v, ok := meta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
+			fileName = v
 		}
 		return "/msg/sendFile", map[string]any{
 			"toId":     toID,
@@ -549,6 +553,30 @@ func toFacadeQiweiMessageRequest(msg facadeSendMessageRequest, toID string) (str
 			"toId":     toID,
 			"voiceUrl": msg.Content,
 		}, nil
+	case "link":
+		return "/msg/sendLink", map[string]any{
+			"toId":    toID,
+			"title":   anyToString(meta["title"]),
+			"desc":    anyToString(meta["desc"]),
+			"linkUrl": firstNonEmpty(anyToString(meta["linkUrl"]), msg.Content),
+			"iconUrl": anyToString(meta["iconUrl"]),
+		}, nil
+	case "location":
+		return "/msg/sendLocation", map[string]any{
+			"toId":      toID,
+			"title":     anyToString(meta["title"]),
+			"address":   anyToString(meta["address"]),
+			"latitude":  anyToString(meta["latitude"]),
+			"longitude": anyToString(meta["longitude"]),
+		}, nil
+	case "miniapp":
+		params := map[string]any{"toId": toID}
+		for k, v := range meta {
+			if k != "toId" {
+				params[k] = v
+			}
+		}
+		return "/msg/sendWeapp", params, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported messageType: %s", messageType)
 	}
@@ -780,12 +808,12 @@ func (r *volcengineRecognizer) ParseDocument(ctx context.Context, attachment par
 	return attachment, nil
 }
 
-func (r *volcengineRecognizer) SubmitAudioTranscription(ctx context.Context, attachment parsedAttachment) (string, error) {
+func (r *volcengineRecognizer) SubmitAudioTranscription(ctx context.Context, audioData []byte, audioFormat string) (string, error) {
 	if strings.TrimSpace(r.cfg.VolcSpeechAppKey) == "" || strings.TrimSpace(r.cfg.VolcSpeechAccessKey) == "" || strings.TrimSpace(r.cfg.VolcSpeechResourceID) == "" {
 		return "", fmt.Errorf("volc speech provider is not configured")
 	}
-	if attachment.SourceURL == "" {
-		return "", fmt.Errorf("audio transcription requires a source url")
+	if len(audioData) == 0 {
+		return "", fmt.Errorf("audio transcription requires audio data")
 	}
 	requestID := fmt.Sprintf("qiwei-audio-%d", time.Now().UnixNano())
 	body := map[string]any{
@@ -793,8 +821,8 @@ func (r *volcengineRecognizer) SubmitAudioTranscription(ctx context.Context, att
 			"uid": "channel-qiwei",
 		},
 		"audio": map[string]any{
-			"format": detectAudioFormat(attachment),
-			"url":    attachment.SourceURL,
+			"format": audioFormat,
+			"data":   base64.StdEncoding.EncodeToString(audioData),
 		},
 		"request": map[string]any{
 			"model_name":      "bigmodel",
@@ -822,9 +850,14 @@ func (r *volcengineRecognizer) SubmitAudioTranscription(ctx context.Context, att
 		return "", err
 	}
 	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	statusCode := resp.Header.Get("X-Api-Status-Code")
+	apiMessage := resp.Header.Get("X-Api-Message")
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("volc speech submit failed: HTTP %d %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("volc speech submit failed: HTTP %d code=%s msg=%s body=%s", resp.StatusCode, statusCode, apiMessage, string(respBody))
+	}
+	if statusCode != "" && statusCode != "20000000" {
+		return "", fmt.Errorf("volc speech submit rejected: code=%s msg=%s", statusCode, apiMessage)
 	}
 	return requestID, nil
 }
@@ -846,16 +879,17 @@ func (r *volcengineRecognizer) QueryAudioTranscription(ctx context.Context, task
 	defer resp.Body.Close()
 
 	statusCode := resp.Header.Get("X-Api-Status-Code")
+	apiMessage := resp.Header.Get("X-Api-Message")
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parsedAttachment{}, false, fmt.Errorf("volc speech query failed: HTTP %d %s", resp.StatusCode, string(body))
+		return parsedAttachment{}, false, fmt.Errorf("volc speech query failed: HTTP %d code=%s msg=%s body=%s", resp.StatusCode, statusCode, apiMessage, string(body))
 	}
 	switch statusCode {
 	case "20000001", "20000002":
 		return parsedAttachment{}, false, nil
-	case "", "20000000":
+	case "", "20000000", "20000003":
 	default:
-		return parsedAttachment{}, false, fmt.Errorf("volc speech query failed: code=%s body=%s", statusCode, string(body))
+		return parsedAttachment{}, false, fmt.Errorf("volc speech query failed: code=%s msg=%s", statusCode, apiMessage)
 	}
 
 	var payload map[string]any
@@ -972,12 +1006,3 @@ func readDocumentTextForModel(attachment parsedAttachment) (string, error) {
 	return text, nil
 }
 
-func detectAudioFormat(attachment parsedAttachment) string {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(attachment.Name)), ".")
-	switch ext {
-	case "wav", "mp3", "ogg", "silk":
-		return ext
-	default:
-		return "mp3"
-	}
-}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -77,12 +76,13 @@ var mediaClassifications = map[int]mediaClassification{
 	23:  {MsgType: 23, MessageType: "video", Source: mediaSourceQW, Kind: mediaKindVideo},
 	34:  {MsgType: 34, MessageType: "voice", Source: mediaSourceQW, Kind: mediaKindVoice},
 	43:  {MsgType: 43, MessageType: "video", Source: mediaSourceQW, Kind: mediaKindVideo},
+	29:  {MsgType: 29, MessageType: "sticker", Source: mediaSourceQW, Kind: mediaKindImage},
 	47:  {MsgType: 47, MessageType: "sticker", Source: mediaSourceUnknown, Kind: mediaKindUnknown},
 	49:  {MsgType: 49, MessageType: "file", Source: mediaSourceQW, Kind: mediaKindFile},
 	101: {MsgType: 101, MessageType: "image", Source: mediaSourceGW, Kind: mediaKindImage},
 	102: {MsgType: 102, MessageType: "file", Source: mediaSourceGW, Kind: mediaKindFile},
 	103: {MsgType: 103, MessageType: "video", Source: mediaSourceGW, Kind: mediaKindVideo},
-	104: {MsgType: 104, MessageType: "sticker", Source: mediaSourceGW, Kind: mediaKindUnknown},
+	104: {MsgType: 104, MessageType: "sticker", Source: mediaSourceGW, Kind: mediaKindImage},
 }
 
 func classifyMediaMessage(msgType int, fallbackType string, msgData map[string]any) (mediaClassification, bool) {
@@ -436,14 +436,13 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 		}
 	}
 
-	raw, contentType, err := downloadRawBytes(a, resolvedURL)
+	raw, _, err := downloadRawBytes(a, resolvedURL)
 	if err != nil {
 		return "", fmt.Errorf("download voice: %w", err)
 	}
 
 	audioData := raw
-	audioName := name
-	audioMIME := contentType
+	audioFormat := inferAudioFormatFromName(name)
 
 	if isSilkFormat(name) || isSilkData(raw) {
 		wav, convErr := decodeSilkToWav(raw)
@@ -451,26 +450,11 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 			return "", fmt.Errorf("silk to wav: %w", convErr)
 		}
 		audioData = wav
-		audioName = replaceExtToWav(name)
-		audioMIME = "audio/wav"
+		audioFormat = "wav"
 		logger.Business(ctx, "silk 转换为 wav", "originalName", name, "wavSize", len(wav))
 	}
 
-	attachment := parsedAttachment{
-		Kind:     "audio",
-		Name:     audioName,
-		MIMEType: audioMIME,
-	}
-	publicURL, mimeType, err := a.uploadDownloadedAttachment(ctx, attachment, bytes.NewReader(audioData), audioMIME, int64(len(audioData)))
-	if err != nil {
-		return "", fmt.Errorf("upload voice: %w", err)
-	}
-	attachment.SourceURL = publicURL
-	if strings.TrimSpace(mimeType) != "" {
-		attachment.MIMEType = mimeType
-	}
-
-	taskID, err := a.recognizer.SubmitAudioTranscription(ctx, attachment)
+	taskID, err := a.recognizer.SubmitAudioTranscription(ctx, audioData, audioFormat)
 	if err != nil {
 		return "", err
 	}
@@ -486,6 +470,16 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("audio transcription timed out")
+}
+
+func inferAudioFormatFromName(name string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	switch ext {
+	case "wav", "mp3", "ogg", "silk":
+		return ext
+	default:
+		return "mp3"
+	}
 }
 
 func mediaPlaceholder(classification mediaClassification) string {

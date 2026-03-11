@@ -16,19 +16,30 @@ import (
 const tagCallback = "callback"
 
 var userMessageTypeMap = map[int]string{
+	0:   "text",
 	1:   "text",
 	2:   "text",
 	3:   "image",
+	6:   "location",
+	7:   "image",
+	13:  "link",
 	14:  "image",
 	15:  "file",
 	16:  "voice",
 	23:  "video",
+	26:  "red_packet",
+	29:  "sticker",
 	34:  "voice",
+	41:  "card",
 	43:  "video",
 	49:  "file",
+	78:  "miniapp",
 	101: "image",
 	102: "file",
 	103: "video",
+	104: "sticker",
+	123: "mixed",
+	141: "channel_msg",
 }
 
 func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +82,34 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessage) error {
+	switch msg.Cmd {
+	case 15000:
+		return a.handleNormalMessage(ctx, msg)
+	case 15500:
+		return a.handleSystemEvent(ctx, msg)
+	case 11016:
+		logger.Detail(ctx, "账号状态变化", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID)
+		return nil
+	case 20000:
+		logger.Detail(ctx, "API 异步消息", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID)
+		return nil
+	default:
+		logger.Detail(ctx, "未处理的 cmd 类型", "tag", tagCallback, "cmd", msg.Cmd, "msgType", msg.MsgType)
+		return nil
+	}
+}
+
+// textMessageTypes is the set of msgTypes that carry plain text content.
+var textMessageTypes = map[int]bool{0: true, 1: true, 2: true}
+
+// richContentTypes carry structured data that should be extracted into readable text,
+// not routed through the media download pipeline.
+var richContentTypes = map[string]bool{
+	"link": true, "location": true, "card": true,
+	"red_packet": true, "miniapp": true, "channel_msg": true,
+}
+
+func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage) error {
 	if msg.MsgSvrID != "" && a.dedupe.Seen(msg.MsgSvrID) {
 		logger.Detail(ctx, "跳过重复消息", "tag", tagCallback, "msg", msg.MsgSvrID)
 		return nil
@@ -97,7 +136,10 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 
 	content := ""
 	var attachments []incomingAttachment
-	if msg.MsgType == 1 || msg.MsgType == 2 {
+	var channelMeta map[string]any
+
+	switch {
+	case textMessageTypes[msg.MsgType]:
 		content = strings.TrimSpace(stringValue(msg.MsgData["content"]))
 		if content == "" {
 			rawMsgData, _ := json.Marshal(msg.MsgData)
@@ -110,7 +152,24 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 			)
 			return nil
 		}
-	} else {
+
+	case richContentTypes[messageType]:
+		content, channelMeta = a.extractRichContent(messageType, msg.MsgData)
+
+	case messageType == "mixed":
+		content, attachments = a.handleMixedMessage(ctx, msg)
+
+	case messageType == "sticker":
+		prepared := a.prepareMediaForAgent(ctx, msg.MsgType, "image", msg.MsgData)
+		if prepared.ResourceURI != "" {
+			content = prepared.Content
+			attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, "image", prepared)
+			messageType = "sticker"
+		} else {
+			content = "[表情]"
+		}
+
+	default:
 		prepared := a.prepareMediaForAgent(ctx, msg.MsgType, messageType, msg.MsgData)
 		if prepared.MessageType != "" {
 			messageType = prepared.MessageType
@@ -153,7 +212,7 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 
 	if !a.cfg.AgentEnabled {
 		logger.Business(ctx, "echo 模式", "tag", tagCallback, "msg", msg.MsgSvrID, "to", replyToID, "type", messageType)
-		if msg.MsgType == 1 {
+		if textMessageTypes[msg.MsgType] {
 			_, err := a.client.doAPIRaw(ctx, "/msg/sendText", map[string]any{
 				"toId":    replyToID,
 				"content": "收到消息: " + content,
@@ -178,6 +237,7 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 		Content:                 content,
 		SenderName:              senderName,
 		Timestamp:               ts,
+		ChannelMeta:             channelMeta,
 		Attachments:             attachments,
 		AgentID:                 a.cfg.AgentID,
 	}
@@ -196,13 +256,237 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	return nil
 }
 
+// extractRichContent converts structured message types (link, location, card, etc.)
+// into human-readable text and optional channelMeta for later forwarding.
+func (a *app) extractRichContent(messageType string, msgData map[string]any) (string, map[string]any) {
+	switch messageType {
+	case "link":
+		return contentFromLink(msgData), nil
+	case "location":
+		return contentFromLocation(msgData), nil
+	case "card":
+		meta := map[string]any{}
+		if sid := anyToString(msgData["shared_id"]); sid != "" {
+			meta["shared_id"] = sid
+		}
+		return contentFromCard(msgData), meta
+	case "red_packet":
+		return contentFromRedPacket(msgData), nil
+	case "miniapp":
+		content, meta := contentFromMiniapp(msgData)
+		return content, meta
+	case "channel_msg":
+		return contentFromChannelMsg(msgData), nil
+	default:
+		return "[收到消息]", nil
+	}
+}
+
+func contentFromLink(msgData map[string]any) string {
+	title := decodeMaybeBase64(anyToString(msgData["title"]))
+	desc := decodeMaybeBase64(anyToString(msgData["desc"]))
+	linkURL := anyToString(msgData["linkUrl"])
+	if title == "" {
+		title = linkURL
+	}
+	parts := []string{"[链接] 标题：" + title}
+	if desc != "" {
+		parts = append(parts, "描述："+desc)
+	}
+	if linkURL != "" {
+		parts = append(parts, "地址："+linkURL)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func contentFromLocation(msgData map[string]any) string {
+	title := decodeMaybeBase64(anyToString(msgData["title"]))
+	address := decodeMaybeBase64(anyToString(msgData["address"]))
+	lat := anyToString(msgData["latitude"])
+	lng := anyToString(msgData["longitude"])
+	var parts []string
+	if title != "" && address != "" {
+		parts = append(parts, fmt.Sprintf("[位置] %s %s", title, address))
+	} else if address != "" {
+		parts = append(parts, "[位置] "+address)
+	} else if title != "" {
+		parts = append(parts, "[位置] "+title)
+	} else {
+		parts = append(parts, "[位置]")
+	}
+	if lat != "" && lng != "" {
+		parts = append(parts, fmt.Sprintf("(纬度:%s, 经度:%s)", lat, lng))
+	}
+	return strings.Join(parts, " ")
+}
+
+func contentFromCard(msgData map[string]any) string {
+	nickname := decodeMaybeBase64(anyToString(msgData["nickname"]))
+	corpName := decodeMaybeBase64(anyToString(msgData["corpName"]))
+	if nickname == "" {
+		nickname = anyToString(msgData["realName"])
+	}
+	if nickname == "" {
+		return "[名片]"
+	}
+	if corpName != "" {
+		return fmt.Sprintf("[名片] %s 企业：%s", nickname, corpName)
+	}
+	return "[名片] " + nickname
+}
+
+func contentFromRedPacket(msgData map[string]any) string {
+	wishing := decodeMaybeBase64(anyToString(msgData["wishingContent"]))
+	if wishing != "" {
+		return "[红包] " + wishing
+	}
+	return "[红包]"
+}
+
+func contentFromMiniapp(msgData map[string]any) (string, map[string]any) {
+	title := decodeMaybeBase64(anyToString(msgData["title"]))
+	desc := decodeMaybeBase64(anyToString(msgData["desc"]))
+	parts := []string{"[小程序]"}
+	if title != "" {
+		parts[0] = "[小程序] " + title
+	}
+	if desc != "" {
+		parts = append(parts, desc)
+	}
+	meta := map[string]any{"miniappData": msgData}
+	return strings.Join(parts, "\n"), meta
+}
+
+func contentFromChannelMsg(msgData map[string]any) string {
+	name := decodeMaybeBase64(anyToString(msgData["channelName"]))
+	url := anyToString(msgData["channelUrl"])
+	parts := []string{"[视频号]"}
+	if name != "" {
+		parts[0] = "[视频号] " + name
+	}
+	if url != "" {
+		parts = append(parts, "链接："+url)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) (string, []incomingAttachment) {
+	rawData, ok := msg.MsgData["content"]
+	if !ok {
+		rawData = msg.MsgData["msgData"]
+	}
+	var subMessages []any
+	switch v := rawData.(type) {
+	case []any:
+		subMessages = v
+	default:
+		raw, _ := json.Marshal(msg.MsgData)
+		var arr []any
+		if err := json.Unmarshal(raw, &arr); err == nil {
+			subMessages = arr
+		}
+	}
+	if len(subMessages) == 0 {
+		return "[图文混合消息]", nil
+	}
+
+	var textParts []string
+	var attachments []incomingAttachment
+	for i, sub := range subMessages {
+		subMap, ok := sub.(map[string]any)
+		if !ok {
+			continue
+		}
+		subType := int(anyToInt64(subMap["subMsgType"]))
+		subData := mapValue(subMap["subMsgData"])
+
+		switch subType {
+		case 0, 2:
+			text := decodeMaybeBase64(anyToString(subData["content"]))
+			if text != "" {
+				textParts = append(textParts, text)
+			}
+		case 7, 14, 101:
+			prepared := a.prepareMediaForAgent(ctx, subType, "image", subData)
+			if prepared.ResourceURI != "" {
+				attachments = append(attachments, incomingAttachment{
+					ID:                fmt.Sprintf("%s:%d", msg.MsgSvrID, i),
+					Kind:              "image",
+					ResourceURI:       prepared.ResourceURI,
+					DisplayName:       prepared.Name,
+					MIMEType:          prepared.MIMEType,
+					SourceMessageType: "image",
+				})
+			} else {
+				textParts = append(textParts, "[图片]")
+			}
+		}
+	}
+	content := strings.Join(textParts, " ")
+	if content == "" {
+		content = "[图文混合消息]"
+	}
+	return content, attachments
+}
+
+func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) error {
+	switch msg.MsgType {
+	case 1002:
+		return a.handleGroupMemberJoined(ctx, msg)
+	case 2357:
+		logger.Business(ctx, "好友申请",
+			"tag", tagCallback,
+			"msgType", msg.MsgType,
+			"contactNickname", anyToString(msg.MsgData["contactNickname"]),
+			"contactId", anyToString(msg.MsgData["contactId"]),
+		)
+		return nil
+	case 2132:
+		logger.Business(ctx, "好友申请(简)", "tag", tagCallback, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
+		return nil
+	default:
+		logger.Detail(ctx, "系统事件(忽略)", "tag", tagCallback, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
+		return nil
+	}
+}
+
+func (a *app) handleGroupMemberJoined(ctx context.Context, msg qiweiCallbackMessage) error {
+	roomID := msg.FromRoomID
+	if roomID == "" || roomID == "0" {
+		logger.Warn(ctx, "入群通知缺少 roomId", "tag", tagCallback, "msgType", msg.MsgType)
+		return nil
+	}
+
+	if !a.cfg.AgentEnabled {
+		logger.Detail(ctx, "入群通知(agent 未启用)", "tag", tagCallback, "roomId", roomID)
+		return nil
+	}
+
+	ts := msg.CreateTime * 1000
+	if ts == 0 {
+		ts = time.Now().UnixMilli()
+	}
+	in := incomingMessage{
+		Channel:               "qiwei",
+		ChannelUserID:         msg.SenderID,
+		ChannelMessageID:      msg.MsgSvrID,
+		ChannelConversationID: roomID,
+		ConversationType:      "group",
+		MessageType:           "system",
+		Content:               "[群事件] 新成员加入了群聊",
+		Timestamp:             ts,
+		AgentID:               a.cfg.AgentID,
+	}
+	return a.forwardToAgent(ctx, in)
+}
+
 func attachmentsFromPreparedMedia(messageID, messageType string, prepared preparedMedia) []incomingAttachment {
 	resourceURI := strings.TrimSpace(prepared.ResourceURI)
 	if resourceURI == "" {
 		return nil
 	}
 	switch messageType {
-	case "image", "file", "video":
+	case "image", "file", "video", "sticker":
 	default:
 		return nil
 	}
@@ -231,8 +515,8 @@ func formatSenderPrefix(name, id string, t time.Time) string {
 
 func formatVoiceContent(prefix, transcript string) string {
 	transcript = strings.TrimSpace(transcript)
-	if transcript == "" {
-		return prefix + "转写失败(语音消息)"
+	if transcript == "" || transcript == "[收到语音]" {
+		return prefix + "[语音转写失败]"
 	}
 	return prefix + transcript + "(语音消息)"
 }
@@ -435,7 +719,12 @@ func decodeMessageArray(items []any) ([]qiweiCallbackMessage, error) {
 }
 
 func decodeOneMessage(in map[string]any) (qiweiCallbackMessage, error) {
+	cmd := int(anyToInt64(in["cmd"]))
+	if cmd == 0 {
+		cmd = 15000
+	}
 	msg := qiweiCallbackMessage{
+		Cmd:            cmd,
 		GUID:           anyToString(in["guid"]),
 		MsgType:        int(anyToInt64(in["msgType"])),
 		MsgData:        mapValue(in["msgData"]),

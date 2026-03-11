@@ -50,12 +50,24 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string]any, error) {
+	meta := msg.ChannelMeta
+	if meta == nil {
+		meta = map[string]any{}
+	}
+
 	switch msg.MessageType {
-	case "text", "rich_text":
-		return "/msg/sendText", map[string]any{
-			"toId":    toID,
-			"content": msg.Content,
-		}, nil
+	case "text":
+		params := map[string]any{"toId": toID, "content": msg.Content}
+		if reply := mapValue(meta["reply"]); len(reply) > 0 {
+			params["reply"] = reply
+		}
+		return "/msg/sendText", params, nil
+	case "rich_text":
+		params := map[string]any{"toId": toID, "content": msg.Content}
+		if reply := mapValue(meta["reply"]); len(reply) > 0 {
+			params["reply"] = reply
+		}
+		return "/msg/sendHyperText", params, nil
 	case "image":
 		return "/msg/sendImage", map[string]any{
 			"toId":   toID,
@@ -63,16 +75,38 @@ func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string
 		}, nil
 	case "file":
 		fileName := "file"
-		if msg.ChannelMeta != nil {
-			if v, ok := msg.ChannelMeta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
-				fileName = v
-			}
+		if v, ok := meta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
+			fileName = v
 		}
 		return "/msg/sendFile", map[string]any{
 			"toId":     toID,
 			"fileUrl":  msg.Content,
 			"fileName": fileName,
 		}, nil
+	case "link":
+		return "/msg/sendLink", map[string]any{
+			"toId":    toID,
+			"title":   anyToString(meta["title"]),
+			"desc":    anyToString(meta["desc"]),
+			"linkUrl": firstNonEmpty(anyToString(meta["linkUrl"]), msg.Content),
+			"iconUrl": anyToString(meta["iconUrl"]),
+		}, nil
+	case "location":
+		return "/msg/sendLocation", map[string]any{
+			"toId":      toID,
+			"title":     anyToString(meta["title"]),
+			"address":   anyToString(meta["address"]),
+			"latitude":  anyToString(meta["latitude"]),
+			"longitude": anyToString(meta["longitude"]),
+		}, nil
+	case "miniapp":
+		params := map[string]any{"toId": toID}
+		for k, v := range meta {
+			if k != "toId" {
+				params[k] = v
+			}
+		}
+		return "/msg/sendWeapp", params, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported messageType: %s", msg.MessageType)
 	}

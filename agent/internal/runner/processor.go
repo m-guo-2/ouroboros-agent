@@ -129,9 +129,6 @@ func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.Ag
 }
 
 func formatUserMessage(senderName, channel, messageType, channelMessageID, content string, attachments []storage.AttachmentData) string {
-	if senderName != "" && !strings.HasPrefix(content, senderName+": ") {
-		content = senderName + ": " + content
-	}
 	if rendered := renderAttachmentsForPrompt(attachments); rendered != "" {
 		if content != "" {
 			content += "\n\n" + rendered
@@ -577,8 +574,9 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			"channel":                 map[string]interface{}{"type": "string", "description": "目标渠道"},
 			"channelUserId":           map[string]interface{}{"type": "string", "description": "渠道用户 ID"},
 			"channelConversationId":   map[string]interface{}{"type": "string", "description": "群聊 ID"},
-			"messageType":             map[string]interface{}{"type": "string", "description": "消息类型"},
+			"messageType":             map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
 			"replyToChannelMessageId": map[string]interface{}{"type": "string", "description": "回复目标的上游消息 ID（可选）"},
+			"channelMeta":             map[string]interface{}{"type": "object", "description": "渠道专用附加参数，如 link/location/miniapp 等类型所需的结构化数据"},
 		},
 		Required: []string{"content"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
@@ -613,6 +611,9 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		}
 		if replyTo, ok := input["replyToChannelMessageId"].(string); ok && replyTo != "" {
 			outMsg.ReplyToChannelMessageID = replyTo
+		}
+		if cm, ok := input["channelMeta"].(map[string]interface{}); ok && len(cm) > 0 {
+			outMsg.ChannelMeta = cm
 		}
 
 		if err := channels.SendToChannel(outMsg); err != nil {

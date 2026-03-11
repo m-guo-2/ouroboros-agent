@@ -56,6 +56,7 @@ type qiweiCallbackBody struct {
 }
 
 type qiweiCallbackMessage struct {
+	Cmd            int            `json:"cmd"`
 	GUID           string         `json:"guid"`
 	MsgType        int            `json:"msgType"`
 	MsgData        map[string]any `json:"msgData"`

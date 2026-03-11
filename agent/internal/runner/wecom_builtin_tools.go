@@ -79,20 +79,75 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	)
 
 	registry.RegisterBuiltin("wecom_send_message",
-		"向指定企微联系人或群聊主动发送消息。支持 text、rich_text、image、file、voice。",
+		"向指定企微联系人或群聊主动发送消息。支持 text、rich_text、image、file、voice、link、location、miniapp。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"channelConversationId": map[string]interface{}{"type": "string", "description": "群聊 ID（群消息时填写）"},
 				"channelUserId":         map[string]interface{}{"type": "string", "description": "联系人 ID（私聊时填写）"},
-				"messageType":           map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice"},
-				"content":               map[string]interface{}{"type": "string", "description": "消息内容。text/rich_text 填文字或富文本内容；image/file/voice 填可访问 URL"},
-				"channelMeta":           map[string]interface{}{"type": "object", "description": "附加信息，如 file 类型时传 {\"fileName\": \"报告.pdf\"}"},
+				"messageType":           map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+				"content":               map[string]interface{}{"type": "string", "description": "消息内容。text/rich_text 填文字；image/file/voice 填可访问 URL；link 填链接地址；location/miniapp 可留空由 channelMeta 承载"},
+				"channelMeta": map[string]interface{}{"type": "object", "description": `附加信息，按 messageType 使用：
+- file: {"fileName": "报告.pdf"}
+- link: {"title": "标题", "desc": "描述", "linkUrl": "https://...", "iconUrl": "图标URL"}
+- location: {"title": "地点名", "address": "详细地址", "latitude": "纬度", "longitude": "经度"}
+- miniapp: 透传 QiWei sendWeapp 所需全部参数
+- text/rich_text 引用回复: {"reply": {"msgSvrId": "被引用消息ID", "content": "原消息摘要"}}`},
 			},
 			Required: []string{"content"},
 		},
 		createWecomHTTPToolExecutor("send_message"),
 	)
+
+	registry.RegisterBuiltin("wecom_revoke_message",
+		"撤回已发送的企微消息。需要 chatId（会话 ID）和 msgServerId（消息服务端 ID）。",
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"chatId":      map[string]interface{}{"type": "string", "description": "会话 ID，即消息所在的聊天对象 ID"},
+				"msgServerId": map[string]interface{}{"type": "string", "description": "待撤回消息的服务端 ID"},
+			},
+			Required: []string{"chatId", "msgServerId"},
+		},
+		createWecomModuleActionExecutor("message", "revoke"),
+	)
+}
+
+func createWecomModuleActionExecutor(module, action string) types.ToolExecutor {
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		url := fmt.Sprintf("%s/api/qiwei/%s/%s", config.ResolveQiweiBaseURL(func(key string) string {
+			v, _ := storage.GetSettingValue(key)
+			return v
+		}), module, action)
+
+		body, err := json.Marshal(map[string]interface{}{"params": input})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := sharedlogger.NewClient("wecom-tool", 30*time.Second)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		respBytes, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("wecom module action failed: %d %s", resp.StatusCode, string(respBytes))
+		}
+
+		var result interface{}
+		if err := json.Unmarshal(respBytes, &result); err == nil {
+			return result, nil
+		}
+		return string(respBytes), nil
+	}
 }
 
 func createWecomHTTPToolExecutor(path string) types.ToolExecutor {

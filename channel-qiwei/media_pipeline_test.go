@@ -18,10 +18,11 @@ import (
 )
 
 type fakeRecognizer struct {
-	transcript       string
-	imageText        string
-	docText          string
-	submitAttachment parsedAttachment
+	transcript      string
+	imageText       string
+	docText         string
+	submitAudioData []byte
+	submitFormat    string
 }
 
 type fakeMediaStorage struct {
@@ -71,8 +72,9 @@ func (f *fakeRecognizer) ParseDocument(_ context.Context, attachment parsedAttac
 	return attachment, nil
 }
 
-func (f *fakeRecognizer) SubmitAudioTranscription(_ context.Context, attachment parsedAttachment) (string, error) {
-	f.submitAttachment = attachment
+func (f *fakeRecognizer) SubmitAudioTranscription(_ context.Context, audioData []byte, audioFormat string) (string, error) {
+	f.submitAudioData = audioData
+	f.submitFormat = audioFormat
 	return "task-1", nil
 }
 
@@ -160,7 +162,7 @@ func TestParseMessageVoiceReturnsTranscript(t *testing.T) {
 	}
 }
 
-func TestPrepareMediaForAgentVoiceUploadsToPublicURLBeforeASR(t *testing.T) {
+func TestPrepareMediaForAgentVoiceSubmitsBase64DataForASR(t *testing.T) {
 	app := newTestApp(t, "语音转写结果")
 	msgType, msgData := loadFixture(t, "qw-voice.json")
 
@@ -173,11 +175,14 @@ func TestPrepareMediaForAgentVoiceUploadsToPublicURLBeforeASR(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected fakeRecognizer, got %T", app.recognizer)
 	}
-	if !strings.HasPrefix(recognizer.submitAttachment.SourceURL, "https://public.example.com/media/") {
-		t.Fatalf("expected ASR to receive public URL, got %+v", recognizer.submitAttachment)
+	if len(recognizer.submitAudioData) == 0 {
+		t.Fatal("expected ASR to receive audio data bytes")
 	}
-	if !strings.HasSuffix(strings.ToLower(recognizer.submitAttachment.Name), ".wav") {
-		t.Fatalf("expected ASR attachment name to have wav extension after silk conversion, got %+v", recognizer.submitAttachment)
+	if recognizer.submitFormat != "wav" {
+		t.Fatalf("expected wav format after silk conversion, got %q", recognizer.submitFormat)
+	}
+	if string(recognizer.submitAudioData[:4]) != "RIFF" {
+		t.Fatal("expected wav RIFF header in submitted audio data")
 	}
 }
 

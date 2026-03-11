@@ -139,9 +139,13 @@ func TestVolcSpeechRecognizerSubmitAndQuery(t *testing.T) {
 				t.Fatalf("decode submit request: %v", err)
 			}
 			audio, _ := body["audio"].(map[string]any)
-			if anyToString(audio["url"]) != "https://example.com/audio.wav" {
-				t.Fatalf("unexpected audio payload: %+v", audio)
+			if anyToString(audio["data"]) == "" {
+				t.Fatal("expected base64 audio data in submit payload")
 			}
+			if anyToString(audio["format"]) != "wav" {
+				t.Fatalf("unexpected audio format: %q", anyToString(audio["format"]))
+			}
+			w.Header().Set("X-Api-Status-Code", "20000000")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		case "/query":
@@ -168,11 +172,7 @@ func TestVolcSpeechRecognizerSubmitAndQuery(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	taskID, err := recognizer.SubmitAudioTranscription(context.Background(), parsedAttachment{
-		Kind:      "audio",
-		Name:      "sample.wav",
-		SourceURL: "https://example.com/audio.wav",
-	})
+	taskID, err := recognizer.SubmitAudioTranscription(context.Background(), []byte("fake-wav-data"), "wav")
 	if err != nil {
 		t.Fatalf("SubmitAudioTranscription failed: %v", err)
 	}

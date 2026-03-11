@@ -19,15 +19,16 @@ import (
 
 // OutgoingMessage mirrors the TS OutgoingMessage type sent to channel adapters.
 type OutgoingMessage struct {
-	Channel                 string      `json:"channel"`
-	ChannelUserID           string      `json:"channelUserId"`
-	Content                 string      `json:"content"`
-	MessageType             string      `json:"messageType,omitempty"`
-	ChannelConversationID   string      `json:"channelConversationId,omitempty"`
-	ReplyToChannelMessageID string      `json:"replyToChannelMessageId,omitempty"`
-	SessionID               string      `json:"sessionId,omitempty"`
-	TraceID                 string      `json:"traceId,omitempty"`
-	Mentions                interface{} `json:"mentions,omitempty"`
+	Channel                 string                 `json:"channel"`
+	ChannelUserID           string                 `json:"channelUserId"`
+	Content                 string                 `json:"content"`
+	MessageType             string                 `json:"messageType,omitempty"`
+	ChannelConversationID   string                 `json:"channelConversationId,omitempty"`
+	ReplyToChannelMessageID string                 `json:"replyToChannelMessageId,omitempty"`
+	ChannelMeta             map[string]interface{} `json:"channelMeta,omitempty"`
+	SessionID               string                 `json:"sessionId,omitempty"`
+	TraceID                 string                 `json:"traceId,omitempty"`
+	Mentions                interface{}            `json:"mentions,omitempty"`
 }
 
 // Adapter is anything that can send a message to an external channel.
