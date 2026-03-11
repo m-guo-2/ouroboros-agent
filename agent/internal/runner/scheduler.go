@@ -1,0 +1,85 @@
+package runner
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"agent/internal/logger"
+	"agent/internal/storage"
+)
+
+const schedulerInterval = 30 * time.Second
+
+func StartDelayedTaskScheduler(ctx context.Context) {
+	logger.Boundary(ctx, "延时任务调度器已启动", "interval", schedulerInterval.String())
+
+	ticker := time.NewTicker(schedulerInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Boundary(ctx, "延时任务调度器已停止")
+			return
+		case <-ticker.C:
+			dispatchDueTasks(ctx)
+		}
+	}
+}
+
+func dispatchDueTasks(ctx context.Context) {
+	tasks, err := storage.QueryDueTasks()
+	if err != nil {
+		logger.Error(ctx, "扫描到期任务失败", "error", err.Error())
+		return
+	}
+	if len(tasks) == 0 {
+		return
+	}
+
+	logger.Business(ctx, "发现到期任务", "count", len(tasks))
+
+	for _, task := range tasks {
+		if err := storage.MarkTaskDispatched(task.ID); err != nil {
+			logger.Warn(ctx, "标记任务已投递失败", "taskId", task.ID, "error", err.Error())
+			continue
+		}
+
+		content := formatDelayedTaskEvent(task)
+		msgID := fmt.Sprintf("delayed-task-%s", task.ID)
+
+		err := EnqueueProcessRequest(ctx, ProcessRequest{
+			UserID:                task.UserID,
+			AgentID:               task.AgentID,
+			Content:               content,
+			Channel:               task.Channel,
+			ChannelUserID:         task.ChannelUserID,
+			ChannelConversationID: task.ChannelConversationID,
+			MessageType:           "text",
+			MessageID:             msgID,
+			SessionID:             task.SessionID,
+		})
+		if err != nil {
+			logger.Error(ctx, "投递延时任务失败", "taskId", task.ID, "error", err.Error())
+			continue
+		}
+
+		logger.Business(ctx, "延时任务已投递",
+			"taskId", task.ID, "sessionId", task.SessionID, "agentId", task.AgentID)
+	}
+}
+
+func formatDelayedTaskEvent(task storage.DelayedTask) string {
+	return fmt.Sprintf(`【系统事件：定时任务到期】
+task_id: %s
+创建时间: %s
+
+任务内容：
+%s
+
+这是你此前主动设定的定时任务，现已到期。
+请结合当前对话上下文和用户现状，判断该任务是否仍然适用，然后采取相应行动。
+如果情况已发生变化，请灵活调整执行方式或告知用户任务已到期但现状可能有变。`,
+		task.ID, task.CreatedAt, task.Task)
+}

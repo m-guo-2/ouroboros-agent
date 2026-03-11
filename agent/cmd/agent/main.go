@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -16,6 +16,7 @@ import (
 
 	"agent/internal/api"
 	"agent/internal/channels"
+	"agent/internal/config"
 	"agent/internal/dispatcher"
 	"agent/internal/github"
 	"agent/internal/logger"
@@ -29,76 +30,34 @@ var (
 	startTime     = time.Now()
 )
 
-// loadEnv reads a .env file and sets any vars not already in the environment.
-func loadEnv(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		if idx := strings.Index(line, " #"); idx >= 0 {
-			line = strings.TrimSpace(line[:idx])
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		k = strings.TrimSpace(k)
-		if os.Getenv(k) == "" {
-			os.Setenv(k, strings.TrimSpace(v))
-		}
-	}
-}
-
 func main() {
-	loadEnv(".env")
-	loadEnv("../.env")
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "1997"
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		os.Exit(1)
 	}
 
-	appVersion := os.Getenv("AGENT_APP_VERSION")
-	if appVersion == "" {
-		appVersion = "1.0.0"
-	}
-
-	appID := os.Getenv("AGENT_ID")
-	if appID == "" {
-		appID = "agent-instance"
-	}
-
-	logDir := os.Getenv("LOG_DIR")
-	if logDir == "" {
-		logDir = filepath.Join("data", "logs")
-	}
-	logger.Init(logDir)
+	logger.Init(cfg.LogDir)
 	defer logger.Flush()
-
-	// Resolve database path (env override or default relative to cwd).
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = filepath.Join("data", "config.db")
-	}
 
 	ctx := context.Background()
 
-	if err := storage.Init(dbPath); err != nil {
-		logger.Error(ctx, "数据库初始化失败", "error", err.Error(), "path", dbPath)
+	if cfg.ConfigPath != "" {
+		logger.Boundary(ctx, "已加载配置文件", "path", cfg.ConfigPath)
+	}
+
+	if err := storage.Init(cfg.DBPath); err != nil {
+		logger.Error(ctx, "数据库初始化失败", "error", err.Error(), "path", cfg.DBPath)
 		os.Exit(1)
 	}
 
-	if err := github.InitStore(); err != nil {
+	if err := github.InitStore(cfg.GitHub); err != nil {
 		logger.Error(ctx, "GitHub skill store 初始化失败", "error", err.Error())
 		os.Exit(1)
 	}
+
+	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+	go runner.StartDelayedTaskScheduler(schedulerCtx)
 
 	// Initialise channel adapters (feishu, qiwei, webui).
 	channels.InitBuiltinAdapters(func(key string) string {
@@ -118,14 +77,10 @@ func main() {
 	mux.HandleFunc("/api/data/channels/send", handleChannelSend)
 
 	// Admin API routes (sessions, settings, agents, skills, users, traces).
-	api.Mount(mux, logDir)
+	api.Mount(mux, cfg.LogDir)
 
-	// Serve admin SPA from admin/dist if available.
-	// In Go's ServeMux, "/" is the catch-all that fires when no other pattern matches,
-	// so it safely sits behind all /api/* routes.
-	adminDir := os.Getenv("ADMIN_DIST")
+	adminDir := cfg.AdminDist
 	if adminDir == "" {
-		// Resolve relative to cwd (agent/ runs from repo root by default).
 		cwd, _ := os.Getwd()
 		adminDir = filepath.Join(cwd, "admin", "dist")
 	}
@@ -135,12 +90,12 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + cfg.Port,
 		Handler: mux,
 	}
 
 	go func() {
-		logger.Boundary(ctx, "Agent 启动中", "port", port, "appId", appID, "version", appVersion)
+		logger.Boundary(ctx, "Agent 启动中", "port", cfg.Port, "appId", cfg.ID, "version", cfg.Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error(ctx, "服务启动失败", "error", err.Error())
 			os.Exit(1)
@@ -152,6 +107,7 @@ func main() {
 	<-stop
 
 	logger.Boundary(ctx, "收到终止信号，开始优雅关闭")
+	cancelScheduler()
 	runner.GracefulShutdown()
 
 	ctxShutdown, cancelShutdown := context.WithTimeout(ctx, 5*time.Second)

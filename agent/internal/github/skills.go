@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
+
+	"agent/internal/config"
 )
 
 // SkillData represents a skill stored in the GitHub repo.
@@ -62,13 +63,13 @@ type Store struct {
 // DefaultStore is the package-level singleton, set by InitStore.
 var DefaultStore *Store
 
-// InitStore creates the skill store from environment variables and loads the cache.
-func InitStore() error {
-	client, err := NewClientFromEnv()
+// InitStore creates the skill store from config and loads the cache.
+func InitStore(gh config.GitHub) error {
+	client, err := NewClientFromConfig(gh)
 	if err != nil {
 		return err
 	}
-	base := os.Getenv("GITHUB_SKILLS_PATH")
+	base := gh.SkillsPath
 	if base == "" {
 		base = defaultBasePath
 	}

@@ -30,7 +30,7 @@ type app struct {
 
 func newApp(cfg Config) *app {
 	log := newLogger(cfg.LogLevel)
-	storageRuntime := newObjectStorage(log)
+	storageRuntime := newObjectStorage(log, cfg.OSS)
 	return &app{
 		cfg:           cfg,
 		log:           log,

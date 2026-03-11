@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"agent/internal/config"
 )
 
 type Client struct {
@@ -66,29 +67,23 @@ func NewClient(token, owner, repo, branch string) *Client {
 	}
 }
 
-// NewClientFromEnv creates a Client from environment variables:
-//
-//	GITHUB_TOKEN         — personal access token (required)
-//	GITHUB_SKILLS_REPO   — "owner/repo" (required)
-//	GITHUB_SKILLS_BRANCH — branch name (default "main")
-func NewClientFromEnv() (*Client, error) {
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN not set")
+// NewClientFromConfig creates a Client from the GitHub config section.
+func NewClientFromConfig(gh config.GitHub) (*Client, error) {
+	if gh.Token == "" {
+		return nil, fmt.Errorf("github.token not set")
 	}
-	repoSlug := os.Getenv("GITHUB_SKILLS_REPO")
-	if repoSlug == "" {
-		return nil, fmt.Errorf("GITHUB_SKILLS_REPO not set")
+	if gh.SkillsRepo == "" {
+		return nil, fmt.Errorf("github.skills_repo not set")
 	}
-	parts := strings.SplitN(repoSlug, "/", 2)
+	parts := strings.SplitN(gh.SkillsRepo, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("GITHUB_SKILLS_REPO must be owner/repo, got %q", repoSlug)
+		return nil, fmt.Errorf("github.skills_repo must be owner/repo, got %q", gh.SkillsRepo)
 	}
-	branch := os.Getenv("GITHUB_SKILLS_BRANCH")
+	branch := gh.Branch
 	if branch == "" {
 		branch = "main"
 	}
-	return NewClient(token, parts[0], parts[1], branch), nil
+	return NewClient(gh.Token, parts[0], parts[1], branch), nil
 }
 
 func (c *Client) contentsURL(path string) string {

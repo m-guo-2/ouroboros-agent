@@ -23,8 +23,16 @@ type objectStorageRuntime struct {
 	cfg   sharedoss.Config
 }
 
-func newObjectStorage(logger *slog.Logger) objectStorageRuntime {
-	cfg := sharedoss.LoadConfigFromEnv()
+func newObjectStorage(logger *slog.Logger, ossCfg OSSConfig) objectStorageRuntime {
+	cfg := sharedoss.Config{
+		Endpoint:  ossCfg.Endpoint,
+		Bucket:    ossCfg.Bucket,
+		AccessKey: ossCfg.AccessKey,
+		SecretKey: ossCfg.SecretKey,
+		Region:    ossCfg.Region,
+		Prefix:    ossCfg.Prefix,
+		UseSSL:    ossCfg.UseSSL,
+	}
 	if !hasAnyOSSConfig(cfg) {
 		return objectStorageRuntime{}
 	}

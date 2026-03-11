@@ -628,6 +628,46 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	registerWecomBuiltinTools(registry, request.ProcessRequest)
 
+	registry.RegisterBuiltin("set_delayed_task", "设定一个延时任务，到期后系统会自动提醒你执行。用于定时提醒、后续跟进等场景。", types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"task":       map[string]interface{}{"type": "string", "description": "任务描述，到期时你会收到这段文字作为执行指令"},
+			"execute_at": map[string]interface{}{"type": "string", "description": "执行时间，ISO 8601 格式，例如 2025-03-12T10:00:00+08:00"},
+		},
+		Required: []string{"task", "execute_at"},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		task, _ := input["task"].(string)
+		task = strings.TrimSpace(task)
+		if task == "" {
+			return nil, fmt.Errorf("task is required")
+		}
+		executeAt, _ := input["execute_at"].(string)
+		executeAt = strings.TrimSpace(executeAt)
+		if executeAt == "" {
+			return nil, fmt.Errorf("execute_at is required")
+		}
+
+		dt := &storage.DelayedTask{
+			SessionID:             worker.SessionID,
+			AgentID:               request.AgentID,
+			UserID:                request.UserID,
+			Channel:               request.Channel,
+			ChannelUserID:         request.ChannelUserID,
+			ChannelConversationID: request.ChannelConversationID,
+			Task:                  task,
+			ExecuteAt:             executeAt,
+		}
+		if err := storage.CreateDelayedTask(dt); err != nil {
+			return nil, fmt.Errorf("create delayed task: %w", err)
+		}
+		return map[string]interface{}{
+			"taskId":    dt.ID,
+			"task":      dt.Task,
+			"executeAt": dt.ExecuteAt,
+			"status":    "scheduled",
+		}, nil
+	})
+
 	internalHandlers := map[string]types.ToolExecutor{
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)

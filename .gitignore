@@ -54,6 +54,9 @@ pnpm-lock.yaml
 agent/agent
 
 # Runtime data (SQLite)
+config.db
+config.db-shm
+config.db-wal
 data/config.db
 data/config.db-shm
 data/config.db-wal
@@ -88,3 +91,7 @@ temp/
 tmp/
 **/tmp/
 skills/
+
+# Local deploy configs
+deploy/config/agent.yaml
+deploy/config/qiwei.yaml

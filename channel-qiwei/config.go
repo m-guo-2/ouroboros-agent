@@ -1,64 +1,159 @@
 package main
 
 import (
-	"bufio"
 	"errors"
+	"flag"
+	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var ErrInvalidConfig = errors.New("invalid qiwei config")
 
 type Config struct {
-	APIBaseURL           string
-	Token                string
-	GUID                 string
-	Port                 string
-	AgentEnabled         bool
-	AgentServer          string
-	AgentID              string
-	LogLevel             string
-	RequestTimout        int
-	VolcArkBaseURL       string
-	VolcArkAPIKey        string
-	VolcVisionModel      string
-	VolcDocumentModel    string
-	VolcSpeechAppKey     string
-	VolcSpeechAccessKey  string
-	VolcSpeechResourceID string
-	VolcSpeechSubmitURL  string
-	VolcSpeechQueryURL   string
-	OSSPublicBaseURL     string
+	APIBaseURL  string `yaml:"api_base_url"`
+	Token       string `yaml:"token"`
+	GUID        string `yaml:"guid"`
+	Port        string `yaml:"port"`
+	LogLevel    string `yaml:"log_level"`
+	HTTPTimeout int    `yaml:"http_timeout"`
+
+	Agent AgentConfig `yaml:"agent"`
+	Volc  VolcConfig  `yaml:"volc"`
+	OSS   OSSConfig   `yaml:"oss"`
+
+	// 保留旧字段兼容，由 YAML 解析后填充
+	AgentEnabled         bool   `yaml:"-"`
+	AgentServer          string `yaml:"-"`
+	AgentID              string `yaml:"-"`
+	RequestTimout        int    `yaml:"-"`
+	VolcArkBaseURL       string `yaml:"-"`
+	VolcArkAPIKey        string `yaml:"-"`
+	VolcVisionModel      string `yaml:"-"`
+	VolcDocumentModel    string `yaml:"-"`
+	VolcSpeechAppKey     string `yaml:"-"`
+	VolcSpeechAccessKey  string `yaml:"-"`
+	VolcSpeechResourceID string `yaml:"-"`
+	VolcSpeechSubmitURL  string `yaml:"-"`
+	VolcSpeechQueryURL   string `yaml:"-"`
+	OSSPublicBaseURL     string `yaml:"-"`
+}
+
+type AgentConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	ServerURL string `yaml:"server_url"`
+	ID        string `yaml:"id"`
+}
+
+type VolcConfig struct {
+	Ark    VolcArkConfig    `yaml:"ark"`
+	Speech VolcSpeechConfig `yaml:"speech"`
+}
+
+type VolcArkConfig struct {
+	BaseURL       string `yaml:"base_url"`
+	APIKey        string `yaml:"api_key"`
+	VisionModel   string `yaml:"vision_model"`
+	DocumentModel string `yaml:"document_model"`
+}
+
+type VolcSpeechConfig struct {
+	AppKey     string `yaml:"app_key"`
+	AccessKey  string `yaml:"access_key"`
+	ResourceID string `yaml:"resource_id"`
+	SubmitURL  string `yaml:"submit_url"`
+	QueryURL   string `yaml:"query_url"`
+}
+
+type OSSConfig struct {
+	Endpoint     string `yaml:"endpoint"`
+	Bucket       string `yaml:"bucket"`
+	AccessKey    string `yaml:"access_key"`
+	SecretKey    string `yaml:"secret_key"`
+	Region       string `yaml:"region"`
+	Prefix       string `yaml:"prefix"`
+	UseSSL       bool   `yaml:"use_ssl"`
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 func LoadConfig() Config {
-	loadDotEnv("../.env")
-	loadDotEnv(".env")
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "配置文件路径")
+	flag.Parse()
 
-	agentEnabled := strings.ToLower(getenv("AGENT_ENABLED", "true")) != "false"
+	cfg := configDefaults()
 
-	return Config{
-		APIBaseURL:           strings.TrimRight(getenv("QIWEI_API_BASE_URL", "http://manager.qiweapi.com/qiwe"), "/"),
-		Token:                getenv("QIWEI_TOKEN", ""),
-		GUID:                 getenv("QIWEI_GUID", ""),
-		Port:                 getenv("QIWEI_BOT_PORT", "2000"),
-		AgentEnabled:         agentEnabled,
-		AgentServer:          strings.TrimRight(getenv("AGENT_SERVER_URL", "http://localhost:1997"), "/"),
-		AgentID:              getenv("AGENT_ID", ""),
-		LogLevel:             strings.ToLower(getenv("QIWEI_LOG_LEVEL", "info")),
-		RequestTimout:        parseIntOrDefault(getenv("QIWEI_HTTP_TIMEOUT_SECONDS", "25"), 25),
-		VolcArkBaseURL:       strings.TrimRight(getenv("VOLC_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"), "/"),
-		VolcArkAPIKey:        getenv("VOLC_ARK_API_KEY", ""),
-		VolcVisionModel:      getenv("VOLC_VISION_MODEL", ""),
-		VolcDocumentModel:    getenv("VOLC_DOCUMENT_MODEL", ""),
-		VolcSpeechAppKey:     getenv("VOLC_SPEECH_APP_KEY", ""),
-		VolcSpeechAccessKey:  getenv("VOLC_SPEECH_ACCESS_KEY", ""),
-		VolcSpeechResourceID: getenv("VOLC_SPEECH_RESOURCE_ID", ""),
-		VolcSpeechSubmitURL:  strings.TrimRight(getenv("VOLC_SPEECH_SUBMIT_URL", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"), "/"),
-		VolcSpeechQueryURL:   strings.TrimRight(getenv("VOLC_SPEECH_QUERY_URL", "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"), "/"),
-		OSSPublicBaseURL:     strings.TrimRight(getenv("OSS_PUBLIC_BASE_URL", ""), "/"),
+	if configPath == "" {
+		for _, c := range []string{"config.yaml", "../config.yaml"} {
+			if _, err := os.Stat(c); err == nil {
+				configPath = c
+				break
+			}
+		}
 	}
+
+	if configPath != "" {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "读取配置文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "解析配置文件失败: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	cfg.flatten()
+	return cfg
+}
+
+func configDefaults() Config {
+	return Config{
+		APIBaseURL:  "http://manager.qiweapi.com/qiwe",
+		Port:        "2000",
+		LogLevel:    "info",
+		HTTPTimeout: 25,
+		Agent: AgentConfig{
+			Enabled:   true,
+			ServerURL: "http://localhost:1997",
+		},
+		Volc: VolcConfig{
+			Ark: VolcArkConfig{
+				BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+			},
+			Speech: VolcSpeechConfig{
+				SubmitURL: "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit",
+				QueryURL:  "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query",
+			},
+		},
+	}
+}
+
+// flatten 将嵌套结构铺平到旧字段，保持下游代码兼容
+func (c *Config) flatten() {
+	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
+	c.LogLevel = strings.ToLower(c.LogLevel)
+
+	c.AgentEnabled = c.Agent.Enabled
+	c.AgentServer = strings.TrimRight(c.Agent.ServerURL, "/")
+	c.AgentID = c.Agent.ID
+	c.RequestTimout = c.HTTPTimeout
+
+	c.VolcArkBaseURL = strings.TrimRight(c.Volc.Ark.BaseURL, "/")
+	c.VolcArkAPIKey = c.Volc.Ark.APIKey
+	c.VolcVisionModel = c.Volc.Ark.VisionModel
+	c.VolcDocumentModel = c.Volc.Ark.DocumentModel
+
+	c.VolcSpeechAppKey = c.Volc.Speech.AppKey
+	c.VolcSpeechAccessKey = c.Volc.Speech.AccessKey
+	c.VolcSpeechResourceID = c.Volc.Speech.ResourceID
+	c.VolcSpeechSubmitURL = strings.TrimRight(c.Volc.Speech.SubmitURL, "/")
+	c.VolcSpeechQueryURL = strings.TrimRight(c.Volc.Speech.QueryURL, "/")
+
+	c.OSSPublicBaseURL = strings.TrimRight(c.OSS.PublicBaseURL, "/")
 }
 
 func (c Config) Validate() error {
@@ -66,44 +161,4 @@ func (c Config) Validate() error {
 		return ErrInvalidConfig
 	}
 	return nil
-}
-
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func loadDotEnv(path string) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return
-	}
-	file, err := os.Open(abs)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		eq := strings.Index(line, "=")
-		if eq <= 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:eq])
-		val := strings.TrimSpace(line[eq+1:])
-		val = strings.Trim(val, `"'`)
-		if key == "" {
-			continue
-		}
-		if _, exists := os.LookupEnv(key); !exists {
-			_ = os.Setenv(key, val)
-		}
-	}
 }

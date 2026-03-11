@@ -245,6 +245,23 @@ func runSchema(db *sql.DB) error {
 			created_at TEXT DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_compactions_session ON context_compactions(session_id)`,
+
+		// Delayed tasks for proactive agent capability
+		`CREATE TABLE IF NOT EXISTS delayed_tasks (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			channel TEXT NOT NULL DEFAULT '',
+			channel_user_id TEXT NOT NULL DEFAULT '',
+			channel_conversation_id TEXT NOT NULL DEFAULT '',
+			task TEXT NOT NULL,
+			execute_at TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_delayed_tasks_status_time ON delayed_tasks(status, execute_at)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
