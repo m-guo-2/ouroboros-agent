@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react"
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
+import { Component, type ErrorInfo, type ReactNode } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { AppLayout } from "@/components/layout/app-layout"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -33,16 +34,20 @@ function PageFallback() {
   )
 }
 
-// Error boundary
-import { Component, type ReactNode, type ErrorInfo } from "react"
-
 interface ErrorBoundaryProps { children: ReactNode }
 interface ErrorBoundaryState { error: Error | null }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null }
-  static getDerivedStateFromError(error: Error) { return { error } }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Page error:", error, info) }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Page error:", error, info)
+  }
+
   render() {
     if (this.state.error) {
       return (
@@ -54,18 +59,22 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
           <p className="text-sm text-slate-500 mt-1 max-w-md">{this.state.error.message}</p>
           <button
             className="mt-4 px-4 py-2 text-sm font-medium text-brand-600 hover:bg-brand-50 rounded-md transition-colors cursor-pointer"
-            onClick={() => { this.setState({ error: null }); window.location.reload() }}
+            onClick={() => {
+              this.setState({ error: null })
+              window.location.reload()
+            }}
           >
             重新加载
           </button>
         </div>
       )
     }
+
     return this.props.children
   }
 }
 
-export default function App() {
+export default function RootApp() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>

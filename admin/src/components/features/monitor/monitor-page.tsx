@@ -138,7 +138,6 @@ export function MonitorPage() {
             <ConversationTimeline
               exchanges={exchanges}
               compactions={compactions}
-              traces={fullTraces}
               isProcessing={!!isProcessing}
               selectedExchangeIndex={effectiveExchangeIndex}
               onSelectExchange={handleSelectExchange}

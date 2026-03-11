@@ -1,4 +1,3 @@
-import { useCallback } from "react"
 import { Activity, Search, Trash2, RefreshCw } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -37,8 +36,8 @@ export function SessionList({
     : []
 
   return (
-    <div className="w-60 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
-      <div className="p-3 border-b border-slate-100 flex-shrink-0">
+    <div className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
+      <div className="shrink-0 border-b border-slate-100 p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-semibold text-slate-900">会话</h2>
           <div className="flex items-center gap-1.5">
@@ -89,13 +88,13 @@ export function SessionList({
                   )}
                 >
                   <div className="flex items-center gap-2">
-                    {isProcessing && <span className="h-2 w-2 rounded-full bg-green-500 animate-live-pulse flex-shrink-0" />}
-                    <span className={cn("text-xs font-medium truncate flex-1", isSelected ? "text-brand-700" : "text-slate-900")}>
+                    {isProcessing && <span className="h-2 w-2 shrink-0 animate-live-pulse rounded-full bg-green-500" />}
+                    <span className={cn("flex-1 truncate text-xs font-medium", isSelected ? "text-brand-700" : "text-slate-900")}>
                       {session.channelName || session.title || session.id?.slice(0, 10) || "未知会话"}
                     </span>
                     <button
                       onClick={(e) => onDeleteSession(e, session.id)}
-                      className="opacity-0 group-hover/item:opacity-100 p-1 rounded hover:bg-red-100 text-slate-400 hover:text-red-600 transition-all flex-shrink-0"
+                      className="rounded p-1 text-slate-400 opacity-0 transition-all hover:bg-red-100 hover:text-red-600 group-hover/item:opacity-100 shrink-0"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>

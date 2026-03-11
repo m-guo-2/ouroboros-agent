@@ -1,5 +1,5 @@
 import type { MessageData, ExecutionTrace, ExecutionStep, CompactionData } from "@/api/types"
-import type { MessageExchange, TimelineEvent, RoundData, IterationData, ToolPair } from "./types"
+import type { MessageExchange, TimelineEvent, RoundData, IterationData } from "./types"
 
 export function buildExchanges(
   messages: MessageData[],

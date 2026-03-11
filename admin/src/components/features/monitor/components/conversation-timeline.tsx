@@ -3,7 +3,6 @@ import { User, Bot, Settings2, MessageSquare } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { cn, timeAgo } from "@/lib/utils"
-import type { ExecutionTrace } from "@/api/types"
 import type { MessageExchange } from "../lib/types"
 import { CompactionEvent } from "./compaction-event"
 import { ExchangeSkeleton } from "./exchange-skeleton"
@@ -12,7 +11,6 @@ import type { CompactionData } from "@/api/types"
 interface Props {
   exchanges: MessageExchange[]
   compactions: CompactionData[]
-  traces: Record<string, ExecutionTrace>
   isProcessing: boolean
   selectedExchangeIndex: number | null
   onSelectExchange: (index: number) => void
@@ -20,7 +18,7 @@ interface Props {
 }
 
 export function ConversationTimeline({
-  exchanges, compactions, traces, isProcessing,
+  exchanges, compactions, isProcessing,
   selectedExchangeIndex, onSelectExchange, isLoadingMessages,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -107,7 +105,7 @@ export function ConversationTimeline({
                 {/* User message */}
                 {exchange.isSystemInitiated ? (
                   <div className="flex gap-3 px-5 py-3">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-50 flex-shrink-0 mt-0.5">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-50">
                       <Settings2 className="h-3.5 w-3.5 text-purple-600" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -124,7 +122,7 @@ export function ConversationTimeline({
                   </div>
                 ) : (
                   <div className="flex gap-3 px-5 py-3">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-50 flex-shrink-0 mt-0.5">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50">
                       <User className="h-3.5 w-3.5 text-brand-600" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -165,7 +163,7 @@ export function ConversationTimeline({
                 {/* Assistant message */}
                 {exchange.assistantMessage && (
                   <div className="flex gap-3 px-5 py-3">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 flex-shrink-0 mt-0.5">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
                       <Bot className="h-3.5 w-3.5 text-slate-600" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -185,7 +183,7 @@ export function ConversationTimeline({
                 {/* Processing placeholder */}
                 {!exchange.assistantMessage && isRunning && (
                   <div className="flex gap-3 px-5 py-3">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 flex-shrink-0 mt-0.5">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
                       <Bot className="h-3.5 w-3.5 text-slate-400 animate-pulse" />
                     </div>
                     <div className="flex-1"><span className="text-xs text-slate-400">生成中...</span></div>
