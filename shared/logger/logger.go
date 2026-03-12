@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -30,8 +29,9 @@ type traceCtx struct {
 var (
 	logDir  string
 	service string
-	mu      sync.Mutex
-	files   = make(map[string]*os.File)
+
+	writer      *asyncWriter
+	sqliteStore *SQLiteStore
 
 	retentionDays = map[Level]int{
 		LBoundary: 30,
@@ -46,11 +46,34 @@ func Init(dir, svc string) {
 	if dir == "" {
 		return
 	}
-	for _, level := range []Level{LBoundary, LBusiness, LDetail} {
-		_ = os.MkdirAll(filepath.Join(dir, string(level)), 0755)
+
+	var backends []LogWriter
+
+	fileStore, err := NewFileStore(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "logger: failed to init file store: %v\n", err)
+	} else {
+		backends = append(backends, fileStore)
 	}
-	_ = os.MkdirAll(filepath.Join(dir, "detail", "llm-io"), 0755)
+
+	ss, err := NewSQLiteStore(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "logger: failed to init sqlite store: %v\n", err)
+	} else {
+		sqliteStore = ss
+		backends = append(backends, ss)
+	}
+
+	if len(backends) > 0 {
+		mw := newMultiWriter(backends...)
+		writer = newAsyncWriter(mw)
+	}
+
 	go cleanupLoop()
+}
+
+func GetReader() LogReader {
+	return sqliteStore
 }
 
 func WithTrace(ctx context.Context, traceID, sessionID string) context.Context {
@@ -140,35 +163,10 @@ func writeLog(ctx context.Context, level Level, msg string, args ...any) {
 		entry[key] = args[i+1]
 	}
 
-	writeToFile(level, now, entry)
+	if writer != nil {
+		writer.Append(level, entry)
+	}
 	writeToConsole(level, now, msg, entry)
-}
-
-func writeToFile(level Level, t time.Time, entry map[string]any) {
-	if logDir == "" {
-		return
-	}
-	date := t.Format("2006-01-02")
-	key := string(level) + "/" + date
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	f, ok := files[key]
-	if !ok {
-		path := filepath.Join(logDir, key+".jsonl")
-		f, err = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return
-		}
-		files[key] = f
-	}
-	_, _ = f.Write(data)
-	_, _ = f.Write([]byte("\n"))
 }
 
 const (
@@ -283,7 +281,7 @@ func compactExtra(entry map[string]any) string {
 }
 
 func WriteLLMIO(ctx context.Context, iteration int, request, response any) string {
-	if logDir == "" {
+	if writer == nil {
 		return ""
 	}
 	traceID, _ := GetTrace(ctx)
@@ -291,8 +289,6 @@ func WriteLLMIO(ctx context.Context, iteration int, request, response any) strin
 		traceID = "unknown"
 	}
 	ref := fmt.Sprintf("%s_iter%d", traceID, iteration)
-	dir := filepath.Join(logDir, "detail", "llm-io")
-	path := filepath.Join(dir, ref+".json")
 
 	payload := map[string]any{
 		"traceId":   traceID,
@@ -305,13 +301,15 @@ func WriteLLMIO(ctx context.Context, iteration int, request, response any) strin
 	if err != nil {
 		return ""
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return ""
-	}
+
+	writer.WriteLLMIO(ref, traceID, iteration, data)
 	return ref
 }
 
 func ReadLLMIO(ref string) ([]byte, error) {
+	if sqliteStore != nil {
+		return sqliteStore.ReadLLMIO(ref)
+	}
 	if logDir == "" {
 		return nil, fmt.Errorf("log dir not initialized")
 	}
@@ -320,11 +318,9 @@ func ReadLLMIO(ref string) ([]byte, error) {
 }
 
 func Flush() {
-	mu.Lock()
-	defer mu.Unlock()
-	for k, f := range files {
-		_ = f.Close()
-		delete(files, k)
+	if writer != nil {
+		writer.Flush()
+		writer = nil
 	}
 }
 
@@ -364,20 +360,23 @@ func cleanupOldFiles() {
 
 	llmDir := filepath.Join(logDir, "detail", "llm-io")
 	entries, err := os.ReadDir(llmDir)
-	if err != nil {
-		return
+	if err == nil {
+		cutoff := now.AddDate(0, 0, -7)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				_ = os.Remove(filepath.Join(llmDir, e.Name()))
+			}
+		}
 	}
-	cutoff := now.AddDate(0, 0, -7)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(llmDir, e.Name()))
-		}
+
+	if sqliteStore != nil {
+		_ = sqliteStore.Cleanup(retentionDays[LBusiness])
 	}
 }

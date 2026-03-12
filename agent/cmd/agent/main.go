@@ -73,7 +73,7 @@ func main() {
 	mux.HandleFunc("/api/channels/incoming", dispatcher.HandleIncoming)
 	mux.HandleFunc("/api/data/channels/send", handleChannelSend)
 
-	api.Mount(mux, cfg.LogDir)
+	api.Mount(mux, sharedlogger.GetReader())
 
 	adminDir := cfg.AdminDist
 	if adminDir == "" {

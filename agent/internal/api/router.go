@@ -5,11 +5,13 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
 // Mount registers all admin API routes on mux.
 // staticDir is the path to the built admin SPA (dist/); pass "" to skip static serving.
-func Mount(mux *http.ServeMux, logDir string) {
+func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	// Agent sessions
 	mux.HandleFunc("/api/agent-sessions", handleSessions)
 	mux.HandleFunc("/api/agent-sessions/", handleSessionsWithID)
@@ -39,8 +41,8 @@ func Mount(mux *http.ServeMux, logDir string) {
 	mux.HandleFunc("/api/users", handleUsers)
 	mux.HandleFunc("/api/users/", handleUsersWithID)
 
-	// Traces (JSONL log reader)
-	th := &tracesHandler{logDir: logDir}
+	// Traces (SQLite reader)
+	th := &tracesHandler{reader: logReader}
 	mux.Handle("/api/traces", th)
 	mux.Handle("/api/traces/", th)
 

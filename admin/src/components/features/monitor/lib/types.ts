@@ -15,6 +15,12 @@ export interface IterationData {
   errorSteps: ExecutionStep[]
 }
 
+export type FlatEvent =
+  | { type: "model-output"; thinkings: ExecutionStep[]; llmCall?: ExecutionStep }
+  | { type: "tool-call"; step: ExecutionStep }
+  | { type: "tool-result"; step: ExecutionStep; callStep?: ExecutionStep }
+  | { type: "error"; step: ExecutionStep }
+
 export interface MessageExchange {
   userMessage: Pick<MessageData, "role" | "content"> & Partial<MessageData>
   trace?: ExecutionTrace

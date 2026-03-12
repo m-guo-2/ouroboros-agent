@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo } from "react"
-import { User, Bot, Settings2, MessageSquare } from "lucide-react"
+import { Zap, Bot, MessageSquare } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { cn, timeAgo } from "@/lib/utils"
@@ -102,43 +102,26 @@ export function ConversationTimeline({
                 )}
                 onClick={() => onSelectExchange(exchange.exchangeIndex)}
               >
-                {/* User message */}
-                {exchange.isSystemInitiated ? (
-                  <div className="flex gap-3 px-5 py-3">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-50">
-                      <Settings2 className="h-3.5 w-3.5 text-purple-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-purple-600">系统</span>
-                        {exchange.userMessage.createdAt && (
-                          <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-700 mt-0.5 leading-relaxed whitespace-pre-wrap">
-                        {exchange.userMessage.content || "(系统触发)"}
-                      </p>
-                    </div>
+                {/* External event */}
+                <div className="flex gap-3 px-5 py-3">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50">
+                    <Zap className="h-3.5 w-3.5 text-brand-600" />
                   </div>
-                ) : (
-                  <div className="flex gap-3 px-5 py-3">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50">
-                      <User className="h-3.5 w-3.5 text-brand-600" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-brand-600">外部事件</span>
+                      {exchange.userMessage.createdAt && (
+                        <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
+                      )}
+                      {exchange.userMessage.initiator && exchange.userMessage.initiator !== "user" && (
+                        <Badge variant="outline" className="text-[10px]">{exchange.userMessage.initiator}</Badge>
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-slate-500">用户</span>
-                        {exchange.userMessage.createdAt && (
-                          <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
-                        )}
-                        {exchange.userMessage.initiator && exchange.userMessage.initiator !== "user" && (
-                          <Badge variant="outline" className="text-[10px]">{exchange.userMessage.initiator}</Badge>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-900 mt-0.5 leading-relaxed">{exchange.userMessage.content}</p>
-                    </div>
+                    <p className="text-sm text-slate-900 mt-0.5 leading-relaxed whitespace-pre-wrap">
+                      {exchange.userMessage.content || "(外部触发)"}
+                    </p>
                   </div>
-                )}
+                </div>
 
                 {/* Trace indicator */}
                 {trace && (

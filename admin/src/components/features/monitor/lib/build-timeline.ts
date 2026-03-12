@@ -1,5 +1,5 @@
 import type { MessageData, ExecutionTrace, ExecutionStep, CompactionData } from "@/api/types"
-import type { MessageExchange, TimelineEvent, RoundData, IterationData } from "./types"
+import type { MessageExchange, TimelineEvent, RoundData, IterationData, FlatEvent } from "./types"
 
 export function buildExchanges(
   messages: MessageData[],
@@ -31,7 +31,7 @@ export function buildExchanges(
       exchanges.push({
         userMessage: {
           role: "user" as const,
-          content: isSystemRole ? msg.content : "(系统触发)",
+          content: msg.content || "(外部触发)",
         },
         assistantMessage: isSystemRole ? undefined : msg,
         trace: msg.traceId ? traces[msg.traceId] : undefined,
@@ -175,4 +175,59 @@ export function groupStepsByIteration(steps: ExecutionStep[]): IterationData[] {
   }
 
   return Array.from(iterMap.values()).sort((a, b) => a.iteration - b.iteration)
+}
+
+/**
+ * Flatten trace steps into a sequential list of events for display.
+ * Merges thinking + llm_call of the same iteration into a single "model-output" event.
+ * Skips absorb/compact (handled elsewhere).
+ */
+export function flattenSteps(steps: ExecutionStep[]): FlatEvent[] {
+  const events: FlatEvent[] = []
+  const toolCallMap = new Map<string, ExecutionStep>()
+
+  // Group thinkings and llm_call by iteration
+  const iterThinkings = new Map<number, ExecutionStep[]>()
+  const iterLLMCall = new Map<number, ExecutionStep>()
+
+  for (const step of steps) {
+    if (step.type === "absorb" || step.type === "compact") continue
+
+    if (step.type === "thinking") {
+      const iter = step.iteration ?? 0
+      if (!iterThinkings.has(iter)) iterThinkings.set(iter, [])
+      iterThinkings.get(iter)!.push(step)
+    } else if (step.type === "llm_call") {
+      iterLLMCall.set(step.iteration ?? 0, step)
+    } else if (step.type === "tool_call") {
+      if (step.toolCallId) toolCallMap.set(step.toolCallId, step)
+    }
+  }
+
+  // Build events in timestamp order
+  const sorted = [...steps].filter(s => s.type !== "absorb" && s.type !== "compact")
+  const emittedIterations = new Set<number>()
+
+  for (const step of sorted) {
+    const iter = step.iteration ?? 0
+
+    if (step.type === "thinking" || step.type === "llm_call") {
+      if (emittedIterations.has(iter)) continue
+      emittedIterations.add(iter)
+      events.push({
+        type: "model-output",
+        thinkings: iterThinkings.get(iter) ?? [],
+        llmCall: iterLLMCall.get(iter),
+      })
+    } else if (step.type === "tool_call") {
+      events.push({ type: "tool-call", step })
+    } else if (step.type === "tool_result") {
+      const callStep = step.toolCallId ? toolCallMap.get(step.toolCallId) : undefined
+      events.push({ type: "tool-result", step, callStep })
+    } else if (step.type === "error") {
+      events.push({ type: "error", step })
+    }
+  }
+
+  return events
 }

@@ -1,19 +1,15 @@
 package api
 
 import (
-	"bufio"
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
-// completedTraceCache holds immutable traces whose status is "completed" or "error".
-// Completed traces never change, so we build them once and cache forever.
 var completedTraceCache struct {
 	mu    sync.RWMutex
 	items map[string]*executionTrace
@@ -23,55 +19,44 @@ func init() {
 	completedTraceCache.items = make(map[string]*executionTrace)
 }
 
-// tracesHandler serves /api/traces/* routes.
-// logDir is the root log directory (same value passed to logger.Init).
 type tracesHandler struct {
-	logDir string
+	reader sharedlogger.LogReader
 }
 
 func (h *tracesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/traces")
 	path = strings.TrimPrefix(path, "/")
 
-	// GET /api/traces  — list (by sessionId or recent)
 	if path == "" {
 		h.listTraces(w, r)
 		return
 	}
-
-	// GET /api/traces/active
 	if path == "active" {
 		ok(w, []interface{}{})
 		return
 	}
-	// GET /api/traces/recent-summaries
 	if path == "recent-summaries" || strings.HasPrefix(path, "recent-summaries") {
 		h.listRecentSummaries(w, r)
 		return
 	}
 
-	// /api/traces/{traceId}/llm-io[/{ref}]
 	parts := strings.SplitN(path, "/", 3)
 	traceID := parts[0]
 	if len(parts) >= 2 && parts[1] == "llm-io" {
 		if len(parts) == 3 && parts[2] != "" {
 			h.serveLLMIO(w, parts[2])
 		} else {
-			refs := h.listLLMIORefs(traceID)
-			ok(w, refs)
+			h.listLLMIORefs(w, traceID)
 		}
 		return
 	}
 
-	// GET /api/traces/{traceId}
 	h.serveTrace(w, r, traceID)
 }
 
 // --------------------------------------------------------------------------
-// Trace assembly from JSONL logs
+// Trace types
 // --------------------------------------------------------------------------
-
-type logLine map[string]interface{}
 
 type executionStep struct {
 	Index        int         `json:"index"`
@@ -95,10 +80,8 @@ type executionStep struct {
 	StopReason   string      `json:"stopReason,omitempty"`
 	CostUsd      interface{} `json:"costUsd,omitempty"`
 	LLMIORef     string      `json:"llmIORef,omitempty"`
-	// Absorb event fields
 	AbsorbRound   int `json:"absorbRound,omitempty"`
 	AbsorbedCount int `json:"absorbedCount,omitempty"`
-	// Compact event fields
 	TokensBefore  int `json:"tokensBefore,omitempty"`
 	TokensAfter   int `json:"tokensAfter,omitempty"`
 	ArchivedCount int `json:"archivedCount,omitempty"`
@@ -130,60 +113,25 @@ func parseTimestamp(ts string) int64 {
 	return t.UnixMilli()
 }
 
-func recentDateStrings(n int) []string {
-	var dates []string
-	for i := 0; i < n; i++ {
-		dates = append(dates, time.Now().AddDate(0, 0, -i).Format("2006-01-02"))
-	}
-	return dates
-}
-
-func (h *tracesHandler) readBusinessJSONL(date string) []logLine {
-	path := filepath.Join(h.logDir, "business", date+".jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	var out []logLine
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" {
-			continue
-		}
-		var m logLine
-		if err := json.Unmarshal([]byte(line), &m); err == nil {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-func (h *tracesHandler) getAvailableDates() []string {
-	dir := filepath.Join(h.logDir, "business")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var dates []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			dates = append(dates, strings.TrimSuffix(e.Name(), ".jsonl"))
-		}
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
-	return dates
-}
-
-func strField(m logLine, key string) string {
+func strField(m map[string]interface{}, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
+// --------------------------------------------------------------------------
+// Trace assembly from LogReader events
+// --------------------------------------------------------------------------
+
 func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
+	if h.reader == nil {
+		return nil
+	}
+
+	events, err := h.reader.ReadTraceEvents(traceID)
+	if err != nil || len(events) == 0 {
+		return nil
+	}
+
 	var steps []executionStep
 	var startedAt int64
 	var completedAtVal int64
@@ -192,75 +140,72 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 	var inputTokens, outputTokens, totalCostUsd float64
 	var agentID, userID, channel, sessionID string
 
-	for _, date := range recentDateStrings(7) {
-		rows := h.readBusinessJSONL(date)
-		for _, row := range rows {
-			if strField(row, "traceId") != traceID {
-				continue
-			}
-			ts := parseTimestamp(strField(row, "time"))
-			event := strField(row, "traceEvent")
-			iter := 1
-			if v, ok := row["iteration"].(float64); ok {
-				iter = int(v)
-			}
+	for _, ev := range events {
+		row := ev.Raw
+		ts := parseTimestamp(strField(row, "time"))
+		event := strField(row, "traceEvent")
+		iter := 1
+		if v, ok := row["iteration"].(float64); ok {
+			iter = int(v)
+		}
 
-			if sessionID == "" {
-				sessionID = strField(row, "sessionId")
-			}
+		if sessionID == "" {
+			sessionID = strField(row, "sessionId")
+		}
 
-			switch event {
-			case "start":
+		switch event {
+		case "start":
+			if startedAt == 0 {
 				startedAt = ts
 				sessionID = strField(row, "sessionId")
 				agentID = strField(row, "agentId")
 				userID = strField(row, "userId")
 				channel = strField(row, "channel")
-			case "done":
-				completedAtVal = ts
-				hasCompleted = true
-				if row["error"] != nil {
-					status = "error"
-				} else {
-					status = "completed"
-				}
-				if v, ok := row["inputTokens"].(float64); ok {
-					inputTokens = v
-				}
-				if v, ok := row["outputTokens"].(float64); ok {
-					outputTokens = v
-				}
-				if v, ok := row["totalCostUsd"].(float64); ok {
-					totalCostUsd = v
-				}
-			case "thinking":
-				steps = append(steps, executionStep{
-					Index: len(steps), Iteration: iter, Timestamp: ts,
-					Type: "thinking", Thinking: strField(row, "thinking"),
-					Source: strField(row, "source"),
-				})
-			case "tool_call":
-				steps = append(steps, executionStep{
-					Index: len(steps), Iteration: iter, Timestamp: ts,
-					Type: "tool_call", ToolCallID: strField(row, "toolCallId"),
-					ToolName: strField(row, "tool"), ToolInput: row["toolInput"],
-				})
-			case "tool_result":
-				steps = append(steps, executionStep{
-					Index: len(steps), Iteration: iter, Timestamp: ts,
-					Type: "tool_result", ToolCallID: strField(row, "toolCallId"),
-					ToolName: strField(row, "tool"), ToolResult: row["toolResult"],
-					ToolDuration: row["toolDuration"], ToolSuccess: row["toolSuccess"],
-				})
-			case "llm_call":
-				step := executionStep{
-					Index: len(steps), Iteration: iter, Timestamp: ts,
-					Type: "llm_call", Model: strField(row, "model"),
-					StopReason: strField(row, "stopReason"), LLMIORef: strField(row, "llmIORef"),
-					InputTokens: row["inputTokens"], OutputTokens: row["outputTokens"],
-					DurationMs: row["durationMs"], CostUsd: row["costUsd"],
-				}
-				steps = append(steps, step)
+			}
+		case "done":
+			completedAtVal = ts
+			hasCompleted = true
+			if row["error"] != nil {
+				status = "error"
+			} else {
+				status = "completed"
+			}
+			if v, ok := row["inputTokens"].(float64); ok {
+				inputTokens = v
+			}
+			if v, ok := row["outputTokens"].(float64); ok {
+				outputTokens = v
+			}
+			if v, ok := row["totalCostUsd"].(float64); ok {
+				totalCostUsd = v
+			}
+		case "thinking":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "thinking", Thinking: strField(row, "thinking"),
+				Source: strField(row, "source"),
+			})
+		case "tool_call":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "tool_call", ToolCallID: strField(row, "toolCallId"),
+				ToolName: strField(row, "tool"), ToolInput: row["toolInput"],
+			})
+		case "tool_result":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "tool_result", ToolCallID: strField(row, "toolCallId"),
+				ToolName: strField(row, "tool"), ToolResult: row["toolResult"],
+				ToolDuration: row["toolDuration"], ToolSuccess: row["toolSuccess"],
+			})
+		case "llm_call":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "llm_call", Model: strField(row, "model"),
+				StopReason: strField(row, "stopReason"), LLMIORef: strField(row, "llmIORef"),
+				InputTokens: row["inputTokens"], OutputTokens: row["outputTokens"],
+				DurationMs: row["durationMs"], CostUsd: row["costUsd"],
+			})
 		case "absorb":
 			step := executionStep{
 				Index: len(steps), Iteration: iter, Timestamp: ts,
@@ -297,14 +242,22 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 				Index: len(steps), Iteration: iter, Timestamp: ts,
 				Type: "error", Error: errMsg,
 			})
-			}
+		case "empty_response_retry":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "empty_response_retry",
+			})
+		case "attachment_guard":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type: "attachment_guard",
+			})
 		}
 	}
 
 	if startedAt == 0 && len(steps) == 0 {
 		return nil
 	}
-
 	if startedAt == 0 && len(steps) > 0 {
 		startedAt = steps[0].Timestamp
 	}
@@ -326,7 +279,6 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 }
 
 func (h *tracesHandler) serveTrace(w http.ResponseWriter, r *http.Request, traceID string) {
-	// Fast path: completed traces are immutable, serve from cache.
 	completedTraceCache.mu.RLock()
 	if cached, hit := completedTraceCache.items[traceID]; hit {
 		completedTraceCache.mu.RUnlock()
@@ -341,7 +293,6 @@ func (h *tracesHandler) serveTrace(w http.ResponseWriter, r *http.Request, trace
 		return
 	}
 
-	// Cache completed/error traces — they will never change.
 	if t.Status == "completed" || t.Status == "error" {
 		completedTraceCache.mu.Lock()
 		completedTraceCache.items[traceID] = t
@@ -351,11 +302,13 @@ func (h *tracesHandler) serveTrace(w http.ResponseWriter, r *http.Request, trace
 	ok(w, t)
 }
 
-// listTraces handles GET /api/traces?sessionId=&limit=
 func (h *tracesHandler) listTraces(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	sessionID := q.Get("sessionId")
+	if h.reader == nil {
+		ok(w, []interface{}{})
+		return
+	}
 
+	q := r.URL.Query()
 	limit := 50
 	if l := q.Get("limit"); l != "" {
 		if n, err := parseInt(l); err == nil && n > 0 {
@@ -363,50 +316,30 @@ func (h *tracesHandler) listTraces(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	dates := h.getAvailableDates()
-	// Also include today even if not in dir yet.
-	today := time.Now().Format("2006-01-02")
-	if len(dates) == 0 || dates[0] != today {
-		dates = append([]string{today}, dates...)
-	}
-
-	seen := make(map[string]int64)
-	for _, date := range dates {
-		if len(seen) >= limit {
-			break
-		}
-		rows := h.readBusinessJSONL(date)
-		for i := len(rows) - 1; i >= 0 && len(seen) < limit; i-- {
-			row := rows[i]
-			if sessionID != "" && strField(row, "sessionId") != sessionID {
-				continue
-			}
-			tid := strField(row, "traceId")
-			if tid == "" {
-				continue
-			}
-			if _, ok := seen[tid]; !ok {
-				seen[tid] = parseTimestamp(strField(row, "time"))
-			}
-		}
+	summaries, err := h.reader.ListTraces(sharedlogger.TraceFilter{
+		SessionID: q.Get("sessionId"),
+		Limit:     limit,
+		Days:      14,
+	})
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, "failed to list traces")
+		return
 	}
 
 	type traceSummary struct {
 		ID        string `json:"id"`
 		StartedAt int64  `json:"startedAt"`
 	}
-	result := make([]traceSummary, 0, len(seen))
-	for id, ts := range seen {
-		result = append(result, traceSummary{ID: id, StartedAt: ts})
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].StartedAt > result[j].StartedAt })
-	if len(result) > limit {
-		result = result[:limit]
+	result := make([]traceSummary, 0, len(summaries))
+	for _, s := range summaries {
+		result = append(result, traceSummary{
+			ID:        s.ID,
+			StartedAt: parseTimestamp(s.StartedAt),
+		})
 	}
 	ok(w, result)
 }
 
-// listRecentSummaries handles GET /api/traces/recent-summaries?limit=
 func (h *tracesHandler) listRecentSummaries(w http.ResponseWriter, r *http.Request) {
 	h.listTraces(w, r)
 }
@@ -415,16 +348,26 @@ func parseInt(s string) (int, error) {
 	n := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
-			return 0, os.ErrInvalid
+			return 0, errInvalidInt
 		}
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
 }
 
+var errInvalidInt = &parseError{"invalid integer"}
+
+type parseError struct{ msg string }
+
+func (e *parseError) Error() string { return e.msg }
+
 func (h *tracesHandler) serveLLMIO(w http.ResponseWriter, ref string) {
-	path := filepath.Join(h.logDir, "detail", "llm-io", ref+".json")
-	data, err := os.ReadFile(path)
+	if h.reader == nil {
+		apiErr(w, http.StatusNotFound, "llm-io ref not found")
+		return
+	}
+
+	data, err := h.reader.ReadLLMIO(ref)
 	if err != nil {
 		apiErr(w, http.StatusNotFound, "llm-io ref not found")
 		return
@@ -437,19 +380,15 @@ func (h *tracesHandler) serveLLMIO(w http.ResponseWriter, ref string) {
 	ok(w, v)
 }
 
-func (h *tracesHandler) listLLMIORefs(traceID string) []string {
-	dir := filepath.Join(h.logDir, "detail", "llm-io")
-	entries, err := os.ReadDir(dir)
+func (h *tracesHandler) listLLMIORefs(w http.ResponseWriter, traceID string) {
+	if h.reader == nil {
+		ok(w, []string{})
+		return
+	}
+
+	refs, err := h.reader.ListLLMIORefs(traceID)
 	if err != nil {
-		return []string{}
+		refs = []string{}
 	}
-	var refs []string
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasPrefix(name, traceID) && strings.HasSuffix(name, ".json") {
-			refs = append(refs, strings.TrimSuffix(name, ".json"))
-		}
-	}
-	sort.Strings(refs)
-	return refs
+	ok(w, refs)
 }
