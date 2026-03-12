@@ -53,16 +53,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := github.InitStore(cfg.GitHub); err != nil {
+	// --- Fast init: no network, all local ---
+
+	if err := github.NewStore(cfg.GitHub); err != nil {
 		logger.Error(ctx, "GitHub skill store 初始化失败", "error", err.Error())
 		os.Exit(1)
 	}
-	github.DefaultStore.StartSync(cfg.GitHub.ParseSyncInterval())
 
-	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
-	go runner.StartDelayedTaskScheduler(schedulerCtx)
-
-	// Initialise channel adapters (feishu, qiwei, webui).
 	channels.InitBuiltinAdapters(func(key string) string {
 		v, _ := storage.GetSettingValue(key)
 		return v
@@ -73,13 +70,9 @@ func main() {
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/drain", drainHandler)
 
-	// New unified channel ingress — channel adapters POST here.
 	mux.HandleFunc("/api/channels/incoming", dispatcher.HandleIncoming)
-
-	// Outbound channel send — called by engine's send_channel_message tool.
 	mux.HandleFunc("/api/data/channels/send", handleChannelSend)
 
-	// Admin API routes (sessions, settings, agents, skills, users, traces).
 	api.Mount(mux, cfg.LogDir)
 
 	adminDir := cfg.AdminDist
@@ -101,6 +94,7 @@ func main() {
 		Handler: logMiddleware(mux),
 	}
 
+	// --- Start HTTP server immediately so health check is available ---
 	go func() {
 		logger.Boundary(ctx, "Agent 启动中", "port", cfg.Port, "appId", cfg.ID, "version", cfg.Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -108,6 +102,18 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// --- Slow init: network calls in background goroutines ---
+
+	go func() {
+		if err := github.DefaultStore.LoadCache(); err != nil {
+			logger.Error(ctx, "GitHub skill 缓存加载失败（后台重试将继续）", "error", err.Error())
+		}
+		github.DefaultStore.StartSync(cfg.GitHub.ParseSyncInterval())
+	}()
+
+	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+	go runner.StartDelayedTaskScheduler(schedulerCtx)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -131,9 +137,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	status := "ready"
+	status := "starting"
 	if isDraining.Load() {
 		status = "draining"
+	} else if github.DefaultStore != nil && github.DefaultStore.Ready() {
+		status = "ready"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

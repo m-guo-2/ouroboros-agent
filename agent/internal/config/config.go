@@ -36,14 +36,14 @@ type GitHub struct {
 }
 
 // ParseSyncInterval returns the sync interval as a time.Duration.
-// Defaults to 5 minutes if not set or invalid.
+// Defaults to 15 minutes if not set or invalid.
 func (g GitHub) ParseSyncInterval() time.Duration {
 	if g.SyncInterval == "" {
-		return 5 * time.Minute
+		return 15 * time.Minute
 	}
 	d, err := time.ParseDuration(g.SyncInterval)
 	if err != nil || d <= 0 {
-		return 5 * time.Minute
+		return 15 * time.Minute
 	}
 	return d
 }

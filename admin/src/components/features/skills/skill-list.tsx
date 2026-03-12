@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Blocks, Wrench, BookOpen, Zap, Plus, Pencil, Cpu, Download } from "lucide-react"
+import { Blocks, Wrench, BookOpen, Zap, Plus, Pencil, Cpu, Download, RefreshCw } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { EmptyState } from "@/components/layout/empty-state"
 import { Card } from "@/components/ui/card"
@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SkillFormDialog } from "./skill-form"
-import { useSkills, useToggleSkill } from "@/hooks/use-skills"
+import { useSkills, useToggleSkill, useRefreshSkills } from "@/hooks/use-skills"
 
 const typeConfig: Record<string, { icon: React.ComponentType<{ className?: string }>; label: string; color: string }> = {
   knowledge: { icon: BookOpen, label: "知识", color: "bg-blue-50 text-blue-700" },
@@ -20,6 +20,7 @@ const typeConfig: Record<string, { icon: React.ComponentType<{ className?: strin
 export function SkillList() {
   const { data: skills, isLoading } = useSkills()
   const toggleMutation = useToggleSkill()
+  const refreshMutation = useRefreshSkills()
   const [showCreate, setShowCreate] = useState(false)
 
   if (isLoading) {
@@ -42,10 +43,21 @@ export function SkillList() {
         title="Skills"
         description="管理 Agent 技能"
         actions={
-          <Button size="sm" onClick={() => setShowCreate(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            新建技能
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshMutation.isPending ? "animate-spin" : ""}`} />
+              {refreshMutation.isPending ? "同步中…" : "同步仓库"}
+            </Button>
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              新建技能
+            </Button>
+          </div>
         }
       />
 

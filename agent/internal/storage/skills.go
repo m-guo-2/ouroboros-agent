@@ -20,6 +20,7 @@ type SkillRecord struct {
 	Triggers    []interface{}          `json:"triggers"`
 	Tools       []interface{}          `json:"tools"`
 	Readme      string                 `json:"readme"`
+	References  []string               `json:"references,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata"`
 }
 
@@ -31,7 +32,7 @@ func fromGitHub(d *github.SkillData) *SkillRecord {
 		ID: d.ID, Name: d.Name, Description: d.Description,
 		Version: d.Version, Type: d.Type, Enabled: d.Enabled,
 		Triggers: d.Triggers, Tools: d.Tools,
-		Readme: d.Readme, Metadata: d.Metadata,
+		Readme: d.Readme, References: d.References, Metadata: d.Metadata,
 	}
 }
 
@@ -40,7 +41,7 @@ func toGitHub(s *SkillRecord) github.SkillData {
 		ID: s.ID, Name: s.Name, Description: s.Description,
 		Version: s.Version, Type: s.Type, Enabled: s.Enabled,
 		Triggers: s.Triggers, Tools: s.Tools,
-		Readme: s.Readme, Metadata: s.Metadata,
+		Readme: s.Readme, References: s.References, Metadata: s.Metadata,
 	}
 }
 
@@ -216,10 +217,30 @@ func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, erro
 	})
 	ctx.ToolExecutors["load_skill"] = SkillToolExecutor{Type: "internal", Handler: "load_skill"}
 
+	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
+		Name:        "load_skill_reference",
+		Description: "加载技能的详细 API 参考文档。当 load_skill 返回的 readme 概览不够详细时，使用此工具按需加载具体的参考文件（如完整参数说明、枚举值、调用示例）。",
+		InputSchema: types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"skill_id": map[string]interface{}{
+					"type":        "string",
+					"description": "技能 ID",
+				},
+				"reference": map[string]interface{}{
+					"type":        "string",
+					"description": "参考文件名（从 load_skill 返回的 references 列表中选择）",
+				},
+			},
+			Required: []string{"skill_id", "reference"},
+		},
+	})
+	ctx.ToolExecutors["load_skill_reference"] = SkillToolExecutor{Type: "internal", Handler: "load_skill_reference"}
+
 	return ctx, nil
 }
 
-// GetSkillDetail returns a skill's readme and tool definitions for load_skill.
+// GetSkillDetail returns a skill's readme, tool definitions, and reference index for load_skill.
 func GetSkillDetail(skillID string) (map[string]interface{}, error) {
 	d := store().GetByID(skillID)
 	if d == nil || !d.Enabled {
@@ -243,11 +264,46 @@ func GetSkillDetail(skillID string) (map[string]interface{}, error) {
 		}
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"skill_id":    d.ID,
 		"name":        d.Name,
 		"description": d.Description,
 		"readme":      d.Readme,
 		"tools":       toolRefs,
+	}
+	if len(d.References) > 0 {
+		result["references"] = d.References
+		result["references_hint"] = "如需查看详细 API 参考文档，使用 load_skill_reference 工具加载具体的 reference 文件。"
+	}
+	return result, nil
+}
+
+// GetSkillReference fetches a specific reference file for a skill on demand.
+func GetSkillReference(skillID, refName string) (map[string]interface{}, error) {
+	d := store().GetByID(skillID)
+	if d == nil || !d.Enabled {
+		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	}
+
+	found := false
+	for _, r := range d.References {
+		if r == refName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("reference %q not found in skill %s; available: %v", refName, skillID, d.References)
+	}
+
+	content, err := store().GetReference(skillID, refName)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"skill_id":  skillID,
+		"reference": refName,
+		"content":   content,
 	}, nil
 }

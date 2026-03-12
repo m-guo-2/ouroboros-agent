@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"agent/internal/config"
@@ -24,6 +25,7 @@ type SkillData struct {
 	Triggers    []interface{}          `json:"triggers"`
 	Tools       []interface{}          `json:"tools"`
 	Readme      string                 `json:"readme"`
+	References  []string               `json:"references,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -60,15 +62,18 @@ type Store struct {
 
 	mu    sync.RWMutex
 	cache map[string]*cachedEntry
+	ready atomic.Bool
 
 	cancel context.CancelFunc
 }
 
-// DefaultStore is the package-level singleton, set by InitStore.
+// DefaultStore is the package-level singleton, set by NewStore.
 var DefaultStore *Store
 
-// InitStore creates the skill store from config and loads the cache.
-func InitStore(gh config.GitHub) error {
+// NewStore creates the skill store and sets DefaultStore, but does NOT load
+// skills from GitHub. Call Store.LoadCache afterwards (typically in a goroutine)
+// to perform the initial network fetch.
+func NewStore(gh config.GitHub) error {
 	client, err := NewClientFromConfig(gh)
 	if err != nil {
 		return err
@@ -77,22 +82,35 @@ func InitStore(gh config.GitHub) error {
 	if base == "" {
 		base = defaultBasePath
 	}
-	s := &Store{
+	DefaultStore = &Store{
 		client:   client,
 		basePath: strings.TrimSuffix(base, "/"),
 		cache:    make(map[string]*cachedEntry),
 	}
+	return nil
+}
+
+// LoadCache performs the initial skill fetch from GitHub. Safe to call from a
+// goroutine. After it returns successfully the store is ready to serve data.
+func (s *Store) LoadCache() error {
 	if err := s.refresh(); err != nil {
 		return fmt.Errorf("initial cache load: %w", err)
 	}
-	DefaultStore = s
-	log.Printf("📦 GitHub skill store initialized: %d skills loaded", len(s.cache))
+	s.ready.Store(true)
+	log.Printf("📦 GitHub skill store ready: %d skills loaded", len(s.cache))
 	return nil
+}
+
+// Ready reports whether the initial cache load has completed.
+func (s *Store) Ready() bool {
+	return s.ready.Load()
 }
 
 func (s *Store) skillDir(id string) string    { return s.basePath + "/" + id }
 func (s *Store) manifestPath(id string) string { return s.skillDir(id) + "/manifest.json" }
 func (s *Store) readmePath(id string) string   { return s.skillDir(id) + "/README.md" }
+func (s *Store) skillMdPath(id string) string  { return s.skillDir(id) + "/SKILL.md" }
+func (s *Store) refsDir(id string) string      { return s.skillDir(id) + "/references" }
 
 // refresh reloads every skill from the GitHub repo into memory.
 func (s *Store) refresh() error {
@@ -114,44 +132,11 @@ func (s *Store) refresh() error {
 		}
 		id := e.Name
 
-		content, sha, err := s.client.GetFileContent(s.manifestPath(id))
+		entry, err := s.loadSkillEntry(id)
 		if err != nil {
 			log.Printf("⚠️  skip skill %s: %s", id, err)
 			continue
 		}
-		var m skillManifest
-		if err := json.Unmarshal([]byte(content), &m); err != nil {
-			log.Printf("⚠️  skip skill %s: invalid manifest: %s", id, err)
-			continue
-		}
-
-		entry := &cachedEntry{
-			SkillData: SkillData{
-				ID:          m.ID,
-				Name:        m.Name,
-				Description: m.Description,
-				Version:     m.Version,
-				Type:        m.Type,
-				Enabled:     m.Enabled,
-				Triggers:    m.Triggers,
-				Tools:       m.Tools,
-				Metadata:    m.Metadata,
-			},
-			manifestSHA: sha,
-		}
-		if entry.Triggers == nil {
-			entry.Triggers = []interface{}{}
-		}
-		if entry.Tools == nil {
-			entry.Tools = []interface{}{}
-		}
-
-		readme, rSHA, err := s.client.GetFileContent(s.readmePath(id))
-		if err == nil {
-			entry.Readme = readme
-			entry.readmeSHA = rSHA
-		}
-
 		next[id] = entry
 	}
 
@@ -159,6 +144,161 @@ func (s *Store) refresh() error {
 	s.cache = next
 	s.mu.Unlock()
 	return nil
+}
+
+// loadSkillEntry loads a single skill's metadata, readme, and reference index.
+// It tries manifest.json first, then falls back to SKILL.md (frontmatter + body).
+func (s *Store) loadSkillEntry(id string) (*cachedEntry, error) {
+	entry := &cachedEntry{}
+
+	content, sha, err := s.client.GetFileContent(s.manifestPath(id))
+	if err == nil {
+		var m skillManifest
+		if err := json.Unmarshal([]byte(content), &m); err != nil {
+			return nil, fmt.Errorf("invalid manifest: %w", err)
+		}
+		entry.SkillData = SkillData{
+			ID: m.ID, Name: m.Name, Description: m.Description,
+			Version: m.Version, Type: m.Type, Enabled: m.Enabled,
+			Triggers: m.Triggers, Tools: m.Tools, Metadata: m.Metadata,
+		}
+		entry.manifestSHA = sha
+
+		readme, rSHA, err := s.client.GetFileContent(s.readmePath(id))
+		if err == nil {
+			entry.Readme = readme
+			entry.readmeSHA = rSHA
+		}
+	} else if IsNotFound(err) {
+		if err := s.loadFromSkillMd(id, entry); err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, err
+	}
+
+	if entry.ID == "" {
+		entry.ID = id
+	}
+	if entry.Triggers == nil {
+		entry.Triggers = []interface{}{}
+	}
+	if entry.Tools == nil {
+		entry.Tools = []interface{}{}
+	}
+
+	entry.References = s.listReferences(id)
+
+	return entry, nil
+}
+
+// loadFromSkillMd parses a SKILL.md file (YAML frontmatter + markdown body)
+// as a fallback when manifest.json does not exist.
+func (s *Store) loadFromSkillMd(id string, entry *cachedEntry) error {
+	content, _, err := s.client.GetFileContent(s.skillMdPath(id))
+	if err != nil {
+		return fmt.Errorf("no manifest.json or SKILL.md: %w", err)
+	}
+
+	fm, body := splitFrontmatter(content)
+
+	entry.SkillData = SkillData{
+		ID:      id,
+		Version: "1.0.0",
+		Type:    "knowledge",
+		Enabled: true,
+	}
+	entry.Readme = body
+
+	if fm != "" {
+		var meta map[string]interface{}
+		if err := json.Unmarshal([]byte(frontmatterToJSON(fm)), &meta); err == nil {
+			if v, ok := meta["name"].(string); ok {
+				entry.Name = v
+			}
+			if v, ok := meta["description"].(string); ok {
+				entry.Description = v
+			}
+			if v, ok := meta["type"].(string); ok {
+				entry.Type = v
+			}
+		}
+	}
+	if entry.Name == "" {
+		entry.Name = id
+	}
+	return nil
+}
+
+// listReferences returns the file names in the skill's references/ directory.
+// Returns nil if the directory does not exist.
+func (s *Store) listReferences(id string) []string {
+	entries, err := s.client.ListDir(s.refsDir(id))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.Type == "file" {
+			names = append(names, e.Name)
+		}
+	}
+	return names
+}
+
+// GetReference fetches a specific reference file's content on demand.
+func (s *Store) GetReference(skillID, refName string) (string, error) {
+	path := s.refsDir(skillID) + "/" + refName
+	content, _, err := s.client.GetFileContent(path)
+	if err != nil {
+		return "", fmt.Errorf("reference %s/%s: %w", skillID, refName, err)
+	}
+	return content, nil
+}
+
+// splitFrontmatter separates YAML frontmatter (between --- delimiters) from body.
+func splitFrontmatter(content string) (frontmatter, body string) {
+	const delim = "---"
+	if !strings.HasPrefix(strings.TrimSpace(content), delim) {
+		return "", content
+	}
+	trimmed := strings.TrimSpace(content)
+	rest := trimmed[len(delim):]
+	idx := strings.Index(rest, delim)
+	if idx < 0 {
+		return "", content
+	}
+	return strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+len(delim):])
+}
+
+// frontmatterToJSON does a minimal conversion of simple YAML key-value pairs
+// to JSON. Handles single-line string values and quoted JSON values.
+func frontmatterToJSON(fm string) string {
+	lines := strings.Split(fm, "\n")
+	pairs := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		if val == "" {
+			continue
+		}
+		// If value looks like JSON object/array, use as-is
+		if (strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}")) ||
+			(strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]")) {
+			pairs = append(pairs, fmt.Sprintf("%q: %s", key, val))
+		} else {
+			pairs = append(pairs, fmt.Sprintf("%q: %q", key, val))
+		}
+	}
+	return "{" + strings.Join(pairs, ", ") + "}"
 }
 
 // Refresh reloads skills from the GitHub repo. Safe for concurrent use.

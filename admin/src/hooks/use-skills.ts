@@ -59,6 +59,14 @@ export function useDeleteSkill() {
   })
 }
 
+export function useRefreshSkills() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => skillsApi.refresh(),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
+  })
+}
+
 export function useSkillVersions(id: string | undefined) {
   return useQuery({
     queryKey: ["skill-versions", id],

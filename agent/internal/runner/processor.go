@@ -685,6 +685,14 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			}
 			return detail, nil
 		},
+		"load_skill_reference": func(c context.Context, input map[string]interface{}) (interface{}, error) {
+			skillID, _ := input["skill_id"].(string)
+			refName, _ := input["reference"].(string)
+			if skillID == "" || refName == "" {
+				return nil, fmt.Errorf("skill_id and reference are required")
+			}
+			return storage.GetSkillReference(skillID, refName)
+		},
 	}
 	registry.RegisterSkills(skillsCtx, internalHandlers)
 

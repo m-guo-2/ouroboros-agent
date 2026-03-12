@@ -25,6 +25,8 @@ export const skillsApi = {
 
   delete: (id: string) => fetchApi<void>(`/skills/${id}`, { method: "DELETE" }),
 
+  refresh: () => fetchApi<{ refreshed: number }>("/skills/refresh", { method: "POST" }),
+
   getVersions: (id: string) => fetchApi<SkillVersionSummary[]>(`/skills/${id}/versions`),
 
   getVersion: (id: string, version: number) =>
