@@ -126,10 +126,16 @@ func CreateSession(params map[string]interface{}) (*SessionData, error) {
 }
 
 // ListSessions returns sessions filtered by optional agentID/userID/channel, newest first.
-func ListSessions(agentID, userID, channel string) ([]SessionData, error) {
+func ListSessions(agentID, userID, channel string, limit int) ([]SessionData, error) {
 	query := sessionSelectSQL
 	var args []interface{}
 	var clauses []string
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
 	if agentID != "" {
 		clauses = append(clauses, "agent_id = ?")
 		args = append(args, agentID)
@@ -145,7 +151,8 @@ func ListSessions(agentID, userID, channel string) ([]SessionData, error) {
 	if len(clauses) > 0 {
 		query += " WHERE " + joinClauses(clauses)
 	}
-	query += " ORDER BY updated_at DESC LIMIT 200"
+	query += " ORDER BY updated_at DESC LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := DB.Query(query, args...)
 	if err != nil {

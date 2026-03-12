@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from "react"
 import { Activity, PanelRight } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
-import { useQueries } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
 import type { ExecutionTrace } from "@/api/types"
 import { useSessionCompactions } from "./hooks/use-session-compactions"
@@ -45,54 +45,84 @@ export function MonitorPage() {
   }, [inspectorOpen])
 
   // Session data
-  const { data: session } = useSession(effectiveSessionId ?? "")
+  const {
+    data: session,
+    refetch: refetchSession,
+    isFetching: isFetchingSession,
+  } = useSession(effectiveSessionId ?? "")
   const isProcessing = session?.executionStatus === "processing"
-  const { data: messages = [], isLoading: isLoadingMessages } = useSessionMessages(effectiveSessionId ?? "", {
-    refetchInterval: isProcessing ? 1000 : false,
-  })
+  const {
+    data: messages = [],
+    isLoading: isLoadingMessages,
+    refetch: refetchMessages,
+    isFetching: isFetchingMessages,
+  } = useSessionMessages(effectiveSessionId ?? "")
 
   // Compactions
   const { data: compactions = [] } = useSessionCompactions(effectiveSessionId)
 
-  // Traces
-  const traceIds = useMemo(() => {
-    return [...new Set(messages.map((m) => m.traceId).filter(Boolean) as string[])]
-  }, [messages])
-
-  const activeTraceId = isProcessing ? traceIds[traceIds.length - 1] : undefined
-  const traceQueryResults = useQueries({
-    queries: traceIds.map((tid) => ({
-      queryKey: ["traces", tid],
-      queryFn: () => tracesApi.getById(tid).then((r) => r.data ?? null),
-      staleTime: Infinity,
-      refetchInterval: tid === activeTraceId ? 2000 : false,
-    })),
-  })
-
-  const fullTraces = useMemo(() => {
-    return traceQueryResults.reduce<Record<string, ExecutionTrace>>((acc, q) => {
-      if (q.data) acc[q.data.id] = q.data
-      return acc
-    }, {})
-  }, [traceQueryResults])
-
   // Build exchanges
   const exchanges = useMemo(() => {
     if (messages.length === 0) return []
-    return buildExchanges(messages, fullTraces)
-  }, [messages, fullTraces])
+    return buildExchanges(messages)
+  }, [messages])
+
+  const activeTraceId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].traceId) return messages[i].traceId
+    }
+    return undefined
+  }, [messages])
+
+  const latestTraceExchangeIndex = useMemo(() => {
+    for (let i = exchanges.length - 1; i >= 0; i--) {
+      if (exchanges[i].traceId) return exchanges[i].exchangeIndex
+    }
+    return null
+  }, [exchanges])
 
   const effectiveExchangeIndex = useMemo(() => {
-    if (selectedExchangeIndex != null) return selectedExchangeIndex
-    if (isProcessing && exchanges.length > 0) return exchanges[exchanges.length - 1].exchangeIndex
-    return null
-  }, [selectedExchangeIndex, isProcessing, exchanges])
+    if (selectedExchangeIndex != null) {
+      const selectedExchange = exchanges.find((exchange) => exchange.exchangeIndex === selectedExchangeIndex)
+      if (selectedExchange?.traceId) return selectedExchangeIndex
+    }
+    return latestTraceExchangeIndex
+  }, [selectedExchangeIndex, latestTraceExchangeIndex, exchanges])
 
-  const selectedTrace = useMemo(() => {
+  const selectedExchange = useMemo(() => {
     if (effectiveExchangeIndex == null) return null
-    const exchange = exchanges.find(e => e.exchangeIndex === effectiveExchangeIndex)
-    return exchange?.trace ?? null
+    return exchanges.find((exchange) => exchange.exchangeIndex === effectiveExchangeIndex) ?? null
   }, [effectiveExchangeIndex, exchanges])
+
+  const selectedTraceId = selectedExchange?.traceId
+
+  const {
+    data: selectedTrace = null,
+    refetch: refetchSelectedTrace,
+    isFetching: isFetchingSelectedTrace,
+  } = useQuery<ExecutionTrace | null>({
+    queryKey: ["traces", selectedTraceId],
+    queryFn: async () => {
+      if (!selectedTraceId) return null
+      const response = await tracesApi.getById(selectedTraceId)
+      return response.data ?? null
+    },
+    enabled: !!selectedTraceId,
+    staleTime: Infinity,
+  })
+
+  const handleRefresh = useCallback(() => {
+    void refetchSessions()
+    if (effectiveSessionId) {
+      void refetchSession()
+      void refetchMessages()
+    }
+    if (selectedTraceId) {
+      void refetchSelectedTrace()
+    }
+  }, [effectiveSessionId, refetchMessages, refetchSelectedTrace, refetchSession, refetchSessions, selectedTraceId])
+
+  const isRefreshing = isRefreshingSessions || isFetchingSession || isFetchingMessages || isFetchingSelectedTrace
 
   return (
     <div className="flex h-full">
@@ -105,8 +135,8 @@ export function MonitorPage() {
         selectedSessionId={effectiveSessionId}
         onSelectSession={(id) => { setSelectedSessionId(id); setSelectedExchangeIndex(null) }}
         onDeleteSession={handleDeleteSession}
-        onRefresh={() => refetchSessions()}
-        isRefreshing={isRefreshingSessions}
+        onRefresh={handleRefresh}
+        isRefreshing={isRefreshing}
       />
 
       {/* Center: Conversation timeline */}
@@ -139,6 +169,8 @@ export function MonitorPage() {
               exchanges={exchanges}
               compactions={compactions}
               isProcessing={!!isProcessing}
+              activeTraceId={activeTraceId}
+              selectedTrace={selectedTrace}
               selectedExchangeIndex={effectiveExchangeIndex}
               onSelectExchange={handleSelectExchange}
               isLoadingMessages={isLoadingMessages}
@@ -161,6 +193,7 @@ export function MonitorPage() {
       {inspectorOpen && effectiveSessionId && (
         <div className="w-[420px] shrink-0 border-l border-slate-200 bg-white">
           <DecisionInspector
+            key={selectedTrace?.id ?? "empty-trace"}
             trace={selectedTrace}
             isSessionProcessing={isProcessing}
             onCollapse={() => setInspectorOpen(false)}

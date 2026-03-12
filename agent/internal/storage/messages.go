@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // CountSessionMessages returns the number of messages for a session.
@@ -11,6 +12,40 @@ func CountSessionMessages(sessionID string) (int, error) {
 	var n int
 	err := DB.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id = ?", sessionID).Scan(&n)
 	return n, err
+}
+
+// CountSessionMessagesBatch returns message counts keyed by session id.
+func CountSessionMessagesBatch(sessionIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return counts, nil
+	}
+
+	placeholders := make([]string, 0, len(sessionIDs))
+	args := make([]interface{}, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, sessionID)
+	}
+
+	rows, err := DB.Query(
+		"SELECT session_id, COUNT(*) FROM messages WHERE session_id IN ("+strings.Join(placeholders, ",")+") GROUP BY session_id",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sessionID string
+		var count int
+		if err := rows.Scan(&sessionID, &count); err != nil {
+			return nil, err
+		}
+		counts[sessionID] = count
+	}
+	return counts, rows.Err()
 }
 
 // DeleteSessionMessages removes all messages for a session.

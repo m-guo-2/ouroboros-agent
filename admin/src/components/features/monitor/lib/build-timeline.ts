@@ -1,10 +1,11 @@
-import type { MessageData, ExecutionTrace, ExecutionStep, CompactionData } from "@/api/types"
+import type { MessageData, ExecutionStep, CompactionData } from "@/api/types"
 import type { MessageExchange, TimelineEvent, RoundData, IterationData, FlatEvent } from "./types"
 
-export function buildExchanges(
-  messages: MessageData[],
-  traces: Record<string, ExecutionTrace>,
-): MessageExchange[] {
+function isTextAssistantMessage(message: MessageData): boolean {
+  return message.role === "assistant" && message.messageType !== "structured" && !!message.content?.trim()
+}
+
+export function buildExchanges(messages: MessageData[]): MessageExchange[] {
   const exchanges: MessageExchange[] = []
   let i = 0
   let exchangeIdx = 0
@@ -13,28 +14,38 @@ export function buildExchanges(
     const msg = messages[i]
 
     if (msg.role === "user") {
-      const exchange: MessageExchange = { userMessage: msg, exchangeIndex: exchangeIdx++ }
-      if (i + 1 < messages.length && messages[i + 1].role === "assistant") {
-        exchange.assistantMessage = messages[i + 1]
-        const traceId = messages[i + 1].traceId
-        if (traceId && traces[traceId]) exchange.trace = traces[traceId]
-        i += 2
-      } else {
-        const traceId = msg.traceId
-        if (traceId && traces[traceId]) exchange.trace = traces[traceId]
-        i += 1
+      const exchange: MessageExchange = {
+        userMessage: msg,
+        traceId: msg.traceId,
+        exchangeIndex: exchangeIdx++,
       }
+      let j = i + 1
+      let lastAssistantText: MessageData | undefined
+      for (; j < messages.length && messages[j].role !== "user"; j++) {
+        const candidate = messages[j]
+        if (!isTextAssistantMessage(candidate)) continue
+        if (!msg.traceId || !candidate.traceId || candidate.traceId === msg.traceId) {
+          lastAssistantText = candidate
+        }
+      }
+      if (lastAssistantText) {
+        exchange.assistantMessage = lastAssistantText
+        exchange.traceId = exchange.traceId ?? lastAssistantText.traceId
+      }
+      i = j
       exchanges.push(exchange)
     } else {
-      const isSystemRole = msg.role === "system"
-      if (isSystemRole && !msg.content) { i += 1; continue }
+      if (!isTextAssistantMessage(msg)) {
+        i += 1
+        continue
+      }
       exchanges.push({
         userMessage: {
           role: "user" as const,
-          content: msg.content || "(外部触发)",
+          content: "(系统触发)",
         },
-        assistantMessage: isSystemRole ? undefined : msg,
-        trace: msg.traceId ? traces[msg.traceId] : undefined,
+        assistantMessage: msg,
+        traceId: msg.traceId,
         isSystemInitiated: true,
         exchangeIndex: exchangeIdx++,
       })
@@ -83,10 +94,10 @@ export function buildTimeline(
         traceId: exchange.assistantMessage.traceId,
         exchangeIndex: exchange.exchangeIndex,
       })
-    } else if (exchange.trace?.status === "running") {
+    } else if (exchange.traceId) {
       events.push({
         type: "processing",
-        traceId: exchange.trace.id,
+        traceId: exchange.traceId,
         exchangeIndex: exchange.exchangeIndex,
       })
     }

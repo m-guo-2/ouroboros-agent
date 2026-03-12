@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"agent/internal/storage"
@@ -60,8 +61,9 @@ func listSessions(w http.ResponseWriter, r *http.Request) {
 	agentID := q.Get("agentId")
 	userID := q.Get("userId")
 	channel := q.Get("channel")
+	limit := parseLimit(q.Get("limit"), 50, 200)
 
-	sessions, err := storage.ListSessions(agentID, userID, channel)
+	sessions, err := storage.ListSessions(agentID, userID, channel, limit)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -72,10 +74,22 @@ func listSessions(w http.ResponseWriter, r *http.Request) {
 		storage.SessionData
 		MessageCount int `json:"messageCount"`
 	}
+	sessionIDs := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		sessionIDs = append(sessionIDs, s.ID)
+	}
+	counts, err := storage.CountSessionMessagesBatch(sessionIDs)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	result := make([]sessionWithCount, 0, len(sessions))
 	for _, s := range sessions {
-		cnt, _ := storage.CountSessionMessages(s.ID)
-		result = append(result, sessionWithCount{SessionData: s, MessageCount: cnt})
+		result = append(result, sessionWithCount{
+			SessionData:  s,
+			MessageCount: counts[s.ID],
+		})
 	}
 	ok(w, result)
 }
@@ -136,7 +150,8 @@ func deleteSession(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func getSessionMessages(w http.ResponseWriter, r *http.Request, id string) {
-	msgs, err := storage.GetSessionMessages(id, 1000)
+	limit := parseLimit(r.URL.Query().Get("limit"), 200, 1000)
+	msgs, err := storage.GetSessionMessages(id, limit)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -157,4 +172,18 @@ func getSessionCompactions(w http.ResponseWriter, r *http.Request, id string) {
 		compactions = []storage.CompactionData{}
 	}
 	ok(w, compactions)
+}
+
+func parseLimit(raw string, defaultValue, maxValue int) int {
+	if raw == "" {
+		return defaultValue
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultValue
+	}
+	if n > maxValue {
+		return maxValue
+	}
+	return n
 }

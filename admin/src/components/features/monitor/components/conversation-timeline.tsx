@@ -6,12 +6,14 @@ import { cn, timeAgo } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
 import { CompactionEvent } from "./compaction-event"
 import { ExchangeSkeleton } from "./exchange-skeleton"
-import type { CompactionData } from "@/api/types"
+import type { CompactionData, ExecutionTrace } from "@/api/types"
 
 interface Props {
   exchanges: MessageExchange[]
   compactions: CompactionData[]
   isProcessing: boolean
+  activeTraceId?: string
+  selectedTrace?: ExecutionTrace | null
   selectedExchangeIndex: number | null
   onSelectExchange: (index: number) => void
   isLoadingMessages: boolean
@@ -19,7 +21,7 @@ interface Props {
 
 export function ConversationTimeline({
   exchanges, compactions, isProcessing,
-  selectedExchangeIndex, onSelectExchange, isLoadingMessages,
+  activeTraceId, selectedTrace, selectedExchangeIndex, onSelectExchange, isLoadingMessages,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
@@ -82,9 +84,8 @@ export function ConversationTimeline({
           }
 
           const isSelected = selectedExchangeIndex === exchange.exchangeIndex
-          const trace = exchange.trace
-          const isRunning = trace?.status === "running" && isProcessing
-          const isStale = trace?.status === "running" && !isProcessing
+          const trace = isSelected ? selectedTrace ?? null : null
+          const isRunning = !!exchange.traceId && exchange.traceId === activeTraceId && isProcessing
           const steps = trace?.steps ?? []
           const toolCalls = steps.filter(s => s.type === "tool_call").length
           const errors = steps.filter(s => s.type === "error" || (s.type === "tool_result" && s.toolSuccess === false)).length
@@ -124,21 +125,21 @@ export function ConversationTimeline({
                 </div>
 
                 {/* Trace indicator */}
-                {trace && (
+                {exchange.traceId && (
                   <div className="mx-5 mb-1">
                     <div className={cn(
                       "flex items-center gap-2 px-3 py-1 rounded-md text-[11px]",
                       isRunning ? "bg-brand-50 text-brand-700"
-                        : isStale ? "bg-amber-50 text-amber-700"
-                          : errors > 0 ? "bg-red-50 text-red-700"
+                        : trace && errors > 0 ? "bg-red-50 text-red-700"
+                          : trace ? "bg-slate-50 text-slate-500"
                             : "bg-slate-50 text-slate-500"
                     )}>
                       {isRunning && <span className="h-1.5 w-1.5 rounded-full bg-brand-500 animate-live-pulse" />}
                       <span className="font-medium">
-                        {isRunning ? "正在处理..." : isStale ? "已中断" : "处理完成"}
+                        {isRunning ? "正在处理..." : trace ? "查看中" : "查看决策详情"}
                       </span>
-                      {toolCalls > 0 && <span>{toolCalls} 工具</span>}
-                      {errors > 0 && <span className="text-red-600">{errors} 错误</span>}
+                      {trace && toolCalls > 0 && <span>{toolCalls} 工具</span>}
+                      {trace && errors > 0 && <span className="text-red-600">{errors} 错误</span>}
                     </div>
                   </div>
                 )}

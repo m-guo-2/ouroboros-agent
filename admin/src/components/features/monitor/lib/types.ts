@@ -1,4 +1,4 @@
-import type { MessageData, ExecutionTrace, ExecutionStep, CompactionData } from "@/api/types"
+import type { MessageData, ExecutionStep, CompactionData } from "@/api/types"
 
 export interface ToolPair {
   call: ExecutionStep
@@ -23,7 +23,7 @@ export type FlatEvent =
 
 export interface MessageExchange {
   userMessage: Pick<MessageData, "role" | "content"> & Partial<MessageData>
-  trace?: ExecutionTrace
+  traceId?: string
   assistantMessage?: MessageData
   isSystemInitiated?: boolean
   exchangeIndex: number

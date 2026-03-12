@@ -9,11 +9,6 @@ export function useMonitorSessions(filters?: { agentId?: string; channel?: strin
       const res = await sessionsApi.getAll({ ...filters, limit: filters?.limit ?? 50 })
       return res.data ?? []
     },
-    refetchInterval: (query) => {
-      const data = query.state.data
-      const hasActive = data?.some((s) => s.executionStatus === "processing")
-      return hasActive ? 3000 : 10000
-    },
   })
 
   return query

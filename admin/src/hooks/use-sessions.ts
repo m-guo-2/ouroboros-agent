@@ -9,7 +9,6 @@ export function useSessions(filters?: { agentId?: string; channel?: string; limi
       const res = await sessionsApi.getAll(filters)
       return res.data ?? []
     },
-    refetchInterval: 10000,
   })
 }
 
@@ -21,10 +20,6 @@ export function useSession(id: string | undefined) {
       return res.data
     },
     enabled: !!id,
-    refetchInterval: (query) => {
-      const data = query.state.data
-      return data?.executionStatus === "processing" ? 2000 : false
-    },
   })
 }
 
@@ -36,7 +31,7 @@ export function useSessionMessages(sessionId: string | undefined, opts?: { refet
       return res.data ?? []
     },
     enabled: !!sessionId,
-    refetchInterval: opts?.refetchInterval ?? 5000,
+    refetchInterval: opts?.refetchInterval ?? false,
   })
 }
 
