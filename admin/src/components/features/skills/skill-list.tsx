@@ -45,7 +45,7 @@ export function SkillList() {
         actions={
           <div className="flex items-center gap-2">
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={() => refreshMutation.mutate()}
               disabled={refreshMutation.isPending}
