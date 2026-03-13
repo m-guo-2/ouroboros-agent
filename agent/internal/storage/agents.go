@@ -62,7 +62,7 @@ func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 		cfg.Channels = []ChannelBinding{}
 	}
 	if cfg.Skills == nil {
-		cfg.Skills = []string{}
+		cfg.Skills = []SkillBinding{}
 	}
 	return cfg, nil
 }

@@ -1,5 +1,5 @@
 import { fetchApi } from "./client"
-import type { AgentProfile } from "./types"
+import type { AgentProfile, SkillBinding } from "./types"
 
 export const agentsApi = {
   getAll: () => fetchApi<AgentProfile[]>("/agents"),
@@ -10,7 +10,7 @@ export const agentsApi = {
     displayName: string
     systemPrompt?: string
     modelId?: string
-    skills?: string[]
+    skills?: SkillBinding[]
     channels?: Array<{ type: string; identifier: string }>
     avatarUrl?: string
   }) => fetchApi<AgentProfile>("/agents", { method: "POST", body: JSON.stringify(data) }),

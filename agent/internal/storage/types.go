@@ -2,6 +2,12 @@ package storage
 
 import "agent/internal/types"
 
+// SkillBinding describes how a skill is bound to an agent.
+type SkillBinding struct {
+	ID   string `json:"id"`
+	Mode string `json:"mode"` // "always" | "on_demand"
+}
+
 // AgentConfig holds the runtime configuration for an agent.
 type AgentConfig struct {
 	ID           string           `json:"id"`
@@ -10,7 +16,7 @@ type AgentConfig struct {
 	ModelID      string           `json:"modelId,omitempty"`
 	Provider     string           `json:"provider,omitempty"`
 	Model        string           `json:"model,omitempty"`
-	Skills       []string         `json:"skills"`
+	Skills       []SkillBinding   `json:"skills"`
 	Channels     []ChannelBinding `json:"channels"`
 	IsActive     bool             `json:"isActive"`
 }

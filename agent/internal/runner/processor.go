@@ -34,7 +34,11 @@ const memoryInstruction = `
 每条 fact 应该是一条自包含的陈述，不依赖上下文即可理解。`
 
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
-	result := agentSystemPrompt + "\n\n" + skillsSnippet + memoryInstruction
+	result := agentSystemPrompt
+	if strings.Contains(result, "{{skills}}") {
+		result = strings.ReplaceAll(result, "{{skills}}", skillsSnippet)
+	}
+	result += memoryInstruction
 	return result
 }
 

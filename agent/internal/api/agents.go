@@ -50,8 +50,12 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := body["skills"].([]interface{}); ok {
 			for _, s := range v {
-				if str, ok := s.(string); ok {
-					cfg.Skills = append(cfg.Skills, str)
+				if m, ok := s.(map[string]interface{}); ok {
+					id, _ := m["id"].(string)
+					mode, _ := m["mode"].(string)
+					if id != "" {
+						cfg.Skills = append(cfg.Skills, storage.SkillBinding{ID: id, Mode: mode})
+					}
 				}
 			}
 		}

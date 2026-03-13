@@ -14,7 +14,7 @@ import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
 import { useSkills } from "@/hooks/use-skills"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
-import type { AvailableModel } from "@/api/types"
+import type { AvailableModel, SkillBinding } from "@/api/types"
 
 const PROVIDERS = [
   { value: "anthropic", label: "Anthropic (Claude)" },
@@ -35,7 +35,7 @@ export function AgentDetail() {
   const [prompt, setPrompt] = useState("")
   const [provider, setProvider] = useState("")
   const [model, setModel] = useState("")
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<SkillBinding[]>([])
   const [isActive, setIsActive] = useState(true)
   const [initialized, setInitialized] = useState(false)
 
@@ -141,8 +141,18 @@ export function AgentDetail() {
   }
 
   const toggleSkill = (skillId: string) => {
+    setSelectedSkills((prev) => {
+      const existing = prev.find((s) => s.id === skillId)
+      if (existing) {
+        return prev.filter((s) => s.id !== skillId)
+      }
+      return [...prev, { id: skillId, mode: "on_demand" as const }]
+    })
+  }
+
+  const setSkillMode = (skillId: string, mode: SkillBinding["mode"]) => {
     setSelectedSkills((prev) =>
-      prev.includes(skillId) ? prev.filter((s) => s !== skillId) : [...prev, skillId]
+      prev.map((s) => (s.id === skillId ? { ...s, mode } : s))
     )
   }
 
@@ -327,21 +337,56 @@ export function AgentDetail() {
                 <p className="text-sm text-slate-500">暂无可用技能</p>
               ) : (
                 <div className="space-y-2">
-                  {skills.map((skill) => (
-                    <label
-                      key={skill.name}
-                      className="flex items-center justify-between rounded-md border border-slate-200 p-3 cursor-pointer hover:bg-slate-50 transition-colors"
-                    >
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{skill.name}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">{skill.description}</p>
+                  {skills.map((skill) => {
+                    const binding = selectedSkills.find((s) => s.id === skill.id)
+                    const isBound = !!binding
+                    return (
+                      <div
+                        key={skill.id}
+                        className={`rounded-md border p-3 transition-colors ${isBound ? "border-brand-200 bg-brand-50/30" : "border-slate-200 hover:bg-slate-50"}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-slate-900">{skill.name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{skill.description}</p>
+                          </div>
+                          <Switch
+                            checked={isBound}
+                            onCheckedChange={() => toggleSkill(skill.id)}
+                          />
+                        </div>
+                        {isBound && (
+                          <div className="mt-2 flex items-center gap-1">
+                            <span className="text-xs text-slate-400 mr-1.5">加载模式</span>
+                            <div className="inline-flex rounded-md border border-slate-200 bg-white text-xs">
+                              <button
+                                type="button"
+                                className={`px-2.5 py-1 rounded-l-md transition-colors ${
+                                  binding.mode === "always"
+                                    ? "bg-brand-600 text-white"
+                                    : "text-slate-600 hover:bg-slate-50"
+                                }`}
+                                onClick={() => setSkillMode(skill.id, "always")}
+                              >
+                                必召回
+                              </button>
+                              <button
+                                type="button"
+                                className={`px-2.5 py-1 rounded-r-md border-l border-slate-200 transition-colors ${
+                                  binding.mode === "on_demand"
+                                    ? "bg-brand-600 text-white"
+                                    : "text-slate-600 hover:bg-slate-50"
+                                }`}
+                                onClick={() => setSkillMode(skill.id, "on_demand")}
+                              >
+                                按需加载
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <Switch
-                        checked={selectedSkills.includes(skill.id)}
-                        onCheckedChange={() => toggleSkill(skill.id)}
-                      />
-                    </label>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </CardContent>

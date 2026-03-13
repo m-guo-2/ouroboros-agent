@@ -113,26 +113,23 @@ type dbSkillTool struct {
 
 // GetSkillsContext compiles enabled skills into an agent-consumable SkillContext.
 //
-// agentSkills controls which skills are "active" (tools registered + readme in prompt):
-//   - non-empty: only skills whose ID is in agentSkills are active
-//   - empty/nil: no skills are active by default
-//
-// Skills that are enabled but not active become "deferred": their docs are
-// available via load_skill, and a brief index is appended to the system prompt.
-func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, error) {
+// agentSkills controls which skills are bound and how they appear:
+//   - mode "always": full readme inlined into SkillsSnippet, tools registered
+//   - mode "on_demand": only name/description/id index in SkillsSnippet, no tools
+//   - unbound enabled skills: appear in "available on-demand" section, loadable via load_skill
+func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext, error) {
 	all := store().GetAll()
 
-	// Filter to enabled skills only.
-	var skills []github.SkillData
+	var enabled []github.SkillData
 	for _, s := range all {
 		if s.Enabled {
-			skills = append(skills, s)
+			enabled = append(enabled, s)
 		}
 	}
 
-	activeSet := make(map[string]bool, len(agentSkills))
-	for _, id := range agentSkills {
-		activeSet[id] = true
+	bindingMode := make(map[string]string, len(agentSkills))
+	for _, b := range agentSkills {
+		bindingMode[b.ID] = b.Mode
 	}
 
 	ctx := &SkillContext{
@@ -141,35 +138,28 @@ func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, erro
 		SkillDocs:     map[string]string{},
 	}
 
-	var activeSummaries []string
-	var actionDocs []string
-	var deferredSummaries []string
+	var alwaysDocs []string
+	var onDemandSummaries []string
+	var unboundSummaries []string
 
-	for _, s := range skills {
+	for _, s := range enabled {
 		if s.Readme != "" {
 			ctx.SkillDocs[s.ID] = s.Readme
 		}
-
-		isActive := activeSet[s.ID]
 
 		var dbTools []dbSkillTool
 		toolsJSON, _ := json.Marshal(s.Tools)
 		_ = json.Unmarshal(toolsJSON, &dbTools)
 
-		if isActive {
-			toolNames := make([]string, 0, len(dbTools))
-			for _, t := range dbTools {
-				toolNames = append(toolNames, t.Name)
-			}
-			toolSuffix := ""
-			if len(toolNames) > 0 {
-				toolSuffix = fmt.Sprintf(" [工具: %s]", strings.Join(toolNames, ", "))
-			}
-			activeSummaries = append(activeSummaries, fmt.Sprintf("- **%s**: %s%s", s.Name, s.Description, toolSuffix))
+		mode, bound := bindingMode[s.ID]
 
-			if (s.Type == "action" || s.Type == "hybrid") && s.Readme != "" {
-				actionDocs = append(actionDocs, fmt.Sprintf("### Skill: %s\n\n%s", s.Name, s.Readme))
+		switch {
+		case bound && mode == "always":
+			doc := fmt.Sprintf("### Skill: %s\n%s", s.Name, s.Description)
+			if s.Readme != "" {
+				doc += "\n\n" + s.Readme
 			}
+			alwaysDocs = append(alwaysDocs, doc)
 
 			for _, t := range dbTools {
 				ctx.Tools = append(ctx.Tools, types.ToolDefinition{
@@ -179,25 +169,28 @@ func GetSkillsContext(agentID string, agentSkills []string) (*SkillContext, erro
 				})
 				ctx.ToolExecutors[t.Name] = t.Executor
 			}
-		} else {
-			deferredSummaries = append(deferredSummaries,
+
+		case bound && mode == "on_demand":
+			onDemandSummaries = append(onDemandSummaries,
+				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
+
+		default:
+			unboundSummaries = append(unboundSummaries,
 				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
 		}
 	}
 
-	if len(activeSummaries) > 0 {
-		ctx.SkillsSnippet = fmt.Sprintf(
-			"\n## 你拥有的 Skills\n以下是你已注册的技能，可以根据用户需求主动使用：\n%s",
-			strings.Join(activeSummaries, "\n"),
-		)
+	if len(alwaysDocs) > 0 {
+		ctx.SkillsSnippet = "\n## Skills\n\n" + strings.Join(alwaysDocs, "\n\n---\n\n")
 	}
-	if len(actionDocs) > 0 {
-		ctx.SkillsSnippet += "\n\n## Skill 使用指南\n\n" + strings.Join(actionDocs, "\n\n---\n\n")
-	}
-	if len(deferredSummaries) > 0 {
+
+	var deferred []string
+	deferred = append(deferred, onDemandSummaries...)
+	deferred = append(deferred, unboundSummaries...)
+	if len(deferred) > 0 {
 		ctx.SkillsSnippet += fmt.Sprintf(
 			"\n\n## 可按需加载的扩展技能\n以下技能未默认加载。需要时使用 `load_skill` 工具加载对应技能的文档和工具参考，然后通过已有工具执行操作。\n%s",
-			strings.Join(deferredSummaries, "\n"),
+			strings.Join(deferred, "\n"),
 		)
 	}
 

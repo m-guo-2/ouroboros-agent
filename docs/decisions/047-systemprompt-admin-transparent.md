@@ -14,7 +14,7 @@ Admin 后台的 system prompt 字段经 `{{skills}}` 模板展开后即为最终
 
 ## 变更内容
 
-- **`agent/internal/runner/processor.go`**：`buildSystemPrompt` 简化为导出函数 `BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string`，仅做 `{{skills}}` 模板替换，删除硬编码 builtin 段和 skillsAddition 追加逻辑
+- **`agent/internal/runner/processor.go`**：`BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string` 执行 `{{skills}}` 模板替换——如果 prompt 包含 `{{skills}}` 则替换为 skillsSnippet，否则不注入 skills 内容。`memoryInstruction` 始终追加在末尾
 - **`agent/internal/storage/types.go`**：`SkillContext.SystemPromptAddition` 重命名为 `SkillsSnippet`（语义从"暗中追加"变为"可被模板引用的文本片段"）
 - **`agent/internal/storage/skills.go`**：所有 `ctx.SystemPromptAddition` 引用改为 `ctx.SkillsSnippet`
 - **`agent/internal/api/agents.go`**：新增 `GET /api/agents/:id/full-prompt` 端点，返回展开后的完整 prompt 供前端预览

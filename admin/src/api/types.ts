@@ -23,6 +23,11 @@ export interface AvailableModel {
 
 // ===== Agent Profiles =====
 
+export interface SkillBinding {
+  id: string
+  mode: "always" | "on_demand"
+}
+
 export interface AgentProfile {
   id: string
   displayName: string
@@ -30,7 +35,7 @@ export interface AgentProfile {
   modelId?: string
   provider?: string   // 直接指定 LLM 提供商
   model?: string      // 直接指定模型 ID
-  skills?: string[]
+  skills?: SkillBinding[]
   channels?: Array<{ type: string; identifier: string }>
   isActive?: boolean
   avatarUrl?: string

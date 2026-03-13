@@ -107,7 +107,7 @@ func handleSkillsWithID(w http.ResponseWriter, r *http.Request) {
 
 	// GET /api/skills/{agentId}/context — compile skill context for an agent
 	if sub == "context" && r.Method == http.MethodGet {
-		var agentSkills []string
+		var agentSkills []storage.SkillBinding
 		agentCfg, _ := storage.GetAgentConfig(id)
 		if agentCfg != nil {
 			agentSkills = agentCfg.Skills
