@@ -20,11 +20,20 @@ import (
 // BuildSystemPrompt performs {{skills}} template expansion on the agent's
 // system prompt. The prompt stored in the database is the single source of
 // truth — no hidden builtin segments are appended.
+const memoryInstruction = `
+
+## Memory
+
+你有一个持久记忆工具 save_memory。当对话中出现以下内容时，请主动调用它保存：
+- 用户做出的关键决策或选择
+- 明确的需求、约束、偏好
+- 重要的技术结论或发现
+- 待办事项和行动计划
+
+每条 fact 应该是一条自包含的陈述，不依赖上下文即可理解。`
+
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
-	result := agentSystemPrompt + "\n\n" + skillsSnippet
-	// if strings.Contains(result, "{{skills}}") {
-	// 	result = strings.ReplaceAll(result, "{{skills}}", skillsSnippet)
-	// }
+	result := agentSystemPrompt + "\n\n" + skillsSnippet + memoryInstruction
 	return result
 }
 
@@ -99,13 +108,59 @@ func redactMessagesForStorage(messages []types.AgentMessage) []types.AgentMessag
 	return redacted
 }
 
+const factsTokenBudgetRatio = 0.10
+
+func prependSessionMemory(messages []types.AgentMessage, sessionID, model string) []types.AgentMessage {
+	facts, err := storage.GetSessionFacts(sessionID)
+	if err != nil || len(facts) == 0 {
+		return messages
+	}
+
+	contextWindow := GetContextWindow(model)
+	budgetChars := int(float64(contextWindow) * factsTokenBudgetRatio * 4)
+
+	var lines []string
+	totalChars := 0
+	for i := len(facts) - 1; i >= 0; i-- {
+		line := fmt.Sprintf("[%s] %s", facts[i].Category, facts[i].Fact)
+		if totalChars+len(line) > budgetChars {
+			break
+		}
+		lines = append([]string{line}, lines...)
+		totalChars += len(line)
+	}
+
+	if len(lines) == 0 {
+		return messages
+	}
+
+	memoryText := "[Session Memory]\n以下是本次对话中保存的关键事实，请作为上下文参考：\n\n" + strings.Join(lines, "\n")
+
+	memoryMsg := types.AgentMessage{
+		Role:    "user",
+		Content: []types.ContentBlock{{Type: "text", Text: memoryText}},
+	}
+	ackMsg := types.AgentMessage{
+		Role:    "assistant",
+		Content: []types.ContentBlock{{Type: "text", Text: "好的，我已了解之前保存的上下文。"}},
+	}
+
+	result := make([]types.AgentMessage, 0, 2+len(messages))
+	result = append(result, memoryMsg, ackMsg)
+	result = append(result, messages...)
+	return result
+}
+
 func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.AgentMessage {
 	if len(messages) == 0 {
 		return messages
 	}
 
+	prefixLen := compactPrefixLen(messages)
+
+	body := messages[prefixLen:]
 	var turnStarts []int
-	for i, msg := range messages {
+	for i, msg := range body {
 		if msg.Role == "user" {
 			isToolResult := false
 			for _, b := range msg.Content {
@@ -125,7 +180,33 @@ func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.Ag
 	}
 
 	startIndex := turnStarts[len(turnStarts)-maxTurns]
-	return messages[startIndex:]
+	truncated := body[startIndex:]
+
+	if prefixLen == 0 {
+		return truncated
+	}
+	result := make([]types.AgentMessage, 0, prefixLen+len(truncated))
+	result = append(result, messages[:prefixLen]...)
+	result = append(result, truncated...)
+	return result
+}
+
+func compactPrefixLen(messages []types.AgentMessage) int {
+	if len(messages) == 0 {
+		return 0
+	}
+	msg := messages[0]
+	if msg.Role != "user" || len(msg.Content) == 0 {
+		return 0
+	}
+	if !strings.HasPrefix(msg.Content[0].Text, "[Context Compact]") &&
+		!strings.HasPrefix(msg.Content[0].Text, "[Session Memory]") {
+		return 0
+	}
+	if len(messages) > 1 && messages[1].Role == "assistant" {
+		return 2
+	}
+	return 1
 }
 
 func formatUserMessage(senderName, channel, messageType, channelMessageID, content string, attachments []storage.AttachmentData) string {
@@ -565,6 +646,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	registry := engine.NewToolRegistry()
 	ostools.RegisterOSTools(registry, shellSession)
 	ostools.RegisterRecallContext(registry, worker.SessionID)
+	ostools.RegisterSaveMemory(registry, worker.SessionID)
 	engine.RegisterTavilyTool(registry)
 
 	registry.RegisterBuiltin("send_channel_message", "向当前渠道发送消息。content 填要发出去的话。", types.JSONSchema{
@@ -718,6 +800,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	historyMessages = truncateByFullTurns(historyMessages, 10)
 
+	historyMessages = prependSessionMemory(historyMessages, worker.SessionID, modelName)
+
 	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content, request.Attachments)
 
 	messages := append(historyMessages, types.AgentMessage{
@@ -836,6 +920,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 						MaxTokens: 2048,
 					})
 				}
+
+				FlushMemoryBeforeCompact(ctx, messages, modelName, compactLLM, compactModel, worker.SessionID)
 
 				result, err := CompactContext(ctx, messages, modelName, compactLLM, compactModel, worker.SessionID)
 				if err != nil {

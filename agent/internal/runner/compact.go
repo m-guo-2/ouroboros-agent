@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"agent/internal/engine"
+	"agent/internal/engine/ostools"
 	"agent/internal/logger"
 	"agent/internal/storage"
 	"agent/internal/types"
@@ -306,6 +307,73 @@ func buildMessagesDigest(messages []types.AgentMessage) string {
 		result = result[:8000] + "\n...[digest truncated]"
 	}
 	return result
+}
+
+const flushMaxIterations = 3
+
+func FlushMemoryBeforeCompact(
+	ctx context.Context,
+	messages []types.AgentMessage,
+	model string,
+	flushLLM engine.LLMClient,
+	flushModel string,
+	sessionID string,
+) {
+	if flushLLM == nil || flushModel == "" {
+		return
+	}
+
+	boundaries := findTurnBoundaries(messages)
+	if len(boundaries) <= 1 {
+		return
+	}
+
+	contextWindow := GetContextWindow(model)
+	targetTokens := int(float64(contextWindow) * targetRatio)
+
+	archiveEnd := 0
+	for i := 1; i < len(boundaries); i++ {
+		candidate := messages[boundaries[i]:]
+		est := PreciseEstimateTokens(candidate)
+		if est+100 <= targetTokens {
+			archiveEnd = boundaries[i]
+			break
+		}
+	}
+	if archiveEnd == 0 {
+		return
+	}
+
+	archived := messages[:archiveEnd]
+	digest := buildMessagesDigest(archived)
+	if strings.TrimSpace(digest) == "" {
+		return
+	}
+
+	flushPrompt := fmt.Sprintf(
+		"上下文即将被压缩，以下较早的对话内容将被归档。"+
+			"请提取其中的关键事实（决策、结论、需求、技术细节）并调用 save_memory 保存。"+
+			"如果没有需要保存的内容，直接回复 NO_SAVE。\n\n%s", digest)
+
+	flushMessages := []types.AgentMessage{{
+		Role:    "user",
+		Content: []types.ContentBlock{{Type: "text", Text: flushPrompt}},
+	}}
+
+	saveMemoryTool := ostools.NewSaveMemoryTool(sessionID)
+
+	_, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
+		LLMClient:    flushLLM,
+		SystemPrompt: "You are a memory extraction assistant. Extract key facts and save them using the save_memory tool. Be concise and factual.",
+		Messages:     flushMessages,
+		Tools:        []types.RegisteredTool{saveMemoryTool},
+		Model:        flushModel,
+		MaxIterations: flushMaxIterations,
+	})
+	if err != nil {
+		logger.Warn(ctx, "memory flush 失败，继续正常压缩",
+			"error", err.Error(), "sessionId", sessionID)
+	}
 }
 
 func buildFallbackSummary(messages []types.AgentMessage) string {

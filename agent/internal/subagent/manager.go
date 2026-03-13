@@ -221,6 +221,7 @@ func (m *Manager) run(jobID string, req StartRequest) {
 
 	toolDefs := filterToolsByProfile(req.Profile, req.Tools)
 	toolDefs = append(toolDefs, ostools.NewRecallContextTool(req.SessionID))
+	toolDefs = append(toolDefs, ostools.NewSaveMemoryTool(req.SessionID))
 	toolDefs = m.wrapToolsWithImpact(jobID, toolDefs)
 	subPrompt := buildSubagentSystemPrompt(req.Profile)
 	subMessages := append(copyMessages(req.Messages), taskMessage(req.Task))

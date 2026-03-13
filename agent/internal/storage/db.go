@@ -264,6 +264,16 @@ func runSchema(db *sql.DB) error {
 			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_delayed_tasks_status_time ON delayed_tasks(status, execute_at)`,
+
+		// Session-level memory facts (session-memory-facts)
+		`CREATE TABLE IF NOT EXISTS session_facts (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			fact TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT 'general',
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_facts_session ON session_facts(session_id)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
