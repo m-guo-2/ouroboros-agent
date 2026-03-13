@@ -219,9 +219,6 @@ func formatUserMessage(senderName, channel, messageType, channelMessageID, conte
 	}
 
 	var meta []string
-	if channel != "" {
-		meta = append(meta, fmt.Sprintf("via %s", channel))
-	}
 	if channelMessageID != "" {
 		meta = append(meta, fmt.Sprintf("msg_id=%s", channelMessageID))
 	}
@@ -700,7 +697,6 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		Type: "object",
 		Properties: map[string]interface{}{
 			"content":                 map[string]interface{}{"type": "string", "description": "消息内容"},
-			"channel":                 map[string]interface{}{"type": "string", "description": "目标渠道"},
 			"channelUserId":           map[string]interface{}{"type": "string", "description": "渠道用户 ID"},
 			"channelConversationId":   map[string]interface{}{"type": "string", "description": "群聊 ID"},
 			"messageType":             map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
@@ -710,9 +706,6 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		Required: []string{"content"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
 		channel := request.Channel
-		if ch, ok := input["channel"].(string); ok && ch != "" {
-			channel = ch
-		}
 		channelUserID := request.ChannelUserID
 		if cu, ok := input["channelUserId"].(string); ok && cu != "" {
 			channelUserID = cu
@@ -751,7 +744,6 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 		return map[string]interface{}{
 			"success":       true,
-			"channel":       channel,
 			"channelUserId": channelUserID,
 		}, nil
 	})

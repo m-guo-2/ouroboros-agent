@@ -18,10 +18,6 @@ import (
 )
 
 func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessRequest) {
-	if request.Channel != "qiwei" {
-		return
-	}
-
 	registry.RegisterBuiltin("wecom_search_targets",
 		"搜索企微中的沟通对象，统一覆盖联系人和群聊。输入关键词后返回可直接沟通的 targets，每个结果都带 type、id、name。",
 		types.JSONSchema{

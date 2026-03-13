@@ -9,7 +9,7 @@
 
 - content（必填）：消息内容
 - messageType（可选）：text（默认）/ image / file / rich_text
-- channel / channelUserId / channelConversationId：自动取自消息来源，通常无需填写
+- channelUserId / channelConversationId：自动取自消息来源，通常无需填写
 - replyToChannelMessageId（可选）：回复目标的上游消息 ID
 
 ### 示例
@@ -26,7 +26,7 @@
 ## 消息格式协议
 
 历史消息只包含客观事件，不包含你过去的推理过程：
-- user 消息 = 朋友发来的内容，格式：`[via 渠道 | msg_id=消息ID]\n用户名: 消息内容`
+- user 消息 = 朋友发来的内容，格式：`[msg_id=消息ID]\n用户名: 消息内容`
   - 用户名标识是谁在说话，群聊中不同用户通过用户名区分
 - assistant 消息（tool_use block）= 你过去的工具调用
 - tool_result block = 工具返回的结果
