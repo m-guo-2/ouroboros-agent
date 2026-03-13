@@ -18,9 +18,10 @@ import (
 	"agent/internal/types"
 )
 
-// BuildSystemPrompt performs {{skills}} template expansion on the agent's
-// system prompt. The prompt stored in the database is the single source of
-// truth — no hidden builtin segments are appended.
+// BuildSystemPrompt appends the compiled skills snippet to the agent's
+// system prompt. The prompt stored in the database remains the source of
+// truth for the agent's role and behavior, while skill material is injected
+// as a separate runtime section.
 const memoryInstruction = `
 
 ## Memory
@@ -35,8 +36,11 @@ const memoryInstruction = `
 
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	result := agentSystemPrompt
-	if strings.Contains(result, "{{skills}}") {
-		result = strings.ReplaceAll(result, "{{skills}}", skillsSnippet)
+	if skillsSnippet != "" {
+		if result != "" {
+			result += "\n\n"
+		}
+		result += skillsSnippet
 	}
 	result += memoryInstruction
 	return result
@@ -669,9 +673,10 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	skillsCtx, err := storage.GetSkillsContext(request.AgentID, agentConfig.Skills)
 	if err != nil || skillsCtx == nil {
 		skillsCtx = &storage.SkillContext{
-			Tools:         []types.ToolDefinition{},
-			ToolExecutors: map[string]storage.SkillToolExecutor{},
-			SkillDocs:     map[string]string{},
+			Tools:            []types.ToolDefinition{},
+			ToolExecutors:    map[string]storage.SkillToolExecutor{},
+			SkillDocs:        map[string]string{},
+			LoadableSkillIDs: map[string]bool{},
 		}
 	}
 
@@ -849,10 +854,17 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			if !ok || skillID == "" {
 				return nil, fmt.Errorf("skill_id is required")
 			}
+			if !skillsCtx.LoadableSkillIDs[skillID] {
+				available := make([]string, 0, len(skillsCtx.LoadableSkillIDs))
+				for id := range skillsCtx.LoadableSkillIDs {
+					available = append(available, id)
+				}
+				return nil, fmt.Errorf("skill %q is not bound as on-demand. available skills: %s", skillID, strings.Join(available, ", "))
+			}
 			detail, err := storage.GetSkillDetail(skillID)
 			if err != nil {
-				available := make([]string, 0, len(skillsCtx.SkillDocs))
-				for id := range skillsCtx.SkillDocs {
+				available := make([]string, 0, len(skillsCtx.LoadableSkillIDs))
+				for id := range skillsCtx.LoadableSkillIDs {
 					available = append(available, id)
 				}
 				return nil, fmt.Errorf("%s. available skills: %s", err.Error(), strings.Join(available, ", "))
@@ -864,6 +876,9 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			refName, _ := input["reference"].(string)
 			if skillID == "" || refName == "" {
 				return nil, fmt.Errorf("skill_id and reference are required")
+			}
+			if !skillsCtx.LoadableSkillIDs[skillID] {
+				return nil, fmt.Errorf("skill %q is not bound as on-demand", skillID)
 			}
 			return storage.GetSkillReference(skillID, refName)
 		},

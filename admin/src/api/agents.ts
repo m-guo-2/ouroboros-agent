@@ -22,4 +22,10 @@ export const agentsApi = {
 
   getFullPrompt: (id: string) =>
     fetchApi<{ fullPrompt: string }>(`/agents/${id}/full-prompt`),
+
+  previewFullPrompt: (id: string, data: { systemPrompt: string; skills: SkillBinding[] }) =>
+    fetchApi<{ fullPrompt: string }>(`/agents/${id}/full-prompt`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 }

@@ -54,7 +54,10 @@ export function AgentDetail() {
     if (!id) return
     setPreviewLoading(true)
     try {
-      const res = await agentsApi.getFullPrompt(id)
+      const res = await agentsApi.previewFullPrompt(id, {
+        systemPrompt: prompt,
+        skills: selectedSkills,
+      })
       if (res.success && res.data) {
         setFullPrompt(res.data.fullPrompt)
       }
@@ -63,7 +66,7 @@ export function AgentDetail() {
     } finally {
       setPreviewLoading(false)
     }
-  }, [id])
+  }, [id, prompt, selectedSkills])
 
   useEffect(() => {
     if (id && initialized) {
@@ -71,6 +74,14 @@ export function AgentDetail() {
       setShowPreview(true)
     }
   }, [id, initialized, fetchFullPrompt])
+
+  useEffect(() => {
+    if (!initialized || !showPreview) return
+    const timer = window.setTimeout(() => {
+      fetchFullPrompt()
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [initialized, showPreview, prompt, selectedSkills, fetchFullPrompt])
 
   // Initialize form from agent data
   if (agent && !initialized) {
@@ -120,7 +131,7 @@ export function AgentDetail() {
   }
 
   const handleSave = async () => {
-    await updateMutation.mutateAsync({
+    const updated = await updateMutation.mutateAsync({
       id: agent.id,
       data: {
         displayName: name,
@@ -131,7 +142,9 @@ export function AgentDetail() {
         isActive,
       },
     })
-    fetchFullPrompt()
+    if (updated) {
+      fetchFullPrompt()
+    }
   }
 
   const handleDelete = async () => {
@@ -283,7 +296,7 @@ export function AgentDetail() {
                 <label className="text-sm font-medium text-slate-700 mb-1.5 block">
                   系统提示词
                   <span className="ml-2 text-xs font-normal text-slate-400">
-                    支持 <code className="px-1 py-0.5 bg-slate-100 rounded text-[11px]">{"{{skills}}"}</code> 变量，运行时自动展开为绑定技能的索引内容
+                    绑定的技能会在运行时自动附加到最终 prompt：必召回注入完整内容，按需加载注入名称和描述
                   </span>
                 </label>
                 <Textarea

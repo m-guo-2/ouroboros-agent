@@ -8,6 +8,27 @@ import (
 	"agent/internal/storage"
 )
 
+func parseSkillBindings(raw interface{}) []storage.SkillBinding {
+	var bindings []storage.SkillBinding
+	items, ok := raw.([]interface{})
+	if !ok {
+		return bindings
+	}
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		mode, _ := m["mode"].(string)
+		if id == "" {
+			continue
+		}
+		bindings = append(bindings, storage.SkillBinding{ID: id, Mode: mode})
+	}
+	return bindings
+}
+
 // GET/POST /api/agents
 func handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -48,16 +69,8 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := body["model"].(string); ok {
 			cfg.Model = v
 		}
-		if v, ok := body["skills"].([]interface{}); ok {
-			for _, s := range v {
-				if m, ok := s.(map[string]interface{}); ok {
-					id, _ := m["id"].(string)
-					mode, _ := m["mode"].(string)
-					if id != "" {
-						cfg.Skills = append(cfg.Skills, storage.SkillBinding{ID: id, Mode: mode})
-					}
-				}
-			}
+		if body["skills"] != nil {
+			cfg.Skills = parseSkillBindings(body["skills"])
 		}
 		if v, ok := body["channels"].([]interface{}); ok {
 			for _, c := range v {
@@ -100,7 +113,7 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 		subPath = parts[1]
 	}
 
-	if subPath == "full-prompt" && r.Method == http.MethodGet {
+	if subPath == "full-prompt" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
 		cfg, err := storage.GetAgentConfig(id)
 		if err != nil {
 			apiErr(w, http.StatusInternalServerError, err.Error())
@@ -110,9 +123,22 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, http.StatusNotFound, "agent not found")
 			return
 		}
+		if r.Method == http.MethodPost {
+			var body map[string]interface{}
+			if err := decodeBody(r, &body); err != nil {
+				apiErr(w, http.StatusBadRequest, "invalid JSON")
+				return
+			}
+			if v, ok := body["systemPrompt"].(string); ok {
+				cfg.SystemPrompt = v
+			}
+			if body["skills"] != nil {
+				cfg.Skills = parseSkillBindings(body["skills"])
+			}
+		}
 		skillsCtx, err := storage.GetSkillsContext(id, cfg.Skills)
 		if err != nil {
-			skillsCtx = &storage.SkillContext{}
+			skillsCtx = &storage.SkillContext{LoadableSkillIDs: map[string]bool{}}
 		}
 		fullPrompt := runner.BuildSystemPrompt(cfg.SystemPrompt, skillsCtx.SkillsSnippet)
 		ok(w, map[string]string{"fullPrompt": fullPrompt})

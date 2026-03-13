@@ -111,12 +111,20 @@ type dbSkillTool struct {
 	Executor    SkillToolExecutor `json:"executor"`
 }
 
-// GetSkillsContext compiles enabled skills into an agent-consumable SkillContext.
+func normalizeSkillBindingMode(mode string) string {
+	if mode == "always" {
+		return "always"
+	}
+	return "on_demand"
+}
+
+// GetSkillsContext compiles the bound skills for an agent.
 //
-// agentSkills controls which skills are bound and how they appear:
+// Bound skills are split into two runtime modes:
 //   - mode "always": full readme inlined into SkillsSnippet, tools registered
 //   - mode "on_demand": only name/description/id index in SkillsSnippet, no tools
-//   - unbound enabled skills: appear in "available on-demand" section, loadable via load_skill
+//
+// Unbound skills are not exposed to the agent.
 func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext, error) {
 	all := store().GetAll()
 
@@ -129,32 +137,34 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 
 	bindingMode := make(map[string]string, len(agentSkills))
 	for _, b := range agentSkills {
-		bindingMode[b.ID] = b.Mode
+		if b.ID == "" {
+			continue
+		}
+		bindingMode[b.ID] = normalizeSkillBindingMode(b.Mode)
 	}
 
 	ctx := &SkillContext{
-		Tools:         []types.ToolDefinition{},
-		ToolExecutors: map[string]SkillToolExecutor{},
-		SkillDocs:     map[string]string{},
+		Tools:            []types.ToolDefinition{},
+		ToolExecutors:    map[string]SkillToolExecutor{},
+		SkillDocs:        map[string]string{},
+		LoadableSkillIDs: map[string]bool{},
 	}
 
 	var alwaysDocs []string
 	var onDemandSummaries []string
-	var unboundSummaries []string
 
 	for _, s := range enabled {
-		if s.Readme != "" {
-			ctx.SkillDocs[s.ID] = s.Readme
-		}
-
 		var dbTools []dbSkillTool
 		toolsJSON, _ := json.Marshal(s.Tools)
 		_ = json.Unmarshal(toolsJSON, &dbTools)
 
 		mode, bound := bindingMode[s.ID]
+		if !bound {
+			continue
+		}
 
 		switch {
-		case bound && mode == "always":
+		case mode == "always":
 			doc := fmt.Sprintf("### Skill: %s\n%s", s.Name, s.Description)
 			if s.Readme != "" {
 				doc += "\n\n" + s.Readme
@@ -170,33 +180,31 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 				ctx.ToolExecutors[t.Name] = t.Executor
 			}
 
-		case bound && mode == "on_demand":
+		case mode == "on_demand":
 			onDemandSummaries = append(onDemandSummaries,
 				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
-
-		default:
-			unboundSummaries = append(unboundSummaries,
-				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
+			if s.Readme != "" {
+				ctx.SkillDocs[s.ID] = s.Readme
+			}
+			ctx.LoadableSkillIDs[s.ID] = true
 		}
 	}
 
+	var sections []string
 	if len(alwaysDocs) > 0 {
-		ctx.SkillsSnippet = "\n## Skills\n\n" + strings.Join(alwaysDocs, "\n\n---\n\n")
+		sections = append(sections, "## 必召回 Skills\n\n"+strings.Join(alwaysDocs, "\n\n---\n\n"))
 	}
-
-	var deferred []string
-	deferred = append(deferred, onDemandSummaries...)
-	deferred = append(deferred, unboundSummaries...)
-	if len(deferred) > 0 {
-		ctx.SkillsSnippet += fmt.Sprintf(
-			"\n\n## 可按需加载的扩展技能\n以下技能未默认加载。需要时使用 `load_skill` 工具加载对应技能的文档和工具参考，然后通过已有工具执行操作。\n%s",
-			strings.Join(deferred, "\n"),
-		)
+	if len(onDemandSummaries) > 0 {
+		sections = append(sections, fmt.Sprintf(
+			"## 按需加载 Skills\n以下技能已绑定为按需加载模式。你已经知道它们的名称和用途；当需要详细工作流、完整说明或参考资料时，再使用 `load_skill` / `load_skill_reference` 获取详情。\n%s",
+			strings.Join(onDemandSummaries, "\n"),
+		))
 	}
+	ctx.SkillsSnippet = strings.Join(sections, "\n\n")
 
 	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
 		Name:        "load_skill",
-		Description: "加载一个扩展技能的完整文档和工具参考。当你需要使用「可按需加载的扩展技能」中的能力时，先调用此工具获取详细说明，再通过已有工具（如 wecom_api）执行具体操作。",
+		Description: "加载一个已绑定为按需加载模式的技能的完整文档和工具参考。当 system prompt 中的技能简介不足以完成任务时，先调用此工具获取详细说明。",
 		InputSchema: types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -212,7 +220,7 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 
 	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
 		Name:        "load_skill_reference",
-		Description: "加载技能的详细 API 参考文档。当 load_skill 返回的 readme 概览不够详细时，使用此工具按需加载具体的参考文件（如完整参数说明、枚举值、调用示例）。",
+		Description: "加载一个已绑定为按需加载模式的技能的详细 API 参考文档。当 load_skill 返回的 readme 概览不够详细时，使用此工具按需加载具体的参考文件。",
 		InputSchema: types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
