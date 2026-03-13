@@ -14,6 +14,7 @@ import (
 	"agent/internal/sanitize"
 	"agent/internal/storage"
 	"agent/internal/subagent"
+	"agent/internal/timeutil"
 	"agent/internal/types"
 )
 
@@ -750,11 +751,11 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	registerWecomBuiltinTools(registry, request.ProcessRequest)
 
-	registry.RegisterBuiltin("set_delayed_task", "设定一个延时任务，到期后系统会自动提醒你执行。用于定时提醒、后续跟进等场景。", types.JSONSchema{
+	registry.RegisterBuiltin("set_delayed_task", "设定一个延时任务，到期后系统会自动提醒你执行。用于定时提醒、后续跟进等场景。所有时间均为北京时间(CST/UTC+8)。", types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
 			"task":       map[string]interface{}{"type": "string", "description": "任务描述，到期时你会收到这段文字作为执行指令"},
-			"execute_at": map[string]interface{}{"type": "string", "description": "执行时间，ISO 8601 格式，例如 2025-03-12T10:00:00+08:00"},
+			"execute_at": map[string]interface{}{"type": "string", "description": "执行时间（北京时间），例如 2025-03-12T10:00:00+08:00 或 2025-03-12 10:00:00（无时区默认北京时间）"},
 		},
 		Required: []string{"task", "execute_at"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
@@ -763,10 +764,14 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		if task == "" {
 			return nil, fmt.Errorf("task is required")
 		}
-		executeAt, _ := input["execute_at"].(string)
-		executeAt = strings.TrimSpace(executeAt)
-		if executeAt == "" {
+		executeAtStr, _ := input["execute_at"].(string)
+		executeAtStr = strings.TrimSpace(executeAtStr)
+		if executeAtStr == "" {
 			return nil, fmt.Errorf("execute_at is required")
+		}
+		executeAtMs, ok := timeutil.ParseToMs(executeAtStr)
+		if !ok {
+			return nil, fmt.Errorf("无法解析时间: %s，请使用 ISO 8601 或 YYYY-MM-DD HH:MM:SS 格式", executeAtStr)
 		}
 
 		dt := &storage.DelayedTask{
@@ -777,7 +782,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			ChannelUserID:         request.ChannelUserID,
 			ChannelConversationID: request.ChannelConversationID,
 			Task:                  task,
-			ExecuteAt:             executeAt,
+			ExecuteAt:             executeAtMs,
 		}
 		if err := storage.CreateDelayedTask(dt); err != nil {
 			return nil, fmt.Errorf("create delayed task: %w", err)
@@ -785,7 +790,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		return map[string]interface{}{
 			"taskId":    dt.ID,
 			"task":      dt.Task,
-			"executeAt": dt.ExecuteAt,
+			"executeAt": timeutil.FormatCST(dt.ExecuteAt),
 			"status":    "scheduled",
 		}, nil
 	})
@@ -824,8 +829,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			items = append(items, map[string]interface{}{
 				"taskId":    t.ID,
 				"task":      t.Task,
-				"executeAt": t.ExecuteAt,
-				"createdAt": t.CreatedAt,
+				"executeAt": timeutil.FormatCST(t.ExecuteAt),
+				"createdAt": timeutil.FormatCST(t.CreatedAt),
 			})
 		}
 		return map[string]interface{}{

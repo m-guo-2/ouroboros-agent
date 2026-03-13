@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+
+	"agent/internal/timeutil"
 )
 
 // GetSettingValue reads a single settings entry by key.
@@ -37,10 +39,11 @@ func GetAllSettings() (map[string]string, error) {
 
 // SetSettingValue upserts a settings key.
 func SetSettingValue(key, value string) error {
+	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
-		key, value,
+		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = ?`,
+		key, value, now, now,
 	)
 	return err
 }
@@ -62,8 +65,8 @@ func SetMultipleSettings(kv map[string]string) error {
 		return err
 	}
 	stmt, err := tx.Prepare(
-		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = ?`,
 	)
 	if err != nil {
 		tx.Rollback()
@@ -72,7 +75,8 @@ func SetMultipleSettings(kv map[string]string) error {
 	defer stmt.Close()
 
 	for k, v := range kv {
-		if _, err := stmt.Exec(k, v); err != nil {
+		now := timeutil.NowMs()
+		if _, err := stmt.Exec(k, v, now, now); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("set %q: %w", k, err)
 		}

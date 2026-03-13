@@ -7,6 +7,7 @@ import (
 
 	"agent/internal/logger"
 	"agent/internal/storage"
+	"agent/internal/timeutil"
 )
 
 const schedulerInterval = 30 * time.Second
@@ -71,12 +72,15 @@ func dispatchDueTasks(ctx context.Context) {
 }
 
 func formatDelayedTaskEvent(task storage.DelayedTask) string {
-	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`【系统事件：定时任务到期】
 task_id: %s
 创建时间: %s
 计划执行时间: %s
 实际触发时间: %s
 任务内容：%s`,
-		task.ID, task.CreatedAt, task.ExecuteAt, now, task.Task)
+		task.ID,
+		timeutil.FormatCST(task.CreatedAt),
+		timeutil.FormatCST(task.ExecuteAt),
+		timeutil.FormatCST(timeutil.NowMs()),
+		task.Task)
 }

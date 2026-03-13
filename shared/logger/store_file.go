@@ -31,7 +31,7 @@ func NewFileStore(dir string) (*FileStore, error) {
 
 func (fs *FileStore) Append(level Level, entry map[string]any) error {
 	ts, _ := entry["time"].(string)
-	date := time.Now().Format("2006-01-02")
+	date := time.Now().In(cst).Format("2006-01-02")
 	if len(ts) >= 10 {
 		date = ts[:10]
 	}

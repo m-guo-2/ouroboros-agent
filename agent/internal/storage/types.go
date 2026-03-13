@@ -58,8 +58,8 @@ type SessionData struct {
 	ChannelName           string `json:"channelName"`
 	WorkDir               string `json:"workDir"`
 	ExecutionStatus       string `json:"executionStatus"`
-	CreatedAt             string `json:"createdAt"`
-	UpdatedAt             string `json:"updatedAt"`
+	CreatedAt             int64  `json:"createdAt"`
+	UpdatedAt             int64  `json:"updatedAt"`
 	Context               string `json:"-"`
 }
 
@@ -86,5 +86,5 @@ type MessageData struct {
 	SenderName       string           `json:"senderName"`
 	SenderID         string           `json:"senderId"`
 	Attachments      []AttachmentData `json:"attachments,omitempty"`
-	CreatedAt        string           `json:"createdAt"`
+	CreatedAt        int64            `json:"createdAt"`
 }

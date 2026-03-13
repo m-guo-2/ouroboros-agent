@@ -51,7 +51,7 @@ func runSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value TEXT,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// Agent configs
@@ -66,8 +66,8 @@ func runSchema(db *sql.DB) error {
 			skills TEXT DEFAULT '[]',
 			channels TEXT DEFAULT '[]',
 			is_active INTEGER DEFAULT 1,
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// Agent sessions
@@ -84,8 +84,8 @@ func runSchema(db *sql.DB) error {
 			session_key TEXT,
 			work_dir TEXT,
 			messages TEXT DEFAULT '[]',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// Indexes for agent_sessions
@@ -102,8 +102,8 @@ func runSchema(db *sql.DB) error {
 			type TEXT NOT NULL DEFAULT 'human',
 			avatar_url TEXT,
 			metadata TEXT DEFAULT '{}',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// User-channel bindings
@@ -114,7 +114,7 @@ func runSchema(db *sql.DB) error {
 			channel_user_id TEXT NOT NULL,
 			display_name TEXT,
 			channel_meta TEXT DEFAULT '{}',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_channels_unique ON user_channels(channel_type, channel_user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_user_channels_user ON user_channels(user_id)`,
@@ -125,7 +125,7 @@ func runSchema(db *sql.DB) error {
 			user_id TEXT NOT NULL,
 			agent_id TEXT NOT NULL DEFAULT '',
 			summary TEXT DEFAULT '',
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memory_agent_user ON user_memory(agent_id, user_id)`,
 
@@ -138,8 +138,8 @@ func runSchema(db *sql.DB) error {
 			fact TEXT NOT NULL,
 			source_channel TEXT,
 			source_session_id TEXT,
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			expires_at TEXT
+			created_at INTEGER NOT NULL DEFAULT 0,
+			expires_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_memory_facts_agent_user ON user_memory_facts(agent_id, user_id)`,
 
@@ -147,7 +147,7 @@ func runSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS processed_messages (
 			channel_message_id TEXT PRIMARY KEY,
 			channel_type TEXT NOT NULL,
-			processed_at TEXT DEFAULT CURRENT_TIMESTAMP
+			processed_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// Messages (per-session, append-only)
@@ -167,7 +167,7 @@ func runSchema(db *sql.DB) error {
 			sender_id TEXT,
 			attachments_json TEXT DEFAULT '[]',
 			status TEXT DEFAULT 'sent',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)`,
@@ -183,8 +183,8 @@ func runSchema(db *sql.DB) error {
 			model TEXT NOT NULL,
 			max_tokens INTEGER DEFAULT 4096,
 			temperature REAL DEFAULT 0.7,
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 
 		// Skills storage has moved to GitHub (see github.Store).
@@ -201,8 +201,8 @@ func runSchema(db *sql.DB) error {
 			tools TEXT DEFAULT '[]',
 			readme TEXT DEFAULT '',
 			metadata TEXT DEFAULT '{}',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 	}
 
@@ -239,12 +239,12 @@ func runSchema(db *sql.DB) error {
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
 			summary TEXT NOT NULL,
-			archived_before_time TEXT NOT NULL,
+			archived_before_time INTEGER NOT NULL,
 			archived_message_count INTEGER,
 			token_count_before INTEGER,
 			token_count_after INTEGER,
 			compact_model TEXT,
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_compactions_session ON context_compactions(session_id)`,
 
@@ -258,10 +258,10 @@ func runSchema(db *sql.DB) error {
 			channel_user_id TEXT NOT NULL DEFAULT '',
 			channel_conversation_id TEXT NOT NULL DEFAULT '',
 			task TEXT NOT NULL,
-			execute_at TEXT NOT NULL,
+			execute_at INTEGER NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_delayed_tasks_status_time ON delayed_tasks(status, execute_at)`,
 
@@ -271,7 +271,7 @@ func runSchema(db *sql.DB) error {
 			session_id TEXT NOT NULL,
 			fact TEXT NOT NULL,
 			category TEXT NOT NULL DEFAULT 'general',
-			created_at TEXT DEFAULT CURRENT_TIMESTAMP
+			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_facts_session ON session_facts(session_id)`,
 	}

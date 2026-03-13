@@ -8,6 +8,7 @@ import (
 
 	"agent/internal/engine"
 	"agent/internal/storage"
+	"agent/internal/timeutil"
 	"agent/internal/types"
 )
 
@@ -140,7 +141,7 @@ func recallSummary(sessionID string) (interface{}, error) {
 	summaries := make([]map[string]interface{}, 0, len(compactions))
 	for _, c := range compactions {
 		summaries = append(summaries, map[string]interface{}{
-			"compactedAt":     c.CreatedAt,
+			"compactedAt":     timeutil.FormatCST(c.CreatedAt),
 			"summary":         c.Summary,
 			"archivedCount":   c.ArchivedMessageCount,
 			"tokensBefore":    c.TokenCountBefore,
@@ -184,7 +185,7 @@ func formatRecalledMessages(msgs []storage.MessageData) []map[string]interface{}
 		out = append(out, map[string]interface{}{
 			"role":      m.Role,
 			"content":   content,
-			"createdAt": m.CreatedAt,
+			"createdAt": timeutil.FormatCST(m.CreatedAt),
 		})
 	}
 	return out

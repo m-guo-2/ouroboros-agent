@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"agent/internal/timeutil"
 )
 
 // CountSessionMessages returns the number of messages for a session.
@@ -62,7 +64,7 @@ func GetMessageByID(msgID string) (*MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), created_at
 		 FROM messages WHERE id = ?`, msgID,
 	).Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.MessageType, &m.Channel,
 		&m.ChannelMessageID, &m.TraceID, &m.Initiator, &m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt)
@@ -79,7 +81,7 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), created_at
 		 FROM messages WHERE session_id = ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, limit,
@@ -105,14 +107,14 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 	return msgs, rows.Err()
 }
 
-// GetMessagesBefore returns messages for a session created before the given time, oldest-first.
-func GetMessagesBefore(sessionID, beforeTime string, limit int) ([]MessageData, error) {
+// GetMessagesBefore returns messages for a session created before the given time (Unix ms), oldest-first.
+func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, role, content,
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), created_at
 		 FROM messages WHERE session_id = ? AND created_at < ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, beforeTime, limit,
@@ -139,13 +141,13 @@ func GetMessagesBefore(sessionID, beforeTime string, limit int) ([]MessageData, 
 }
 
 // SearchMessages returns messages for a session whose content matches the query string.
-func SearchMessages(sessionID, query, beforeTime string, limit int) ([]MessageData, error) {
+func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, role, content,
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), COALESCE(created_at,'')
+		        COALESCE(attachments_json,'[]'), created_at
 		 FROM messages
 		 WHERE session_id = ? AND created_at < ? AND content LIKE ?
 		 ORDER BY created_at DESC LIMIT ?`,
@@ -210,11 +212,12 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 		}
 	}
 
+	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO messages
-		 (id, session_id, role, content, message_type, channel, channel_message_id, trace_id, initiator, sender_name, sender_id, attachments_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, sessionID, role, content, msgType, channel, channelMessageID, traceID, initiator, senderName, senderID, attachmentsJSON,
+		 (id, session_id, role, content, message_type, channel, channel_message_id, trace_id, initiator, sender_name, sender_id, attachments_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, sessionID, role, content, msgType, channel, channelMessageID, traceID, initiator, senderName, senderID, attachmentsJSON, now,
 	)
 	if err != nil {
 		return nil, err

@@ -6,12 +6,12 @@ type CompactionData struct {
 	ID                   string `json:"id"`
 	SessionID            string `json:"sessionId"`
 	Summary              string `json:"summary"`
-	ArchivedBeforeTime   string `json:"archivedBeforeTime"`
+	ArchivedBeforeTime   int64  `json:"archivedBeforeTime"`
 	ArchivedMessageCount int    `json:"archivedMessageCount"`
 	TokenCountBefore     int    `json:"tokenCountBefore"`
 	TokenCountAfter      int    `json:"tokenCountAfter"`
 	CompactModel         string `json:"compactModel"`
-	CreatedAt            string `json:"createdAt"`
+	CreatedAt            int64  `json:"createdAt"`
 }
 
 func SaveCompaction(data CompactionData) error {
@@ -32,7 +32,7 @@ func GetLatestCompaction(sessionID string) (*CompactionData, error) {
 	err := DB.QueryRow(
 		`SELECT id, session_id, summary, archived_before_time, archived_message_count,
 		        token_count_before, token_count_after, COALESCE(compact_model,''),
-		        COALESCE(created_at,'')
+		        created_at
 		 FROM context_compactions
 		 WHERE session_id = ?
 		 ORDER BY created_at DESC LIMIT 1`, sessionID,
@@ -49,7 +49,7 @@ func ListCompactions(sessionID string) ([]CompactionData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, summary, archived_before_time, archived_message_count,
 		        token_count_before, token_count_after, COALESCE(compact_model,''),
-		        COALESCE(created_at,'')
+		        created_at
 		 FROM context_compactions
 		 WHERE session_id = ?
 		 ORDER BY created_at DESC`, sessionID,

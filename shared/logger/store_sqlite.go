@@ -205,7 +205,7 @@ func intFromEntry(entry map[string]any, key string) int {
 
 func (s *SQLiteStore) Append(level Level, entry map[string]any) error {
 	ts := strFromEntry(entry, "time")
-	date := time.Now().Format("2006-01-02")
+	date := time.Now().In(cst).Format("2006-01-02")
 	if len(ts) >= 10 {
 		date = ts[:10]
 	}
@@ -242,7 +242,7 @@ func (s *SQLiteStore) Append(level Level, entry map[string]any) error {
 }
 
 func (s *SQLiteStore) WriteLLMIO(ref string, traceID string, iteration int, data []byte) error {
-	date := time.Now().Format("2006-01-02")
+	date := time.Now().In(cst).Format("2006-01-02")
 	db, err := s.ensureDB(date)
 	if err != nil {
 		return err
@@ -268,7 +268,7 @@ func (s *SQLiteStore) ListTraces(filter TraceFilter) ([]TraceSummary, error) {
 
 	dates := s.availableDates()
 	if len(dates) == 0 {
-		today := time.Now().Format("2006-01-02")
+		today := time.Now().In(cst).Format("2006-01-02")
 		dates = []string{today}
 	}
 
@@ -418,7 +418,7 @@ func (s *SQLiteStore) Cleanup(retentionDays int) error {
 	if retentionDays <= 0 {
 		retentionDays = 14
 	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02")
+	cutoff := time.Now().In(cst).AddDate(0, 0, -retentionDays).Format("2006-01-02")
 
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {

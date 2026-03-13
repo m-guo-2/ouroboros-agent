@@ -108,6 +108,9 @@ func parseTimestamp(ts string) int64 {
 	}
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
+		t, err = time.Parse(time.RFC3339, ts)
+	}
+	if err != nil {
 		return time.Now().UnixMilli()
 	}
 	return t.UnixMilli()

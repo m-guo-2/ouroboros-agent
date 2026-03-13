@@ -1,13 +1,17 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+
+	"agent/internal/timeutil"
+)
 
 type SessionFact struct {
 	ID        string `json:"id"`
 	SessionID string `json:"sessionId"`
 	Fact      string `json:"fact"`
 	Category  string `json:"category"`
-	CreatedAt string `json:"createdAt"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 func SaveSessionFacts(sessionID string, facts []string, category string) (int, error) {
@@ -25,19 +29,20 @@ func SaveSessionFacts(sessionID string, facts []string, category string) (int, e
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO session_facts (id, session_id, fact, category) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO session_facts (id, session_id, fact, category, created_at) VALUES (?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
 
+	now := timeutil.NowMs()
 	saved := 0
 	for _, f := range facts {
 		if f == "" {
 			continue
 		}
-		if _, err := stmt.Exec(newID(), sessionID, f, category); err != nil {
+		if _, err := stmt.Exec(newID(), sessionID, f, category, now); err != nil {
 			return saved, fmt.Errorf("insert fact: %w", err)
 		}
 		saved++
@@ -51,7 +56,7 @@ func SaveSessionFacts(sessionID string, facts []string, category string) (int, e
 
 func GetSessionFacts(sessionID string) ([]SessionFact, error) {
 	rows, err := DB.Query(
-		`SELECT id, session_id, fact, category, COALESCE(created_at,'')
+		`SELECT id, session_id, fact, category, created_at
 		 FROM session_facts
 		 WHERE session_id = ?
 		 ORDER BY created_at ASC`, sessionID,

@@ -1,7 +1,7 @@
 package storage
 
+import "agent/internal/timeutil"
 
-// IsProcessed returns true when the given dedup key was already handled.
 func IsProcessed(key string) bool {
 	var dummy string
 	err := DB.QueryRow(
@@ -10,11 +10,10 @@ func IsProcessed(key string) bool {
 	return err == nil
 }
 
-// MarkProcessed records a dedup key so future identical messages are skipped.
 func MarkProcessed(key, channelType string) error {
 	_, err := DB.Exec(
-		`INSERT OR IGNORE INTO processed_messages (channel_message_id, channel_type) VALUES (?, ?)`,
-		key, channelType,
+		`INSERT OR IGNORE INTO processed_messages (channel_message_id, channel_type, processed_at) VALUES (?, ?, ?)`,
+		key, channelType, timeutil.NowMs(),
 	)
 	return err
 }

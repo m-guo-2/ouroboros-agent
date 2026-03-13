@@ -2,10 +2,9 @@ package storage
 
 import (
 	"fmt"
-	"time"
-)
 
-const sqliteDatetimeFmt = "2006-01-02 15:04:05"
+	"agent/internal/timeutil"
+)
 
 type DelayedTask struct {
 	ID                    string
@@ -16,54 +15,36 @@ type DelayedTask struct {
 	ChannelUserID         string
 	ChannelConversationID string
 	Task                  string
-	ExecuteAt             string
+	ExecuteAt             int64
 	Status                string
-	CreatedAt             string
-	UpdatedAt             string
-}
-
-// NormalizeToSQLiteDatetime parses an ISO 8601 string (with or without
-// timezone) and returns it in SQLite-comparable UTC format "YYYY-MM-DD HH:MM:SS".
-// If parsing fails, the original value is returned unchanged.
-func NormalizeToSQLiteDatetime(iso string) string {
-	formats := []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05",
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04",
-		"2006-01-02 15:04",
-	}
-	for _, f := range formats {
-		if t, err := time.Parse(f, iso); err == nil {
-			return t.UTC().Format(sqliteDatetimeFmt)
-		}
-	}
-	return iso
+	CreatedAt             int64
+	UpdatedAt             int64
 }
 
 func CreateDelayedTask(task *DelayedTask) error {
 	if task.ID == "" {
-		task.ID = fmt.Sprintf("dt-%d", time.Now().UnixNano())
+		task.ID = fmt.Sprintf("dt-%d", timeutil.NowMs())
 	}
-	task.ExecuteAt = NormalizeToSQLiteDatetime(task.ExecuteAt)
+	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO delayed_tasks
-			(id, session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id, task, execute_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+			(id, session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id, task, execute_at, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
 		task.ID, task.SessionID, task.AgentID, task.UserID,
 		task.Channel, task.ChannelUserID, task.ChannelConversationID,
-		task.Task, task.ExecuteAt,
+		task.Task, task.ExecuteAt, now, now,
 	)
 	return err
 }
 
 func QueryDueTasks() ([]DelayedTask, error) {
+	now := timeutil.NowMs()
 	rows, err := DB.Query(
 		`SELECT id, session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id,
 			task, execute_at, status, created_at
 		FROM delayed_tasks
-		WHERE status = 'pending' AND execute_at <= datetime('now')
-		ORDER BY execute_at ASC`,
+		WHERE status = 'pending' AND execute_at <= ?
+		ORDER BY execute_at ASC`, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query due tasks: %w", err)
@@ -86,9 +67,10 @@ func QueryDueTasks() ([]DelayedTask, error) {
 }
 
 func MarkTaskDispatched(id string) error {
+	now := timeutil.NowMs()
 	res, err := DB.Exec(
-		`UPDATE delayed_tasks SET status = 'dispatched', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'`,
-		id,
+		`UPDATE delayed_tasks SET status = 'dispatched', updated_at = ? WHERE id = ? AND status = 'pending'`,
+		now, id,
 	)
 	if err != nil {
 		return fmt.Errorf("mark task dispatched: %w", err)
@@ -101,10 +83,11 @@ func MarkTaskDispatched(id string) error {
 }
 
 func CancelDelayedTask(id, sessionID string) error {
+	now := timeutil.NowMs()
 	res, err := DB.Exec(
-		`UPDATE delayed_tasks SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+		`UPDATE delayed_tasks SET status = 'cancelled', updated_at = ?
 		 WHERE id = ? AND session_id = ? AND status = 'pending'`,
-		id, sessionID,
+		now, id, sessionID,
 	)
 	if err != nil {
 		return fmt.Errorf("cancel delayed task: %w", err)

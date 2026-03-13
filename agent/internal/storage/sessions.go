@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"agent/internal/timeutil"
 )
 
 // newID generates a short random ID suitable for sessions and messages.
@@ -43,8 +45,8 @@ const sessionSelectSQL = `
 	SELECT id, title, agent_id, user_id, source_channel, session_key,
 	       channel_conversation_id, COALESCE(channel_name,''), work_dir,
 	       COALESCE(execution_status,'idle'),
-	       COALESCE(created_at,''),
-	       COALESCE(updated_at,''),
+	       created_at,
+	       updated_at,
 	       COALESCE(context,'')
 	FROM agent_sessions`
 
@@ -86,8 +88,8 @@ func PatchSession(sessionID string, fields map[string]string) error {
 			continue
 		}
 		if _, err := DB.Exec(
-			fmt.Sprintf("UPDATE agent_sessions SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", col),
-			val, sessionID,
+			fmt.Sprintf("UPDATE agent_sessions SET %s = ?, updated_at = ? WHERE id = ?", col),
+			val, timeutil.NowMs(), sessionID,
 		); err != nil {
 			return err
 		}
@@ -113,11 +115,12 @@ func CreateSession(params map[string]interface{}) (*SessionData, error) {
 	channelName, _ := params["channelName"].(string)
 	workDir, _ := params["workDir"].(string)
 
+	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO agent_sessions
-		 (id, title, agent_id, user_id, source_channel, session_key, channel_conversation_id, channel_name, work_dir, execution_status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle')`,
-		id, title, agentID, userID, channel, sessionKey, channelConvID, channelName, workDir,
+		 (id, title, agent_id, user_id, source_channel, session_key, channel_conversation_id, channel_name, work_dir, execution_status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+		id, title, agentID, userID, channel, sessionKey, channelConvID, channelName, workDir, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -217,8 +220,8 @@ func UpdateSession(sessionID string, updates map[string]interface{}) error {
 			continue
 		}
 		if _, err := DB.Exec(
-			fmt.Sprintf("UPDATE agent_sessions SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", col),
-			fmt.Sprint(val), sessionID,
+			fmt.Sprintf("UPDATE agent_sessions SET %s = ?, updated_at = ? WHERE id = ?", col),
+			fmt.Sprint(val), timeutil.NowMs(), sessionID,
 		); err != nil {
 			return err
 		}

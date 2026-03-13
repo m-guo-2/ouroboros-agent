@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
 	"agent/internal/logger"
 	"agent/internal/storage"
+	"agent/internal/timeutil"
 	"agent/internal/types"
 )
 
@@ -87,12 +87,13 @@ func CompactContext(
 
 	summary := generateSummary(ctx, archived, compactLLM, compactModel)
 
+	now := timeutil.NowMs()
 	summaryMsg := types.AgentMessage{
 		Role: "user",
 		Content: []types.ContentBlock{{
 			Type: "text",
 			Text: fmt.Sprintf("[Context Compact]\nPrevious conversation (%d messages, archived at %s):\n\n%s\n\n---\nFull history available via recall_context tool.",
-				len(archived), time.Now().Format(time.RFC3339), summary),
+				len(archived), timeutil.FormatCST(now), summary),
 		}},
 	}
 	ackMsg := types.AgentMessage{
@@ -112,7 +113,7 @@ func CompactContext(
 	err := storage.SaveCompaction(storage.CompactionData{
 		SessionID:            sessionID,
 		Summary:              summary,
-		ArchivedBeforeTime:   time.Now().Format(time.RFC3339),
+		ArchivedBeforeTime:   now,
 		ArchivedMessageCount: len(archived),
 		TokenCountBefore:     tokensBefore,
 		TokenCountAfter:      tokensAfter,

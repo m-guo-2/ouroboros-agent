@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var cst = time.FixedZone("CST", 8*3600)
+
 type Level string
 
 const (
@@ -143,7 +145,7 @@ func Warn(ctx context.Context, msg string, args ...any) {
 }
 
 func writeLog(ctx context.Context, level Level, msg string, args ...any) {
-	now := time.Now()
+	now := time.Now().In(cst)
 	entry := map[string]any{
 		"time":  now.Format(time.RFC3339Nano),
 		"level": string(level),
@@ -197,7 +199,7 @@ var levelStyle = map[Level]struct{ color, label string }{
 
 func writeToConsole(level Level, t time.Time, msg string, entry map[string]any) {
 	style := levelStyle[level]
-	timeStr := t.Format("15:04:05.000")
+	timeStr := t.In(cst).Format("15:04:05.000")
 
 	severity, _ := entry["severity"].(string)
 	traceID, _ := entry["traceId"].(string)
@@ -302,7 +304,7 @@ func WriteLLMIO(ctx context.Context, iteration int, request, response any) strin
 	payload := map[string]any{
 		"traceId":   traceID,
 		"iteration": iteration,
-		"time":      time.Now().Format(time.RFC3339Nano),
+		"time":      time.Now().In(cst).Format(time.RFC3339Nano),
 		"request":   request,
 		"response":  response,
 	}
@@ -344,7 +346,7 @@ func cleanupOldFiles() {
 	if logDir == "" {
 		return
 	}
-	now := time.Now()
+	now := time.Now().In(cst)
 	for level, days := range retentionDays {
 		dir := filepath.Join(logDir, string(level))
 		entries, err := os.ReadDir(dir)

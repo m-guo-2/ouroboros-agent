@@ -2,20 +2,18 @@ package storage
 
 import "database/sql"
 
-// UserRecord mirrors a row in the users table.
 type UserRecord struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Type      string `json:"type"`
 	AvatarURL string `json:"avatarUrl"`
-	CreatedAt string `json:"createdAt"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
-// GetUserByID returns a user by primary key, or (nil, nil) when not found.
 func GetUserByID(userID string) (*UserRecord, error) {
 	var u UserRecord
 	err := DB.QueryRow(
-		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), COALESCE(created_at,'')
+		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), created_at
 		 FROM users WHERE id = ?`, userID,
 	).Scan(&u.ID, &u.Name, &u.Type, &u.AvatarURL, &u.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -24,10 +22,9 @@ func GetUserByID(userID string) (*UserRecord, error) {
 	return &u, err
 }
 
-// GetAllUsers returns every user ordered by creation time.
 func GetAllUsers() ([]UserRecord, error) {
 	rows, err := DB.Query(
-		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), COALESCE(created_at,'')
+		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), created_at
 		 FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err

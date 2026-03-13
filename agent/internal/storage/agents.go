@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"agent/internal/timeutil"
 )
 
 // providerCredentialsKey maps provider aliases to their settings table keys.
@@ -132,11 +134,12 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 	if cfg.IsActive {
 		isActive = 1
 	}
+	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, is_active)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, is_active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cfg.ID, "", cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
-		string(skillsJSON), string(channelsJSON), isActive,
+		string(skillsJSON), string(channelsJSON), isActive, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -170,19 +173,19 @@ func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentCo
 			}
 		}
 		if _, err := DB.Exec(
-			fmt.Sprintf("UPDATE agent_configs SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", col),
-			v, agentID,
+			fmt.Sprintf("UPDATE agent_configs SET %s = ?, updated_at = ? WHERE id = ?", col),
+			v, timeutil.NowMs(), agentID,
 		); err != nil {
 			return nil, err
 		}
 	}
 	if skills, ok := updates["skills"]; ok {
 		b, _ := json.Marshal(skills)
-		DB.Exec("UPDATE agent_configs SET skills = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", string(b), agentID)
+		DB.Exec("UPDATE agent_configs SET skills = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
 	}
 	if channels, ok := updates["channels"]; ok {
 		b, _ := json.Marshal(channels)
-		DB.Exec("UPDATE agent_configs SET channels = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", string(b), agentID)
+		DB.Exec("UPDATE agent_configs SET channels = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
 	}
 	return GetAgentConfig(agentID)
 }

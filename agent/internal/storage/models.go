@@ -2,6 +2,8 @@ package storage
 
 import (
 	"database/sql"
+
+	"agent/internal/timeutil"
 )
 
 // ModelRecord holds a single row from the models table.
@@ -144,8 +146,8 @@ func GetModelByIDWithAPIKey(id string) (*ModelRecord, error) {
 
 // UpdateModel updates model fields. Pass empty string for apiKey to leave unchanged.
 func UpdateModel(id string, updates map[string]interface{}) (*ModelResponse, error) {
-	setParts := []string{"updated_at = CURRENT_TIMESTAMP"}
-	args := []interface{}{}
+	setParts := []string{"updated_at = ?"}
+	args := []interface{}{timeutil.NowMs()}
 
 	if v, ok := updates["apiKey"].(string); ok {
 		setParts = append(setParts, "api_key = ?")
