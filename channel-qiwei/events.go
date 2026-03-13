@@ -32,7 +32,8 @@ var userMessageTypeMap = map[int]string{
 	34:  "voice",
 	41:  "card",
 	43:  "video",
-	49:  "file",
+	// msgType 49 (appmsg) is handled in handleNormalMessage switch by subType.
+	// 49:  handled per subType (quote=57, file=6, link=5, etc.)
 	78:  "miniapp",
 	101: "image",
 	102: "file",
@@ -116,7 +117,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 	}
 
 	messageType := userMessageTypeMap[msg.MsgType]
-	if messageType == "" {
+	if messageType == "" && msg.MsgType != 49 {
 		rawMsgData, _ := json.Marshal(msg.MsgData)
 		logger.Warn(ctx, "跳过不支持的消息类型",
 			"tag", tagCallback,
@@ -151,6 +152,22 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 				"msgData", string(rawMsgData),
 			)
 			return nil
+		}
+
+	case msg.MsgType == 49:
+		content, channelMeta, messageType = a.handleAppMessage(ctx, msg)
+		if content == "" && messageType == "file" {
+			prepared := a.prepareMediaForAgent(ctx, msg.MsgType, "file", msg.MsgData)
+			if prepared.MessageType != "" {
+				messageType = prepared.MessageType
+			}
+			if strings.TrimSpace(prepared.ResourceURI) == "" {
+				logger.Error(ctx, "媒体上传失败，跳过",
+					"tag", tagCallback, "msg", msg.MsgSvrID, "type", messageType)
+				return nil
+			}
+			content = strings.TrimSpace(prepared.ResourceURI)
+			attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, messageType, prepared)
 		}
 
 	case richContentTypes[messageType]:
@@ -370,6 +387,89 @@ func contentFromChannelMsg(msgData map[string]any) string {
 	return strings.Join(parts, "\n")
 }
 
+// handleAppMessage routes msgType 49 (appmsg) by subType.
+func (a *app) handleAppMessage(ctx context.Context, msg qiweiCallbackMessage) (string, map[string]any, string) {
+	subType := int(anyToInt64(msg.MsgData["subType"]))
+	if subType == 0 {
+		subType = int(anyToInt64(msg.MsgData["type"]))
+	}
+	if subType == 0 {
+		subType = int(anyToInt64(msg.MsgData["appmsgtype"]))
+	}
+
+	rawMsgData, _ := json.Marshal(msg.MsgData)
+	logger.Detail(ctx, "appmsg(49) 路由",
+		"tag", tagCallback, "subType", subType,
+		"msg", msg.MsgSvrID, "msgData", string(rawMsgData))
+
+	switch subType {
+	case 57:
+		content, meta := contentFromQuote(msg.MsgData)
+		return content, meta, "quote"
+	case 5:
+		return contentFromLink(msg.MsgData), nil, "link"
+	case 33, 36:
+		c, m := contentFromMiniapp(msg.MsgData)
+		return c, m, "miniapp"
+	default:
+		return "", nil, "file"
+	}
+}
+
+// contentFromQuote extracts the quoted message context and the user's reply text.
+// Returns the reply content and channelMeta containing the quotedMessage structure.
+func contentFromQuote(msgData map[string]any) (string, map[string]any) {
+	replyText := strings.TrimSpace(decodeMaybeBase64(anyToString(msgData["content"])))
+	if replyText == "" {
+		replyText = strings.TrimSpace(decodeMaybeBase64(anyToString(msgData["title"])))
+	}
+
+	referMsg := firstNonNilMap(
+		msgData["referMsg"],
+		msgData["refermsg"],
+		msgData["refer_msg"],
+		msgData["referMessage"],
+	)
+
+	if len(referMsg) == 0 {
+		if replyText != "" {
+			return replyText, nil
+		}
+		return "[引用消息]", nil
+	}
+
+	quotedContent := strings.TrimSpace(decodeMaybeBase64(anyToString(referMsg["content"])))
+	quotedSender := strings.TrimSpace(decodeMaybeBase64(firstNonEmpty(
+		anyToString(referMsg["displayName"]),
+		anyToString(referMsg["nickname"]),
+		anyToString(referMsg["chatnickname"]),
+	)))
+	quotedMsgID := firstNonEmpty(
+		anyToString(referMsg["svrid"]),
+		anyToString(referMsg["msgSvrId"]),
+		anyToString(referMsg["msgServerId"]),
+	)
+
+	meta := map[string]any{
+		"quotedMessage": map[string]any{
+			"msgSvrId":   quotedMsgID,
+			"content":    quotedContent,
+			"senderName": quotedSender,
+		},
+	}
+
+	return replyText, meta
+}
+
+func firstNonNilMap(values ...any) map[string]any {
+	for _, v := range values {
+		if m, ok := v.(map[string]any); ok && len(m) > 0 {
+			return m
+		}
+	}
+	return nil
+}
+
 func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) (string, []incomingAttachment) {
 	rawData, ok := msg.MsgData["content"]
 	if !ok {
@@ -500,13 +600,15 @@ func attachmentsFromPreparedMedia(messageID, messageType string, prepared prepar
 	}}
 }
 
+var cst = time.FixedZone("CST", 8*3600)
+
 func formatSenderPrefix(name, id string, t time.Time) string {
 	name = strings.TrimSpace(name)
 	id = strings.TrimSpace(id)
 	if name == "" {
 		name = firstNonEmpty(id, "未知用户")
 	}
-	ts := t.Local().Format("2006-01-02 15:04:05")
+	ts := t.In(cst).Format("2006-01-02 15:04:05")
 	if id == "" {
 		return name + " " + ts + ":"
 	}

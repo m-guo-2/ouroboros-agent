@@ -21,6 +21,7 @@ type ProcessRequest struct {
 	SenderName            string                   `json:"senderName,omitempty"`
 	MessageType           string                   `json:"messageType,omitempty"`
 	Attachments           []storage.AttachmentData `json:"attachments,omitempty"`
+	ChannelMeta           map[string]any           `json:"channelMeta,omitempty"`
 	MessageID             string                   `json:"messageId"`
 	SessionID             string                   `json:"sessionId,omitempty"`
 	TraceID               string                   `json:"traceId,omitempty"`

@@ -28,6 +28,7 @@ type IncomingMessage struct {
 	AgentID                 string                   `json:"agentId,omitempty"`
 	Timestamp               int64                    `json:"timestamp,omitempty"`
 	Attachments             []storage.AttachmentData `json:"attachments,omitempty"`
+	ChannelMeta             map[string]any           `json:"channelMeta,omitempty"`
 }
 
 // DispatchResult is returned synchronously to the caller.
@@ -192,6 +193,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		SenderName:            msg.SenderName,
 		MessageType:           msg.MessageType,
 		Attachments:           msg.Attachments,
+		ChannelMeta:           msg.ChannelMeta,
 		MessageID:             msgID,
 		SessionID:             session.ID,
 		TraceID:               traceID,
