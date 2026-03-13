@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react"
 import { Bot, Copy, Check } from "lucide-react"
+import { copyToClipboard } from "@/lib/utils"
 import { useLLMIO } from "../hooks/use-llm-io"
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation()
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })

@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { FileText, X, Copy, Check } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { copyToClipboard } from "@/lib/utils"
 import { useLLMIO } from "../hooks/use-llm-io"
 
 function stringify(v: unknown): string {
@@ -10,7 +11,7 @@ function stringify(v: unknown): string {
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
