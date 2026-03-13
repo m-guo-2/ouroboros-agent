@@ -73,7 +73,16 @@ func Init(dir, svc string) {
 }
 
 func GetReader() LogReader {
-	return sqliteStore
+	var primary LogReader
+	if sqliteStore != nil {
+		primary = sqliteStore
+	}
+	secondary := NewFileReader(logDir)
+
+	if primary == nil {
+		return secondary
+	}
+	return NewCompositeReader(primary, secondary)
 }
 
 func WithTrace(ctx context.Context, traceID, sessionID string) context.Context {
