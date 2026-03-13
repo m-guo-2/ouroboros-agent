@@ -71,15 +71,12 @@ func dispatchDueTasks(ctx context.Context) {
 }
 
 func formatDelayedTaskEvent(task storage.DelayedTask) string {
+	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`【系统事件：定时任务到期】
 task_id: %s
 创建时间: %s
-
-任务内容：
-%s
-
-这是你此前主动设定的定时任务，现已到期。
-请结合当前对话上下文和用户现状，判断该任务是否仍然适用，然后采取相应行动。
-如果情况已发生变化，请灵活调整执行方式或告知用户任务已到期但现状可能有变。`,
-		task.ID, task.CreatedAt, task.Task)
+计划执行时间: %s
+实际触发时间: %s
+任务内容：%s`,
+		task.ID, task.CreatedAt, task.ExecuteAt, now, task.Task)
 }

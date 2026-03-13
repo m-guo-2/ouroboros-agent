@@ -6,9 +6,11 @@
 
 工具 SHALL 自动注入当前请求的上下文信息（session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id），调用方无需手动传递这些字段。
 
+`execute_at` 在写入 DB 前 SHALL 被归一化为 SQLite datetime 格式的 UTC 时间（如 `2025-03-12 02:00:00`），以确保与 `datetime('now')` 的字符串比较语义正确。支持多种输入格式的容错解析（RFC 3339、带 T 分隔符、带空格分隔符等）。
+
 #### Scenario: Agent 成功设定一个延时任务
 - **WHEN** agent 调用 `set_delayed_task`，传入 `task="提醒张三准备周会材料"` 和 `execute_at="2025-03-12T10:00:00+08:00"`
-- **THEN** 系统在 `delayed_tasks` 表创建一条记录，status 为 `pending`，execute_at 为指定时间，并返回包含 taskId 的成功响应
+- **THEN** 系统在 `delayed_tasks` 表创建一条记录，status 为 `pending`，execute_at 为归一化后的 UTC 时间 `2025-03-12 02:00:00`，并返回包含 taskId 的成功响应
 
 #### Scenario: 缺少必填参数时返回错误
 - **WHEN** agent 调用 `set_delayed_task`，未传入 `task` 或 `execute_at`
@@ -18,23 +20,45 @@
 - **WHEN** agent 调用 `set_delayed_task`，`execute_at` 为过去的时间
 - **THEN** 系统仍创建记录（调度器下次扫描时会立即投递）
 
-### Requirement: 延时任务不设显式取消工具
+### Requirement: Agent 可通过 cancel_delayed_task 取消待执行任务
 
-系统 SHALL NOT 提供取消延时任务的工具。任务一旦设定，始终在到期时投递。模型在收到到期事件时，SHALL 根据当前对话上下文自行判断任务是否仍然适用——如果用户意图已变化（如用户在对话中表示"不需要提醒了"），模型应选择不执行或告知用户情况已变，而非机械执行原始任务。
+系统 SHALL 提供名为 `cancel_delayed_task` 的内置工具，允许 agent 取消一个尚未执行的延时任务。工具接受 `task_id`（string，必填）参数。
 
-#### Scenario: 用户在到期前已表达不需要
-- **WHEN** 用户在设定定时任务后、到期前说"那个提醒不用了"
-- **THEN** 任务仍然在到期时投递到 agent，agent 读取上下文后判断用户已不需要，选择不执行或简要告知
+调用时 SHALL 验证任务属于当前 session 且 status 为 `pending`，满足条件则将 status 更新为 `cancelled`，返回 `{ taskId, status: "cancelled" }`。不满足条件时返回错误。
 
-#### Scenario: 用户意图发生变化
-- **WHEN** 用户设定"周五提醒我交方案"，但后续对话中说"方案已经提前交了"
-- **THEN** 任务到期时 agent 结合上下文判断任务已完成，不再重复提醒
+#### Scenario: Agent 成功取消一个待执行任务
+- **WHEN** agent 调用 `cancel_delayed_task`，传入一个属于当前 session 且 status 为 `pending` 的 task_id
+- **THEN** 系统将该任务 status 更新为 `cancelled`，调度器后续扫描不会投递该任务
+
+#### Scenario: 取消不属于当前 session 的任务时返回错误
+- **WHEN** agent 调用 `cancel_delayed_task`，传入一个属于其他 session 的 task_id
+- **THEN** 系统返回错误，不修改任何记录
+
+#### Scenario: 取消已投递或已取消的任务时返回错误
+- **WHEN** agent 调用 `cancel_delayed_task`，传入一个 status 为 `dispatched` 或 `cancelled` 的 task_id
+- **THEN** 系统返回错误，不修改任何记录
+
+### Requirement: Agent 可通过 list_delayed_tasks 查询待执行任务
+
+系统 SHALL 提供名为 `list_delayed_tasks` 的内置工具，允许 agent 查看当前 session 中所有 status 为 `pending` 的延时任务。工具无需输入参数。
+
+返回 `{ count, tasks: [{ taskId, task, executeAt, createdAt }] }`，按 execute_at 升序排列。
+
+#### Scenario: 当前 session 有待执行任务
+- **WHEN** agent 调用 `list_delayed_tasks`，当前 session 有 2 条 pending 任务
+- **THEN** 系统返回 count 为 2，tasks 包含两条任务的详细信息
+
+#### Scenario: 当前 session 无待执行任务
+- **WHEN** agent 调用 `list_delayed_tasks`，当前 session 无 pending 任务
+- **THEN** 系统返回 count 为 0，tasks 为空数组
 
 ### Requirement: 延时任务存储模型
 
 系统 SHALL 在 SQLite 中维护 `delayed_tasks` 表，包含以下字段：id, session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id, task, execute_at, status, created_at, updated_at。
 
-status 字段的合法值 SHALL 为：`pending`（待执行）、`dispatched`（已投递）。
+status 字段的合法值 SHALL 为：`pending`（待执行）、`dispatched`（已投递）、`cancelled`（已取消）。
+
+execute_at 字段 SHALL 存储为 SQLite datetime 格式的 UTC 时间（`YYYY-MM-DD HH:MM:SS`），写入时由 `NormalizeToSQLiteDatetime` 函数从 ISO 8601 输入转换。
 
 SHALL 在 `(status, execute_at)` 上建立索引以支持调度器高效查询。
 

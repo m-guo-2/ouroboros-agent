@@ -16,6 +16,10 @@
 - **WHEN** 一条 `delayed_tasks` 记录的 status 为 `dispatched`
 - **THEN** 调度器扫描时跳过该记录
 
+#### Scenario: 已取消的任务不会被投递
+- **WHEN** 一条 `delayed_tasks` 记录的 status 为 `cancelled`
+- **THEN** 调度器扫描时跳过该记录
+
 #### Scenario: 进程重启后恢复待执行任务
 - **WHEN** agent 进程重启，DB 中存在 status 为 `pending` 且已过期的记录
 - **THEN** 调度器首次扫描即投递这些任务
@@ -28,7 +32,7 @@
 - **WHEN** agent 进程收到 SIGTERM 信号
 - **THEN** 调度器停止扫描，不再投递新任务
 
-### Requirement: 到期事件以结构化格式进入 agent 上下文
+### Requirement: 到期事件以纯结构化数据格式进入 agent 上下文
 
 到期任务投递到 runner 队列时，`ProcessRequest.Content` SHALL 使用以下格式：
 
@@ -36,14 +40,17 @@
 【系统事件：定时任务到期】
 task_id: {id}
 创建时间: {created_at}
-
-任务内容：
-{task description}
-
-这是你此前主动设定的定时任务，现已到期。
-请结合当前对话上下文和用户现状，判断该任务是否仍然适用，然后采取相应行动。
-如果情况已发生变化，请灵活调整执行方式或告知用户任务已到期但现状可能有变。
+计划执行时间: {execute_at}
+实际触发时间: {now}
+任务内容：{task description}
 ```
+
+事件 SHALL 包含三个时间锚点：
+- **创建时间**：任务设定时的时间，表示决策上下文
+- **计划执行时间**：agent 设定的预期触发时间
+- **实际触发时间**：调度器投递时的 `time.Now()` UTC 时间
+
+事件 SHALL NOT 包含行为指令（如"请判断…""请结合上下文…"）。行为指导统一在 system prompt 中定义，遵循"数据归 event，行为归 prompt"原则。
 
 `ProcessRequest` 的路由字段 SHALL 从 `delayed_tasks` 记录还原：
 - `Channel`：delayed_tasks.channel
@@ -60,9 +67,9 @@ task_id: {id}
 - **WHEN** 到期事件进入 agent 处理流程
 - **THEN** 事件内容以 `【系统事件：定时任务到期】` 开头，与用户消息的 `senderName: content` 格式在结构上明确区分
 
-#### Scenario: 到期事件包含足够信息供 agent 执行
+#### Scenario: 到期事件包含完整时间线供 agent 判断
 - **WHEN** agent 收到到期事件
-- **THEN** 事件内容包含 task_id、创建时间和完整的任务描述，agent 可据此采取行动
+- **THEN** 事件内容包含创建时间、计划执行时间和实际触发时间，agent 可据此判断任务是准时、延迟还是已过时
 
 #### Scenario: 到期事件投递到正确的 session
 - **WHEN** 一条延时任务设定时属于 session A

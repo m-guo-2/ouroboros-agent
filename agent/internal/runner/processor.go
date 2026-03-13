@@ -209,7 +209,7 @@ func compactPrefixLen(messages []types.AgentMessage) int {
 	return 1
 }
 
-func formatUserMessage(senderName, channel, messageType, channelMessageID, content string, attachments []storage.AttachmentData) string {
+func formatUserMessage(senderName, channel, messageType, channelMessageID, content string, attachments []storage.AttachmentData, channelMeta map[string]any) string {
 	if rendered := renderAttachmentsForPrompt(attachments); rendered != "" {
 		if content != "" {
 			content += "\n\n" + rendered
@@ -228,10 +228,57 @@ func formatUserMessage(senderName, channel, messageType, channelMessageID, conte
 	if messageType != "" && messageType != "text" {
 		meta = append(meta, fmt.Sprintf("type=%s", messageType))
 	}
+
+	quotedBlock := formatQuotedBlock(channelMeta)
+	if quotedBlock != "" {
+		if qm, ok := channelMeta["quotedMessage"].(map[string]any); ok {
+			if mid, _ := qm["msgSvrId"].(string); mid != "" {
+				meta = append(meta, fmt.Sprintf("reply_to_msg_id=%s", mid))
+			}
+		}
+		content = quotedBlock + "\n" + content
+	}
+
 	if len(meta) == 0 {
 		return content
 	}
 	return fmt.Sprintf("[%s]\n%s", strings.Join(meta, " | "), content)
+}
+
+func formatQuotedBlock(channelMeta map[string]any) string {
+	if channelMeta == nil {
+		return ""
+	}
+	qm, ok := channelMeta["quotedMessage"].(map[string]any)
+	if !ok || len(qm) == 0 {
+		return ""
+	}
+
+	sender, _ := qm["senderName"].(string)
+	msgID, _ := qm["msgSvrId"].(string)
+	text, _ := qm["content"].(string)
+
+	var sb strings.Builder
+	sb.WriteString("> [引用消息]")
+	if sender != "" {
+		sb.WriteString(" 发送者: ")
+		sb.WriteString(sender)
+	}
+	if msgID != "" {
+		sb.WriteString(" | msg_id: ")
+		sb.WriteString(msgID)
+	}
+	sb.WriteString("\n")
+	if text != "" {
+		for _, line := range strings.Split(text, "\n") {
+			sb.WriteString("> ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	} else {
+		sb.WriteString("> (原消息不可见)\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 func renderAttachmentsForPrompt(attachments []storage.AttachmentData) string {
@@ -352,7 +399,7 @@ func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
 			if msg.MessageType == "structured" {
 				continue
 			}
-			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content, msg.Attachments)
+			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content, msg.Attachments, nil)
 			result = append(result, types.AgentMessage{
 				Role:    "user",
 				Content: []types.ContentBlock{{Type: "text", Text: text}},
@@ -751,6 +798,50 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		}, nil
 	})
 
+	registry.RegisterBuiltin("cancel_delayed_task", "取消一个尚未执行的延时任务。", types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"task_id": map[string]interface{}{"type": "string", "description": "要取消的任务 ID"},
+		},
+		Required: []string{"task_id"},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		taskID, _ := input["task_id"].(string)
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			return nil, fmt.Errorf("task_id is required")
+		}
+		if err := storage.CancelDelayedTask(taskID, worker.SessionID); err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"taskId": taskID,
+			"status": "cancelled",
+		}, nil
+	})
+
+	registry.RegisterBuiltin("list_delayed_tasks", "查看当前会话中所有待执行的延时任务。", types.JSONSchema{
+		Type:       "object",
+		Properties: map[string]interface{}{},
+	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+		tasks, err := storage.ListPendingTasksBySession(worker.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		var items []map[string]interface{}
+		for _, t := range tasks {
+			items = append(items, map[string]interface{}{
+				"taskId":    t.ID,
+				"task":      t.Task,
+				"executeAt": t.ExecuteAt,
+				"createdAt": t.CreatedAt,
+			})
+		}
+		return map[string]interface{}{
+			"count": len(items),
+			"tasks": items,
+		}, nil
+	})
+
 	internalHandlers := map[string]types.ToolExecutor{
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)
@@ -802,7 +893,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 	historyMessages = prependSessionMemory(historyMessages, worker.SessionID, modelName)
 
-	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content, request.Attachments)
+	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content, request.Attachments, request.ChannelMeta)
 
 	messages := append(historyMessages, types.AgentMessage{
 		Role:    "user",
@@ -961,7 +1052,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		var parts []string
 		parts = append(parts, fmt.Sprintf("[以下 %d 条消息在处理期间到达]", len(pending)))
 		for _, p := range pending {
-			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content, p.Attachments))
+			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content, p.Attachments, p.ChannelMeta))
 		}
 		merged := strings.Join(parts, "\n\n")
 		messages = append(messages, types.AgentMessage{
