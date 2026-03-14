@@ -17,11 +17,15 @@ interface Props {
   selectedExchangeIndex: number | null
   onSelectExchange: (index: number) => void
   isLoadingMessages: boolean
+  hasMoreMessages?: boolean
+  onLoadMoreMessages?: () => void
+  isLoadingMoreMessages?: boolean
 }
 
 export function ConversationTimeline({
   exchanges, compactions, isProcessing,
   activeTraceId, selectedTrace, selectedExchangeIndex, onSelectExchange, isLoadingMessages,
+  hasMoreMessages, onLoadMoreMessages, isLoadingMoreMessages,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
@@ -68,6 +72,17 @@ export function ConversationTimeline({
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+      {hasMoreMessages && (
+        <div className="flex justify-center py-3 border-b border-slate-100">
+          <button
+            onClick={onLoadMoreMessages}
+            disabled={isLoadingMoreMessages}
+            className="text-xs text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
+          >
+            {isLoadingMoreMessages ? "加载中..." : "加载更早消息"}
+          </button>
+        </div>
+      )}
       <div className="divide-y divide-slate-100 py-2">
         {exchanges.map((exchange) => {
           const exchangeTime = exchange.userMessage.createdAt

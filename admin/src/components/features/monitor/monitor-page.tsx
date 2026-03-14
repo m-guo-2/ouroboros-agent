@@ -1,10 +1,11 @@
 import { useState, useMemo, useCallback } from "react"
-import { Activity, PanelRight } from "lucide-react"
+import { Activity, PanelRight, RefreshCw } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
 import type { ExecutionTrace } from "@/api/types"
+import { cn } from "@/lib/utils"
 import { useSessionCompactions } from "./hooks/use-session-compactions"
 import { buildExchanges } from "./lib/build-timeline"
 import { SessionList } from "./components/session-list"
@@ -12,11 +13,19 @@ import { ConversationTimeline } from "./components/conversation-timeline"
 import { DecisionInspector } from "./components/decision-inspector"
 
 export function MonitorPage() {
+  const queryClient = useQueryClient()
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [selectedExchangeIndex, setSelectedExchangeIndex] = useState<number | null>(null)
   const [search, setSearch] = useState("")
   const [inspectorOpen, setInspectorOpen] = useState(true)
-  const { data: sessions, isLoading, refetch: refetchSessions, isFetching: isRefreshingSessions } = useMonitorSessions()
+  const {
+    sessions,
+    isLoading,
+    isFetching: isRefreshingSessions,
+    hasNextPage: hasMoreSessions,
+    fetchNextPage: fetchMoreSessions,
+    isFetchingNextPage: isFetchingMoreSessions,
+  } = useMonitorSessions()
   const deleteSession = useDeleteSession()
 
   const effectiveSessionId = useMemo(() => {
@@ -47,16 +56,22 @@ export function MonitorPage() {
   // Session data
   const {
     data: session,
-    refetch: refetchSession,
     isFetching: isFetchingSession,
   } = useSession(effectiveSessionId ?? "")
   const isProcessing = session?.executionStatus === "processing"
   const {
-    data: messages = [],
+    messages,
     isLoading: isLoadingMessages,
-    refetch: refetchMessages,
     isFetching: isFetchingMessages,
+    hasNextPage: hasMoreMessages,
+    fetchNextPage: fetchMoreMessages,
+    isFetchingNextPage: isFetchingMoreMessages,
   } = useSessionMessages(effectiveSessionId ?? "")
+
+  const totalMessageCount = useMemo(() => {
+    if (!effectiveSessionId || !sessions) return 0
+    return sessions.find(s => s.id === effectiveSessionId)?.messageCount ?? messages.length
+  }, [effectiveSessionId, sessions, messages.length])
 
   // Compactions
   const { data: compactions = [] } = useSessionCompactions(effectiveSessionId)
@@ -111,18 +126,22 @@ export function MonitorPage() {
     staleTime: Infinity,
   })
 
-  const handleRefresh = useCallback(() => {
-    void refetchSessions()
-    if (effectiveSessionId) {
-      void refetchSession()
-      void refetchMessages()
-    }
-    if (selectedTraceId) {
-      void refetchSelectedTrace()
-    }
-  }, [effectiveSessionId, refetchMessages, refetchSelectedTrace, refetchSession, refetchSessions, selectedTraceId])
+  const handleRefreshSessions = useCallback(() => {
+    void queryClient.resetQueries({ queryKey: ["monitor", "sessions"] })
+  }, [queryClient])
 
-  const isRefreshing = isRefreshingSessions || isFetchingSession || isFetchingMessages || isFetchingSelectedTrace
+  const handleRefreshMessages = useCallback(() => {
+    if (!effectiveSessionId) return
+    void queryClient.resetQueries({ queryKey: ["sessions", effectiveSessionId, "messages"] })
+    void queryClient.invalidateQueries({ queryKey: ["sessions", effectiveSessionId] })
+  }, [queryClient, effectiveSessionId])
+
+  const handleRefreshTrace = useCallback(() => {
+    if (!selectedTraceId) return
+    void refetchSelectedTrace()
+  }, [selectedTraceId, refetchSelectedTrace])
+
+  const isRefreshingMessages = isFetchingSession || isFetchingMessages
 
   return (
     <div className="flex h-full">
@@ -135,8 +154,11 @@ export function MonitorPage() {
         selectedSessionId={effectiveSessionId}
         onSelectSession={(id) => { setSelectedSessionId(id); setSelectedExchangeIndex(null) }}
         onDeleteSession={handleDeleteSession}
-        onRefresh={handleRefresh}
-        isRefreshing={isRefreshing}
+        onRefresh={handleRefreshSessions}
+        isRefreshing={isRefreshingSessions}
+        hasMore={!!hasMoreSessions}
+        onLoadMore={() => void fetchMoreSessions()}
+        isLoadingMore={isFetchingMoreSessions}
       />
 
       {/* Center: Conversation timeline */}
@@ -153,16 +175,28 @@ export function MonitorPage() {
                   {isProcessing && <span className="h-2 w-2 rounded-full bg-green-500 animate-live-pulse" />}
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  {messages.length} 条消息 · {exchanges.length} 次交互
+                  {totalMessageCount} 条消息
+                  {messages.length < totalMessageCount && ` (已加载 ${messages.length})`}
+                  {" · "}{exchanges.length} 次交互
                   {compactions.length > 0 && ` · ${compactions.length} 次压缩`}
                 </p>
               </div>
-              {!inspectorOpen && (
-                <button onClick={() => setInspectorOpen(true)}
-                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
-                  <PanelRight className="h-4 w-4" />
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={handleRefreshMessages}
+                  disabled={isRefreshingMessages}
+                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors"
+                  title="刷新对话"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingMessages && "animate-spin")} />
                 </button>
-              )}
+                {!inspectorOpen && (
+                  <button onClick={() => setInspectorOpen(true)}
+                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
+                    <PanelRight className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
 
             <ConversationTimeline
@@ -174,6 +208,9 @@ export function MonitorPage() {
               selectedExchangeIndex={effectiveExchangeIndex}
               onSelectExchange={handleSelectExchange}
               isLoadingMessages={isLoadingMessages}
+              hasMoreMessages={!!hasMoreMessages}
+              onLoadMoreMessages={() => void fetchMoreMessages()}
+              isLoadingMoreMessages={isFetchingMoreMessages}
             />
           </>
         ) : (
@@ -197,6 +234,8 @@ export function MonitorPage() {
             trace={selectedTrace}
             isSessionProcessing={isProcessing}
             onCollapse={() => setInspectorOpen(false)}
+            onRefreshTrace={handleRefreshTrace}
+            isRefreshingTrace={isFetchingSelectedTrace}
           />
         </div>
       )}

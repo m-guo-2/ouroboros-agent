@@ -1,6 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMemo } from "react"
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { sessionsApi } from "@/api/sessions"
 import type { AgentSession, MessageData } from "@/api/types"
+
+const MESSAGES_PAGE_SIZE = 10
 
 export function useSessions(filters?: { agentId?: string; channel?: string; limit?: number }) {
   return useQuery({
@@ -23,16 +26,31 @@ export function useSession(id: string | undefined) {
   })
 }
 
-export function useSessionMessages(sessionId: string | undefined, opts?: { refetchInterval?: number | false }) {
-  return useQuery<MessageData[]>({
+export function useSessionMessages(sessionId: string | undefined, opts?: { refetchInterval?: number | false; limit?: number }) {
+  const pageSize = opts?.limit ?? MESSAGES_PAGE_SIZE
+
+  const query = useInfiniteQuery<MessageData[]>({
     queryKey: ["sessions", sessionId, "messages"],
-    queryFn: async () => {
-      const res = await sessionsApi.getMessages(sessionId!)
+    queryFn: async ({ pageParam }) => {
+      const res = await sessionsApi.getMessages(sessionId!, pageSize, pageParam as number | undefined)
       return res.data ?? []
+    },
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => {
+      if (lastPage.length < pageSize) return undefined
+      const oldest = lastPage[0]
+      return oldest?.createdAt ? Number(oldest.createdAt) : undefined
     },
     enabled: !!sessionId,
     refetchInterval: opts?.refetchInterval ?? false,
   })
+
+  const messages = useMemo(
+    () => query.data?.pages ? [...query.data.pages].reverse().flat() : [],
+    [query.data],
+  )
+
+  return { ...query, messages }
 }
 
 export function useDeleteSession() {

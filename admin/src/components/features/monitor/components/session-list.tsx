@@ -16,12 +16,15 @@ interface Props {
   onDeleteSession: (e: React.MouseEvent, id: string) => void
   onRefresh: () => void
   isRefreshing: boolean
+  hasMore?: boolean
+  onLoadMore?: () => void
+  isLoadingMore?: boolean
 }
 
 export function SessionList({
   sessions, isLoading, search, onSearchChange,
   selectedSessionId, onSelectSession, onDeleteSession,
-  onRefresh, isRefreshing,
+  onRefresh, isRefreshing, hasMore, onLoadMore, isLoadingMore,
 }: Props) {
   const filteredSessions = sessions
     ? (search
@@ -113,6 +116,15 @@ export function SessionList({
                 </div>
               )
             })}
+            {hasMore && !search && (
+              <button
+                onClick={onLoadMore}
+                disabled={isLoadingMore}
+                className="w-full py-2.5 text-xs text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-40"
+              >
+                {isLoadingMore ? "加载中..." : "加载更多"}
+              </button>
+            )}
           </div>
         )}
       </div>

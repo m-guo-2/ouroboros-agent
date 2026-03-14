@@ -62,8 +62,9 @@ func listSessions(w http.ResponseWriter, r *http.Request) {
 	userID := q.Get("userId")
 	channel := q.Get("channel")
 	limit := parseLimit(q.Get("limit"), 50, 200)
+	before := parseInt64(q.Get("before"), 0)
 
-	sessions, err := storage.ListSessions(agentID, userID, channel, limit)
+	sessions, err := storage.ListSessions(agentID, userID, channel, limit, before)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -150,8 +151,17 @@ func deleteSession(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func getSessionMessages(w http.ResponseWriter, r *http.Request, id string) {
-	limit := parseLimit(r.URL.Query().Get("limit"), 200, 1000)
-	msgs, err := storage.GetSessionMessages(id, limit)
+	q := r.URL.Query()
+	limit := parseLimit(q.Get("limit"), 200, 1000)
+	before := parseInt64(q.Get("before"), 0)
+
+	var msgs []storage.MessageData
+	var err error
+	if before > 0 {
+		msgs, err = storage.GetRecentMessagesBefore(id, before, limit)
+	} else {
+		msgs, err = storage.GetLatestSessionMessages(id, limit)
+	}
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -172,6 +182,17 @@ func getSessionCompactions(w http.ResponseWriter, r *http.Request, id string) {
 		compactions = []storage.CompactionData{}
 	}
 	ok(w, compactions)
+}
+
+func parseInt64(raw string, defaultValue int64) int64 {
+	if raw == "" {
+		return defaultValue
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return n
 }
 
 func parseLimit(raw string, defaultValue, maxValue int) int {

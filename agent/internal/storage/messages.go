@@ -107,6 +107,86 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 	return msgs, rows.Err()
 }
 
+// GetLatestSessionMessages returns the most recent N messages for a session, in chronological (ASC) order.
+func GetLatestSessionMessages(sessionID string, limit int) ([]MessageData, error) {
+	rows, err := DB.Query(
+		`SELECT id, session_id, role, content,
+		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
+		        COALESCE(trace_id,''), COALESCE(initiator,''),
+		        COALESCE(sender_name,''), COALESCE(sender_id,''),
+		        COALESCE(attachments_json,'[]'), created_at
+		 FROM messages WHERE session_id = ?
+		 ORDER BY created_at DESC LIMIT ?`,
+		sessionID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []MessageData
+	for rows.Next() {
+		var m MessageData
+		if err := rows.Scan(
+			&m.ID, &m.SessionID, &m.Role, &m.Content,
+			&m.MessageType, &m.Channel, &m.ChannelMessageID,
+			&m.TraceID, &m.Initiator,
+			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	reverseMessages(msgs)
+	return msgs, nil
+}
+
+// GetRecentMessagesBefore returns N messages immediately before beforeTime, in chronological (ASC) order.
+func GetRecentMessagesBefore(sessionID string, beforeTime int64, limit int) ([]MessageData, error) {
+	rows, err := DB.Query(
+		`SELECT id, session_id, role, content,
+		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
+		        COALESCE(trace_id,''), COALESCE(initiator,''),
+		        COALESCE(sender_name,''), COALESCE(sender_id,''),
+		        COALESCE(attachments_json,'[]'), created_at
+		 FROM messages WHERE session_id = ? AND created_at < ?
+		 ORDER BY created_at DESC LIMIT ?`,
+		sessionID, beforeTime, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []MessageData
+	for rows.Next() {
+		var m MessageData
+		if err := rows.Scan(
+			&m.ID, &m.SessionID, &m.Role, &m.Content,
+			&m.MessageType, &m.Channel, &m.ChannelMessageID,
+			&m.TraceID, &m.Initiator,
+			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	reverseMessages(msgs)
+	return msgs, nil
+}
+
+func reverseMessages(msgs []MessageData) {
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+}
+
 // GetMessagesBefore returns messages for a session created before the given time (Unix ms), oldest-first.
 func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(

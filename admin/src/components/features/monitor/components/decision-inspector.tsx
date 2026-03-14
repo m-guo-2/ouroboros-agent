@@ -1,15 +1,17 @@
 import { useState, useMemo } from "react"
-import { PanelRightClose, Archive } from "lucide-react"
+import { PanelRightClose, Archive, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { ExecutionTrace } from "@/api/types"
 import { splitIntoRounds } from "../lib/build-timeline"
 import { TraceStatsBar } from "./trace-stats-bar"
 import { RoundDetail } from "./round-detail"
 
-export function DecisionInspector({ trace, isSessionProcessing, onCollapse }: {
+export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRefreshTrace, isRefreshingTrace }: {
   trace: ExecutionTrace | null
   isSessionProcessing?: boolean
   onCollapse: () => void
+  onRefreshTrace?: () => void
+  isRefreshingTrace?: boolean
 }) {
   const [activeRound, setActiveRound] = useState(0)
 
@@ -24,7 +26,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse }: {
   if (!trace) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
           <h3 className="text-sm font-semibold text-slate-900">Decision Inspector</h3>
           <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
             <PanelRightClose className="h-4 w-4" />
@@ -41,11 +43,23 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse }: {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white flex-shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
         <h3 className="text-sm font-semibold text-slate-900">Decision Inspector</h3>
-        <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
-          <PanelRightClose className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onRefreshTrace && (
+            <button
+              onClick={onRefreshTrace}
+              disabled={isRefreshingTrace}
+              className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors"
+              title="刷新链路"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingTrace && "animate-spin")} />
+            </button>
+          )}
+          <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
+            <PanelRightClose className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -53,7 +67,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse }: {
 
         {compactSteps.length > 0 && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-50 border border-amber-200/60 text-[11px] text-amber-700">
-            <Archive className="h-3.5 w-3.5 flex-shrink-0" />
+            <Archive className="h-3.5 w-3.5 shrink-0" />
             {compactSteps.map((s, i) => (
               <span key={i}>
                 上下文压缩: {s.tokensBefore?.toLocaleString()} → {s.tokensAfter?.toLocaleString()} tokens
