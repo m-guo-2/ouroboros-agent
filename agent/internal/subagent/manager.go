@@ -474,6 +474,12 @@ func allowedToolsForProfile(profile string) map[string]bool {
 			"tavily_search":  true,
 			"recall_context": true,
 		}
+	case "data_report":
+		return map[string]bool{
+			"render_card": true,
+			"read_file":   true,
+			"list_dir":    true,
+		}
 	default: // developer
 		return map[string]bool{
 			"shell":      true,
@@ -509,10 +515,10 @@ func normalizeProfile(v string) (string, error) {
 		return "developer", nil
 	}
 	switch p {
-	case "developer", "file_analysis", "web_research":
+	case "developer", "file_analysis", "web_research", "data_report":
 		return p, nil
 	default:
-		return "", fmt.Errorf("unsupported subagent profile: %s (allowed: developer, file_analysis, web_research)", v)
+		return "", fmt.Errorf("unsupported subagent profile: %s (allowed: developer, file_analysis, web_research, data_report)", v)
 	}
 }
 
@@ -522,6 +528,8 @@ func profileDisplayName(profile string) string {
 		return "file-analysis-subagent"
 	case "web_research":
 		return "web-research-subagent"
+	case "data_report":
+		return "data-report-subagent"
 	default:
 		return "developer-subagent"
 	}
@@ -555,6 +563,41 @@ func defaultPromptByProfile(profile string) string {
 - 使用自然语言总结；
 - 重点说明“发现了什么、来源大致是什么、还有哪些不确定性”；
 - 不直接面向最终用户。`
+	case "data_report":
+		return `你是 data_report 子代理，专职将结构化数据转化为可视化卡片图片。
+
+职责：
+- 分析主 Agent 传来的数据，理解其结构和语义
+- 根据数据特征选择最合适的卡片类型
+- 调用 render_card 工具生成卡片图片
+
+模板选择策略（优先使用预置模板）：
+- 单个或少数核心指标 → kpi 模板
+- 多行多列结构化数据 → table 模板
+- 多项目运行状态 → status-board 模板
+- 有排名/排序的列表 → ranking 模板
+- 按时间顺序的事件 → timeline 模板
+- 通用 key-value 信息 → summary 模板
+- 以上都不适合 → 自由生成 HTML（使用 render_card 的 html 参数）
+
+自由生成 HTML 的规范：
+- 必须是完整的 HTML 文档（含 html/head/body 标签）
+- 所有样式内联在 style 标签中
+- 设计宽度 600px，高度自适应
+- 使用系统字体：-apple-system, "Noto Sans SC", "Microsoft YaHei", sans-serif
+- 不依赖外部资源（CDN、字体、图片链接等）
+
+输出格式要求：
+- 渲染成功时，输出必须包含以下 JSON 结构信息：
+  imageUrl: 图片的 OSS 访问地址
+  cardType: 使用的模板名称或 "freeform"
+  summary: 一句话描述卡片内容
+- 渲染失败时（render_card 返回错误），执行 fallback：
+  生成一份格式化纯文本版本（用 Markdown 表格或结构化列表），输出中标记：
+  fallback: true
+  fallbackText: 格式化文本内容
+  reason: 失败原因`
+
 	default:
 		return `你是 developer 子代理。你的职责是：
 - 围绕给定任务进行实现方案分析与代码修改建议；

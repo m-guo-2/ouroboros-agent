@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 600px;
+  font-family: -apple-system, "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #ffffff;
+  padding: 32px;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e8ecf1;
+  padding: 28px;
+}
+.card-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #f1f3f8;
+}
+.kv-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid #f8f9fb;
+}
+.kv-item:last-child { border-bottom: none; }
+.kv-label {
+  font-size: 14px;
+  color: #8890a4;
+  font-weight: 500;
+}
+.kv-value {
+  font-size: 14px;
+  color: #1a1a2e;
+  font-weight: 600;
+  text-align: right;
+  max-width: 60%;
+}
+</style>
+</head>
+<body>
+<div class="card">
+  {{if .title}}<div class="card-title">{{.title}}</div>{{end}}
+  {{range .items}}
+  <div class="kv-item">
+    <span class="kv-label">{{.label}}</span>
+    <span class="kv-value">{{.value}}</span>
+  </div>
+  {{end}}
+</div>
+</body>
+</html>

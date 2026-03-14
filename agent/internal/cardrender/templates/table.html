@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 600px;
+  font-family: -apple-system, "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #ffffff;
+  padding: 32px;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e8ecf1;
+  overflow: hidden;
+}
+.card-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1a1a2e;
+  padding: 24px 28px 16px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th {
+  background: #f1f3f8;
+  color: #5a6178;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 12px 28px;
+  text-align: left;
+}
+td {
+  padding: 14px 28px;
+  font-size: 14px;
+  color: #333;
+  border-bottom: 1px solid #f1f3f8;
+}
+tr:nth-child(even) td { background: #fafbfd; }
+tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  {{if .title}}<div class="card-title">{{.title}}</div>{{end}}
+  <table>
+    <thead>
+      <tr>
+        {{range .headers}}<th>{{.}}</th>{{end}}
+      </tr>
+    </thead>
+    <tbody>
+      {{range .rows}}
+      <tr>
+        {{range .}}<td>{{.}}</td>{{end}}
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

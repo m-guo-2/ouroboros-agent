@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 600px;
+  font-family: -apple-system, "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #ffffff;
+  padding: 32px;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e8ecf1;
+  padding: 28px;
+}
+.card-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 24px;
+}
+.timeline { position: relative; padding-left: 28px; }
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: linear-gradient(180deg, #667eea, #764ba2);
+  border-radius: 1px;
+}
+.event {
+  position: relative;
+  padding-bottom: 22px;
+}
+.event:last-child { padding-bottom: 0; }
+.event::before {
+  content: "";
+  position: absolute;
+  left: -24px;
+  top: 6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #667eea;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 2px #667eea;
+}
+.event-time {
+  font-size: 12px;
+  font-weight: 600;
+  color: #667eea;
+  margin-bottom: 4px;
+  letter-spacing: 0.3px;
+}
+.event-desc {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.5;
+}
+</style>
+</head>
+<body>
+<div class="card">
+  {{if .title}}<div class="card-title">{{.title}}</div>{{end}}
+  <div class="timeline">
+    {{range .events}}
+    <div class="event">
+      <div class="event-time">{{.time}}</div>
+      <div class="event-desc">{{.description}}</div>
+    </div>
+    {{end}}
+  </div>
+</div>
+</body>
+</html>

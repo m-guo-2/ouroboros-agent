@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 600px;
+  font-family: -apple-system, "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #ffffff;
+  padding: 32px;
+}
+.card {
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e8ecf1;
+  padding: 28px;
+}
+.card-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 20px;
+}
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid #f1f3f8;
+}
+.item:last-child { border-bottom: none; }
+.item-name {
+  font-size: 15px;
+  color: #333;
+  font-weight: 500;
+}
+.status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.status-ok { background: #e6f9f0; color: #0d9f5f; }
+.status-warning { background: #fff8e6; color: #d4a017; }
+.status-error { background: #fde8e8; color: #dc3545; }
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dot-ok { background: #0d9f5f; }
+.dot-warning { background: #d4a017; }
+.dot-error { background: #dc3545; }
+</style>
+</head>
+<body>
+<div class="card">
+  {{if .title}}<div class="card-title">{{.title}}</div>{{end}}
+  {{range .items}}
+  <div class="item">
+    <span class="item-name">{{.name}}</span>
+    <span class="status-badge status-{{.status}}"><span class="dot dot-{{.status}}"></span>{{.status}}</span>
+  </div>
+  {{end}}
+</div>
+</body>
+</html>

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/cardrender"
 	"agent/internal/channels"
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
@@ -34,6 +35,25 @@ const memoryInstruction = `
 
 每条 fact 应该是一条自包含的陈述，不依赖上下文即可理解。`
 
+const dataReportInstruction = `
+
+## 数据可视化
+
+当你需要向用户传达包含以下特征的信息时，考虑使用 data_report 子代理生成可视化卡片图片，而不是发送大段文字：
+
+- 包含 3 个以上数值指标的汇总
+- 多维度数据对比（如 A vs B、环比同比）
+- 多项目/多系统的状态概览
+- 排名或 Top N 列表
+- 按时间顺序的事件进展
+- 用户明确要求"出个图""做个报表""可视化一下"等
+
+使用方式：调用 run_subagent_async，设置 subagent 为 "data_report"，在 task 中提供结构化数据和你期望的可视化意图。
+
+子代理返回后：
+- 如果结果包含 imageUrl，用 send_channel_message（messageType: "image"，content: imageUrl）发送图片，可附带简短文字说明
+- 如果结果包含 fallback: true，用 send_channel_message 发送 fallbackText 作为纯文本替代`
+
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	result := agentSystemPrompt
 	if skillsSnippet != "" {
@@ -43,6 +63,9 @@ func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 		result += skillsSnippet
 	}
 	result += memoryInstruction
+	if cardrender.Available() {
+		result += dataReportInstruction
+	}
 	return result
 }
 
@@ -497,7 +520,7 @@ func registerSubagentTools(
 		Type: "object",
 		Properties: map[string]interface{}{
 			"task":            map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述"},
-			"subagent":        map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis / web_research，默认 developer"},
+			"subagent":        map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis / web_research / data_report，默认 developer"},
 			"timeout_seconds": map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 600）"},
 		},
 		Required: []string{"task"},
@@ -759,6 +782,8 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	})
 
 	registerWecomBuiltinTools(registry, request.ProcessRequest)
+
+	registerRenderCardTool(registry)
 
 	registry.RegisterBuiltin("set_delayed_task", "设定一个延时任务，到期后系统会自动提醒你执行。用于定时提醒、后续跟进等场景。所有时间均为北京时间(CST/UTC+8)。", types.JSONSchema{
 		Type: "object",
@@ -1085,6 +1110,64 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	}
 
 	return nil
+}
+
+func registerRenderCardTool(registry *engine.ToolRegistry) {
+	if !cardrender.Available() {
+		if err := cardrender.Init(); err != nil {
+			return
+		}
+	}
+	renderer := cardrender.DefaultRenderer()
+	if renderer == nil {
+		return
+	}
+
+	registry.RegisterBuiltin("render_card",
+		"将数据渲染为可视化卡片图片。支持两种模式：1) 模板模式——指定 template 名称 + data JSON；2) 自由模式——直接传入完整 html。返回 imageUrl。可用模板："+strings.Join(cardrender.ListTemplates(), ", "),
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"template": map[string]interface{}{"type": "string", "description": "模板名称（如 kpi, table, status-board, ranking, timeline, summary）。与 html 二选一"},
+				"data":     map[string]interface{}{"type": "object", "description": "模板数据，配合 template 使用"},
+				"html":     map[string]interface{}{"type": "string", "description": "完整 HTML 字符串，直接渲染。与 template 二选一"},
+				"width":    map[string]interface{}{"type": "integer", "description": "视口宽度（像素），默认 600"},
+			},
+		},
+		func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+			templateName, _ := input["template"].(string)
+			htmlContent, _ := input["html"].(string)
+			data, _ := input["data"].(map[string]interface{})
+
+			if strings.TrimSpace(templateName) == "" && strings.TrimSpace(htmlContent) == "" {
+				return nil, fmt.Errorf("must provide either 'template' (with 'data') or 'html'")
+			}
+
+			if strings.TrimSpace(templateName) != "" {
+				var err error
+				htmlContent, err = cardrender.RenderTemplate(templateName, data)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			opts := cardrender.RenderOptions{}
+			if w, ok := input["width"].(float64); ok && w > 0 {
+				opts.Width = int(w)
+			}
+
+			result, err := renderer.RenderCard(ctx, htmlContent, opts)
+			if err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"imageUrl": result.ImageURL,
+				"width":    result.Width,
+				"height":   result.Height,
+			}, nil
+		},
+	)
 }
 
 func attachmentIDs(attachments []storage.AttachmentData) []string {

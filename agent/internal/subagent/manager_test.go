@@ -43,3 +43,54 @@ func TestDefaultPromptByProfileWebResearch(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeProfileSupportsDataReport(t *testing.T) {
+	got, err := normalizeProfile("data_report")
+	if err != nil {
+		t.Fatalf("normalizeProfile returned error: %v", err)
+	}
+	if got != "data_report" {
+		t.Fatalf("expected data_report, got %s", got)
+	}
+}
+
+func TestAllowedToolsForDataReport(t *testing.T) {
+	allowed := allowedToolsForProfile("data_report")
+	if !allowed["render_card"] {
+		t.Fatal("expected render_card to be allowed")
+	}
+	if !allowed["read_file"] {
+		t.Fatal("expected read_file to be allowed")
+	}
+	if !allowed["list_dir"] {
+		t.Fatal("expected list_dir to be allowed")
+	}
+	if allowed["shell"] {
+		t.Fatal("did not expect shell to be allowed")
+	}
+	if allowed["write_file"] {
+		t.Fatal("did not expect write_file to be allowed")
+	}
+}
+
+func TestProfileDisplayNameDataReport(t *testing.T) {
+	name := profileDisplayName("data_report")
+	if name != "data-report-subagent" {
+		t.Fatalf("expected data-report-subagent, got %s", name)
+	}
+}
+
+func TestDefaultPromptByProfileDataReport(t *testing.T) {
+	prompt := defaultPromptByProfile("data_report")
+	for _, want := range []string{
+		"data_report",
+		"render_card",
+		"kpi",
+		"fallback",
+		"imageUrl",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q", want)
+		}
+	}
+}

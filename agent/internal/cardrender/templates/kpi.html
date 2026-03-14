@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 600px;
+  font-family: -apple-system, "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: #ffffff;
+  padding: 32px;
+}
+.card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 16px;
+  padding: 36px 40px;
+  color: #fff;
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 500;
+  opacity: 0.85;
+  letter-spacing: 0.5px;
+  margin-bottom: 16px;
+}
+.card-value {
+  font-size: 52px;
+  font-weight: 700;
+  line-height: 1.1;
+  margin-bottom: 14px;
+}
+.card-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.trend {
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 14px;
+}
+.trend-up { background: rgba(72,199,142,0.25); color: #2ddb8e; }
+.trend-down { background: rgba(255,107,107,0.25); color: #ff6b6b; }
+.comparison { opacity: 0.7; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="card-title">{{.title}}</div>
+  <div class="card-value">{{.value}}</div>
+  <div class="card-footer">
+    <span class="trend {{if .trendUp}}trend-up{{else}}trend-down{{end}}">{{.trend}}</span>
+    {{if .comparison}}<span class="comparison">{{.comparison}}</span>{{end}}
+  </div>
+</div>
+</body>
+</html>
