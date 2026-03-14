@@ -13,6 +13,7 @@ import (
 
 	"agent/internal/config"
 	"agent/internal/storage"
+	"agent/internal/timeutil"
 
 	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
@@ -85,11 +86,12 @@ func SendToChannel(msg OutgoingMessage) error {
 	}
 
 	msgID := newMsgID()
+	now := timeutil.NowMs()
 	// Best-effort DB write — never block the send on a DB error.
 	_, _ = storage.DB.Exec(
-		`INSERT INTO messages (id, session_id, role, content, message_type, channel, trace_id, initiator, status)
-		 VALUES (?, ?, 'assistant', ?, ?, ?, ?, 'agent', 'sending')`,
-		msgID, msg.SessionID, msg.Content, msg.MessageType, msg.Channel, msg.TraceID,
+		`INSERT INTO messages (id, session_id, role, content, message_type, channel, trace_id, initiator, status, created_at)
+		 VALUES (?, ?, 'assistant', ?, ?, ?, ?, 'agent', 'sending', ?)`,
+		msgID, msg.SessionID, msg.Content, msg.MessageType, msg.Channel, msg.TraceID, now,
 	)
 
 	err := adapter.Send(msg)
@@ -136,13 +138,14 @@ func InitBuiltinAdapters(getSetting func(key string) string) {
 type HTTPAdapter struct {
 	SendURL   string
 	HealthURL string
+	once      sync.Once
 	client    *http.Client
 }
 
 func (a *HTTPAdapter) httpClient() *http.Client {
-	if a.client == nil {
+	a.once.Do(func() {
 		a.client = sharedlogger.NewClient("channel-adapter", 15*time.Second)
-	}
+	})
 	return a.client
 }
 
@@ -175,20 +178,30 @@ func (a *HTTPAdapter) HealthCheck() bool {
 // WebuiAdapter — in-process fan-out for WebUI SSE clients.
 // ---------------------------------------------------------------------------
 
+// webuiSub wraps a subscriber channel with a closed flag to avoid
+// sending on a closed channel (which panics in Go).
+type webuiSub struct {
+	ch     chan OutgoingMessage
+	closed bool
+}
+
 type WebuiAdapter struct {
-	mu          sync.RWMutex
-	subscribers map[string][]chan OutgoingMessage
+	mu          sync.Mutex
+	subscribers map[string][]*webuiSub
 }
 
 func (a *WebuiAdapter) Send(msg OutgoingMessage) error {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.subscribers == nil {
 		return nil
 	}
-	for _, ch := range a.subscribers[msg.ChannelUserID] {
+	for _, sub := range a.subscribers[msg.ChannelUserID] {
+		if sub.closed {
+			continue
+		}
 		select {
-		case ch <- msg:
+		case sub.ch <- msg:
 		default:
 		}
 	}
@@ -203,14 +216,14 @@ func (a *WebuiAdapter) Subscribe(userID string) chan OutgoingMessage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.subscribers == nil {
-		a.subscribers = make(map[string][]chan OutgoingMessage)
+		a.subscribers = make(map[string][]*webuiSub)
 	}
 	ch := make(chan OutgoingMessage, 32)
-	a.subscribers[userID] = append(a.subscribers[userID], ch)
+	a.subscribers[userID] = append(a.subscribers[userID], &webuiSub{ch: ch})
 	return ch
 }
 
-// Unsubscribe removes a previously subscribed channel.
+// Unsubscribe removes a previously subscribed channel and closes it safely.
 func (a *WebuiAdapter) Unsubscribe(userID string, ch chan OutgoingMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -218,8 +231,9 @@ func (a *WebuiAdapter) Unsubscribe(userID string, ch chan OutgoingMessage) {
 		return
 	}
 	list := a.subscribers[userID]
-	for i, c := range list {
-		if c == ch {
+	for i, sub := range list {
+		if sub.ch == ch {
+			sub.closed = true
 			a.subscribers[userID] = append(list[:i], list[i+1:]...)
 			close(ch)
 			return

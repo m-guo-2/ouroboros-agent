@@ -971,6 +971,9 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			})
 			if err != nil {
 				logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
+				if loopResult != nil {
+					messages = loopResult.Messages
+				}
 				return err
 			}
 

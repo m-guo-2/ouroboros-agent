@@ -253,7 +253,7 @@ func HandleIncoming(w http.ResponseWriter, r *http.Request) {
 	})
 
 	go func() {
-		result := Dispatch(r.Context(), msg)
+		result := Dispatch(context.Background(), msg)
 		if !result.Success && !result.Duplicate {
 			logger.Error(context.Background(), "消息派发失败",
 				"error", result.Error, "channel", msg.Channel)

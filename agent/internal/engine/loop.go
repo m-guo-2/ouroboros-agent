@@ -73,12 +73,14 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 	iteration := 0
 	emptyResponseRetries := 0
 	var finalText string
+	var loopErr error
 	hitMaxIterations := false
 
 	for iteration < maxIters {
 		if ctx.Err() != nil {
+			loopErr = ctx.Err()
 			logger.Error(ctx, "引擎循环被中止",
-				"traceEvent", "error", "iteration", iteration, "error", "Agent loop aborted by signal")
+				"traceEvent", "error", "iteration", iteration, "error", loopErr.Error())
 			break
 		}
 
@@ -94,6 +96,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		llmDurationMs := time.Since(llmStart).Milliseconds()
 
 		if err != nil {
+			loopErr = fmt.Errorf("LLM call failed at iteration %d: %w", iteration, err)
 			logger.Error(ctx, "LLM 调用失败",
 				"traceEvent", "error", "iteration", iteration, "error", err.Error())
 			break
@@ -252,5 +255,5 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			TotalCostUsd: totalCostUsd,
 		},
 		HitMaxIterations: hitMaxIterations,
-	}, nil
+	}, loopErr
 }

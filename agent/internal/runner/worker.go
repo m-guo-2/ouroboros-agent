@@ -126,32 +126,26 @@ func drainWorker(worker *SessionWorker) {
 		workerMutex.Unlock()
 
 		err := processOneEvent(ctx, worker, req)
-		if err != nil {
-			logger.Error(ctx, "处理请求失败", "error", err.Error())
-			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
-				"executionStatus": "interrupted",
-			})
-		}
 
 		workerMutex.Lock()
 		worker.CancelFunc = nil
 		workerMutex.Unlock()
 
-		_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
-			"executionStatus": "completed",
-		})
+		if err != nil {
+			logger.Error(ctx, "处理请求失败", "error", err.Error())
+			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
+				"executionStatus": "interrupted",
+			})
+		} else {
+			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
+				"executionStatus": "completed",
+			})
+		}
 		logger.Business(ctx, "请求处理完成")
 	}
 }
 
 func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
-	workerMutex.Lock()
-	if shuttingDown {
-		workerMutex.Unlock()
-		return fmt.Errorf("agent is shutting down")
-	}
-	workerMutex.Unlock()
-
 	sessionKey := resolveSessionKey(req.Channel, req.ChannelUserID, req.ChannelConversationID)
 
 	var sessionID string
@@ -212,6 +206,10 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 		"traceEvent", "start", "agentId", req.AgentID, "userId", req.UserID, "channel", req.Channel)
 
 	workerMutex.Lock()
+	if shuttingDown {
+		workerMutex.Unlock()
+		return fmt.Errorf("agent is shutting down")
+	}
 	worker, ok := sessionWorkers[sessionID]
 	if !ok {
 		worker = &SessionWorker{
@@ -250,7 +248,8 @@ func GracefulShutdown() {
 	}
 	shuttingDown = true
 
-	for _, worker := range sessionWorkers {
+	var processingSessions []string
+	for sessionID, worker := range sessionWorkers {
 		if worker.IdleTimer != nil {
 			worker.IdleTimer.Stop()
 		}
@@ -258,18 +257,16 @@ func GracefulShutdown() {
 			worker.CancelFunc()
 		}
 		worker.Queue = nil
-	}
-	workerMutex.Unlock()
-
-	for sessionID, worker := range sessionWorkers {
 		if worker.Processing {
-			_ = storage.UpdateSession(sessionID, map[string]interface{}{
-				"executionStatus": "interrupted",
-			})
+			processingSessions = append(processingSessions, sessionID)
 		}
 	}
-
-	workerMutex.Lock()
 	sessionWorkers = make(map[string]*SessionWorker)
 	workerMutex.Unlock()
+
+	for _, sessionID := range processingSessions {
+		_ = storage.UpdateSession(sessionID, map[string]interface{}{
+			"executionStatus": "interrupted",
+		})
+	}
 }

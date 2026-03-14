@@ -146,7 +146,7 @@ func recallSummary(sessionID string) (interface{}, error) {
 			"archivedCount":   c.ArchivedMessageCount,
 			"tokensBefore":    c.TokenCountBefore,
 			"tokensAfter":     c.TokenCountAfter,
-			"compressionRate": fmt.Sprintf("%.0f%%", float64(c.TokenCountAfter)/float64(c.TokenCountBefore)*100),
+			"compressionRate": compressionRate(c.TokenCountAfter, c.TokenCountBefore),
 		})
 	}
 
@@ -154,6 +154,13 @@ func recallSummary(sessionID string) (interface{}, error) {
 		"found":       true,
 		"compactions": summaries,
 	}, nil
+}
+
+func compressionRate(after, before int) string {
+	if before == 0 {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.0f%%", float64(after)/float64(before)*100)
 }
 
 func formatRecalledMessages(msgs []storage.MessageData) []map[string]interface{} {

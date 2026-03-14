@@ -235,6 +235,7 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 		SenderName:       senderName,
 		SenderID:         senderID,
 		Attachments:      attachments,
+		CreatedAt:        now,
 	}, nil
 }
 
