@@ -1,0 +1,2 @@
+# Override root-level *.html ignore — these templates are source code
+!*.html
