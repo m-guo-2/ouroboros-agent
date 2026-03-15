@@ -90,6 +90,7 @@ build-admin: admin/dist
 bin/agent: $(AGENT_SRC) agent/go.mod agent/go.sum
 	@echo "=> [Agent] 编译二进制..."
 	@mkdir -p bin
+	cd agent && go mod tidy && go mod vendor
 	cd agent && CGO_ENABLED=1 go build -ldflags '$(GO_LDFLAGS)' -trimpath -o $(CURDIR)/bin/agent ./cmd/agent
 
 build-agent: bin/agent
@@ -98,6 +99,7 @@ build-agent: bin/agent
 bin/channel-qiwei: $(QIWEI_SRC) channel-qiwei/go.mod channel-qiwei/go.sum
 	@echo "=> [Qiwei] 编译二进制..."
 	@mkdir -p bin
+	cd channel-qiwei && go mod tidy && go mod vendor
 	cd channel-qiwei && CGO_ENABLED=1 go build -ldflags '$(GO_LDFLAGS)' -trimpath -o $(CURDIR)/bin/channel-qiwei .
 
 build-qiwei: bin/channel-qiwei
