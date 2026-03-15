@@ -52,9 +52,10 @@ func llmRetryWait(ctx context.Context, attempt int) error {
 }
 
 type LLMResponse struct {
-	Content    []types.ContentBlock
-	StopReason string
-	Usage      struct {
+	Content          []types.ContentBlock
+	ReasoningContent *string
+	StopReason       string
+	Usage            struct {
 		InputTokens  int
 		OutputTokens int
 	}
@@ -382,18 +383,21 @@ func (c *OpenAICompatibleClient) convertMessages(messages []types.AgentMessage, 
 				}
 			}
 
-			assistantMsg := map[string]interface{}{
-				"role": "assistant",
-			}
-			if len(textParts) > 0 {
-				assistantMsg["content"] = strings.Join(textParts, "\n")
-			} else {
-				assistantMsg["content"] = nil
-			}
-			if len(toolCalls) > 0 {
-				assistantMsg["tool_calls"] = toolCalls
-			}
-			result = append(result, assistantMsg)
+		assistantMsg := map[string]interface{}{
+			"role": "assistant",
+		}
+		if len(textParts) > 0 {
+			assistantMsg["content"] = strings.Join(textParts, "\n")
+		} else {
+			assistantMsg["content"] = nil
+		}
+		if len(toolCalls) > 0 {
+			assistantMsg["tool_calls"] = toolCalls
+		}
+		if msg.ReasoningContent != nil {
+			assistantMsg["reasoning_content"] = *msg.ReasoningContent
+		}
+		result = append(result, assistantMsg)
 		}
 	}
 
@@ -484,8 +488,9 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		var data struct {
 			Choices []struct {
 				Message struct {
-					Content   *string `json:"content"`
-					ToolCalls []struct {
+					Content          *string `json:"content"`
+					ReasoningContent *string `json:"reasoning_content"`
+					ToolCalls        []struct {
 						ID       string `json:"id"`
 						Function struct {
 							Name      string `json:"name"`
@@ -553,8 +558,9 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		}
 
 		return &LLMResponse{
-			Content:    content,
-			StopReason: stopReason,
+			Content:          content,
+			ReasoningContent: choice.Message.ReasoningContent,
+			StopReason:       stopReason,
 			Usage: struct {
 				InputTokens  int
 				OutputTokens int

@@ -164,7 +164,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		var assistantBlocks []types.ContentBlock
 		assistantBlocks = append(assistantBlocks, textBlocks...)
 		assistantBlocks = append(assistantBlocks, toolUseBlocks...)
-		assistantMsg := types.AgentMessage{Role: "assistant", Content: assistantBlocks}
+		assistantMsg := types.AgentMessage{Role: "assistant", Content: assistantBlocks, ReasoningContent: response.ReasoningContent}
 		messages = append(messages, assistantMsg)
 
 		var toolResults []types.ContentBlock

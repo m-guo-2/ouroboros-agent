@@ -26,8 +26,9 @@ type ContentBlock struct {
 
 // AgentMessage represents a message in the conversation history.
 type AgentMessage struct {
-	Role    string         `json:"role"`
-	Content []ContentBlock `json:"content"`
+	Role             string         `json:"role"`
+	Content          []ContentBlock `json:"content"`
+	ReasoningContent *string        `json:"reasoning_content,omitempty"`
 }
 
 // UnmarshalJSON custom unmarshaler for AgentMessage to handle Content
