@@ -10,16 +10,21 @@ import (
 	"agent/internal/timeutil"
 )
 
-// providerCredentialsKey maps provider aliases to their settings table keys.
-var providerCredentialsKey = map[string]struct{ apiKey, baseURL string }{
-	"anthropic": {"api_key.anthropic", "base_url.anthropic"},
-	"claude":    {"api_key.anthropic", "base_url.anthropic"},
-	"openai":    {"api_key.openai", "base_url.openai"},
-	"moonshot":  {"api_key.moonshot", "base_url.moonshot"},
-	"kimi":      {"api_key.moonshot", "base_url.moonshot"},
-	"zhipu":     {"api_key.zhipu", "base_url.zhipu"},
-	"glm":       {"api_key.zhipu", "base_url.zhipu"},
-	"deepseek":  {"api_key.deepseek", "base_url.deepseek"},
+type providerKeyConfig struct {
+	apiKey, baseURL, defaultBaseURL string
+}
+
+// providerCredentialsKey maps provider aliases to their settings table keys
+// and default base URLs used when the user hasn't configured one.
+var providerCredentialsKey = map[string]providerKeyConfig{
+	"anthropic": {"api_key.anthropic", "base_url.anthropic", "https://api.anthropic.com"},
+	"claude":    {"api_key.anthropic", "base_url.anthropic", "https://api.anthropic.com"},
+	"openai":    {"api_key.openai", "base_url.openai", "https://api.openai.com/v1"},
+	"moonshot":  {"api_key.moonshot", "base_url.moonshot", "https://api.moonshot.cn/v1"},
+	"kimi":      {"api_key.moonshot", "base_url.moonshot", "https://api.moonshot.cn/v1"},
+	"zhipu":     {"api_key.zhipu", "base_url.zhipu", "https://open.bigmodel.cn/api/paas/v4"},
+	"glm":       {"api_key.zhipu", "base_url.zhipu", "https://open.bigmodel.cn/api/paas/v4"},
+	"deepseek":  {"api_key.deepseek", "base_url.deepseek", "https://api.deepseek.com"},
 }
 
 const agentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),
@@ -202,17 +207,21 @@ func DeleteAgentConfig(agentID string) (bool, error) {
 }
 
 // GetProviderCredentials reads API key and base URL from settings for a given provider alias.
+// If no base URL is configured, the provider's official endpoint is used as default.
 func GetProviderCredentials(provider string) (*ProviderCredentials, error) {
-	keys, ok := providerCredentialsKey[strings.ToLower(provider)]
+	cfg, ok := providerCredentialsKey[strings.ToLower(provider)]
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
 
-	apiKey, err := GetSettingValue(keys.apiKey)
+	apiKey, err := GetSettingValue(cfg.apiKey)
 	if err != nil {
 		return nil, err
 	}
-	baseURL, _ := GetSettingValue(keys.baseURL)
+	baseURL, _ := GetSettingValue(cfg.baseURL)
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = cfg.defaultBaseURL
+	}
 
 	return &ProviderCredentials{
 		Provider: provider,
