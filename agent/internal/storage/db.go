@@ -285,11 +285,6 @@ func runSchema(db *sql.DB) error {
 }
 
 func seedDefaultModels(db *sql.DB) {
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM models").Scan(&count); err != nil || count > 0 {
-		return
-	}
-
 	type modelSeed struct {
 		id, name, provider, model string
 	}
