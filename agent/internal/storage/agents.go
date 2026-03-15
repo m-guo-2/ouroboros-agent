@@ -19,6 +19,7 @@ var providerCredentialsKey = map[string]struct{ apiKey, baseURL string }{
 	"kimi":      {"api_key.moonshot", "base_url.moonshot"},
 	"zhipu":     {"api_key.zhipu", "base_url.zhipu"},
 	"glm":       {"api_key.zhipu", "base_url.zhipu"},
+	"deepseek":  {"api_key.deepseek", "base_url.deepseek"},
 }
 
 const agentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),

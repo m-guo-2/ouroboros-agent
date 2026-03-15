@@ -21,6 +21,7 @@ const PROVIDERS = [
   { value: "openai", label: "OpenAI (GPT)" },
   { value: "moonshot", label: "Moonshot (Kimi)" },
   { value: "zhipu", label: "智谱 (GLM)" },
+  { value: "deepseek", label: "DeepSeek" },
 ]
 
 export function AgentDetail() {

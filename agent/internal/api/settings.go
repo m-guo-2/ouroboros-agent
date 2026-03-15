@@ -163,6 +163,13 @@ func buildSettingGroups() map[string]settingGroup {
 				{Key: "base_url.zhipu", Label: "Zhipu Base URL", Placeholder: "https://open.bigmodel.cn/api/paas/v4", Description: "可选，自定义 GLM API 地址"},
 			},
 		},
+		"deepseek": {
+			Label: "DeepSeek",
+			Keys: []settingKeyDef{
+				{Key: "api_key.deepseek", Label: "DeepSeek API Key", Secret: true, Placeholder: "sk-...", Description: "用于 DeepSeek 模型调用"},
+				{Key: "base_url.deepseek", Label: "DeepSeek Base URL", Placeholder: "https://api.deepseek.com", Description: "可选，自定义 DeepSeek 兼容地址"},
+			},
+		},
 		"tavily": {
 			Label: "Tavily Web Search",
 			Keys: []settingKeyDef{

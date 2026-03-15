@@ -21,6 +21,8 @@ var modelContextWindows = map[string]int{
 	"gpt-4-turbo":                128000,
 	"gpt-4":                      8192,
 	"gpt-3.5-turbo":              16384,
+	"deepseek-chat":              65536,
+	"deepseek-reasoner":          65536,
 }
 
 const defaultContextWindow = 128000
@@ -31,6 +33,9 @@ func GetContextWindow(model string) int {
 	}
 	if strings.Contains(model, "claude") {
 		return 200000
+	}
+	if strings.Contains(model, "deepseek") {
+		return 65536
 	}
 	return defaultContextWindow
 }

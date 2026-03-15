@@ -42,6 +42,8 @@ func estimateCost(model string, inputTokens, outputTokens int) float64 {
 		"gpt-4o":                     {5, 15},
 		"gpt-4o-mini":                {0.15, 0.60},
 		"gpt-4-turbo":                {10, 30},
+		"deepseek-chat":              {0.27, 1.10},
+		"deepseek-reasoner":          {0.55, 2.19},
 	}
 	p, ok := table[model]
 	if !ok {

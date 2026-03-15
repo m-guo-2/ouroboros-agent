@@ -66,6 +66,7 @@ function ModelCard({ model }: { model: import("@/api/types").Model }) {
     openai: "bg-green-50 text-green-700",
     kimi: "bg-purple-50 text-purple-700",
     glm: "bg-blue-50 text-blue-700",
+    deepseek: "bg-sky-50 text-sky-700",
   }
 
   return (

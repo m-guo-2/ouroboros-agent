@@ -31,6 +31,8 @@ func fetchAvailableModels(provider, apiKey, baseURL string) ([]availableModel, e
 		return fetchKimiModels(apiKey)
 	case "glm", "zhipu":
 		return fetchGLMModels(apiKey)
+	case "deepseek":
+		return fetchDeepSeekModels(apiKey)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
@@ -160,4 +162,43 @@ func fetchGLMModels(apiKey string) ([]availableModel, error) {
 		}
 	}
 	return out, nil
+}
+
+func fetchDeepSeekModels(apiKey string) ([]availableModel, error) {
+	base := "https://api.deepseek.com"
+	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := modelFetchClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return deepSeekFallbackModels(), nil
+	}
+	var data struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&data) != nil {
+		return deepSeekFallbackModels(), nil
+	}
+	var out []availableModel
+	for _, m := range data.Data {
+		if strings.Contains(m.ID, "deepseek") {
+			out = append(out, availableModel{ID: m.ID, Name: m.ID, Provider: "deepseek"})
+		}
+	}
+	if len(out) == 0 {
+		return deepSeekFallbackModels(), nil
+	}
+	return out, nil
+}
+
+func deepSeekFallbackModels() []availableModel {
+	return []availableModel{
+		{ID: "deepseek-chat", Name: "DeepSeek Chat (V3)", Provider: "deepseek"},
+		{ID: "deepseek-reasoner", Name: "DeepSeek Reasoner (R1)", Provider: "deepseek"},
+	}
 }

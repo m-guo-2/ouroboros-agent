@@ -656,6 +656,8 @@ func resolveCompactModel(mainModel string) string {
 		"gpt-4o":                     "gpt-4o-mini",
 		"gpt-4-turbo":                "gpt-4o-mini",
 		"gpt-4o-mini":                "gpt-4o-mini",
+		"deepseek-chat":              "deepseek-chat",
+		"deepseek-reasoner":          "deepseek-chat",
 	}
 	if m, ok := cheapModels[mainModel]; ok {
 		return m
