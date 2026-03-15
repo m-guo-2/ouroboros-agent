@@ -55,17 +55,23 @@ func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string
 		meta = map[string]any{}
 	}
 
+	// Auto-construct reply object from replyToChannelMessageId when channelMeta.reply is absent.
+	replyObj := mapValue(meta["reply"])
+	if len(replyObj) == 0 && strings.TrimSpace(msg.ReplyToChannelMessageID) != "" {
+		replyObj = map[string]any{"msgSvrId": strings.TrimSpace(msg.ReplyToChannelMessageID)}
+	}
+
 	switch msg.MessageType {
 	case "text":
 		params := map[string]any{"toId": toID, "content": msg.Content}
-		if reply := mapValue(meta["reply"]); len(reply) > 0 {
-			params["reply"] = reply
+		if len(replyObj) > 0 {
+			params["reply"] = replyObj
 		}
 		return "/msg/sendText", params, nil
 	case "rich_text":
 		params := map[string]any{"toId": toID, "content": msg.Content}
-		if reply := mapValue(meta["reply"]); len(reply) > 0 {
-			params["reply"] = reply
+		if len(replyObj) > 0 {
+			params["reply"] = replyObj
 		}
 		return "/msg/sendHyperText", params, nil
 	case "image":

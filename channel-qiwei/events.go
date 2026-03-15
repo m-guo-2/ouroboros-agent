@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -397,6 +398,13 @@ func (a *app) handleAppMessage(ctx context.Context, msg qiweiCallbackMessage) (s
 		subType = int(anyToInt64(msg.MsgData["appmsgtype"]))
 	}
 
+	// Fallback: extract subType from XML in content field (common for personal WeChat bridges).
+	if subType == 0 {
+		if parsed, ok := tryParseAppMsgXML(msg.MsgData); ok {
+			subType = parsed.Type
+		}
+	}
+
 	rawMsgData, _ := json.Marshal(msg.MsgData)
 	logger.Detail(ctx, "appmsg(49) 路由",
 		"tag", tagCallback, "subType", subType,
@@ -417,7 +425,8 @@ func (a *app) handleAppMessage(ctx context.Context, msg qiweiCallbackMessage) (s
 }
 
 // contentFromQuote extracts the quoted message context and the user's reply text.
-// Returns the reply content and channelMeta containing the quotedMessage structure.
+// It first tries flat fields in msgData (pre-parsed by bridge), then falls back
+// to parsing XML from the content field (common for personal WeChat bridges).
 func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 	replyText := strings.TrimSpace(decodeMaybeBase64(anyToString(msgData["content"])))
 	if replyText == "" {
@@ -431,6 +440,24 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 		msgData["referMessage"],
 	)
 
+	// Fallback: parse XML when flat fields are missing or content looks like XML.
+	if len(referMsg) == 0 || looksLikeXML(replyText) {
+		if parsed, ok := tryParseAppMsgXML(msgData); ok {
+			// Only fill referMsg from XML when bridge didn't provide one.
+			if len(referMsg) == 0 && (parsed.ReferMsg.SvrID != "" || parsed.ReferMsg.Content != "") {
+				referMsg = map[string]any{
+					"svrid":        parsed.ReferMsg.SvrID,
+					"content":      parsed.ReferMsg.Content,
+					"chatnickname": parsed.ReferMsg.ChatNickname,
+					"displayname":  parsed.ReferMsg.DisplayName,
+					"fromusr":      parsed.ReferMsg.FromUsr,
+				}
+			}
+			// Always prefer the parsed title over raw XML content.
+			replyText = parsed.Title
+		}
+	}
+
 	if len(referMsg) == 0 {
 		if replyText != "" {
 			return replyText, nil
@@ -441,6 +468,7 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 	quotedContent := strings.TrimSpace(decodeMaybeBase64(anyToString(referMsg["content"])))
 	quotedSender := strings.TrimSpace(decodeMaybeBase64(firstNonEmpty(
 		anyToString(referMsg["displayName"]),
+		anyToString(referMsg["displayname"]),
 		anyToString(referMsg["nickname"]),
 		anyToString(referMsg["chatnickname"]),
 	)))
@@ -458,7 +486,55 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 		},
 	}
 
+	if replyText == "" {
+		replyText = "[引用消息]"
+	}
+
 	return replyText, meta
+}
+
+// appMsgXML maps the XML structure used by personal WeChat for appmsg (type 49).
+type appMsgXML struct {
+	XMLName xml.Name       `xml:"msg"`
+	AppMsg  appMsgInnerXML `xml:"appmsg"`
+}
+
+type appMsgInnerXML struct {
+	Title    string      `xml:"title"`
+	Type     int         `xml:"type"`
+	ReferMsg referMsgXML `xml:"refermsg"`
+}
+
+type referMsgXML struct {
+	Type         int    `xml:"type"`
+	SvrID        string `xml:"svrid"`
+	FromUsr      string `xml:"fromusr"`
+	ChatNickname string `xml:"chatnickname"`
+	DisplayName  string `xml:"displayname"`
+	Content      string `xml:"content"`
+}
+
+// tryParseAppMsgXML attempts to parse XML from msgData["content"] (possibly base64-encoded).
+func tryParseAppMsgXML(msgData map[string]any) (appMsgInnerXML, bool) {
+	raw := strings.TrimSpace(decodeMaybeBase64(anyToString(msgData["content"])))
+	if raw == "" {
+		return appMsgInnerXML{}, false
+	}
+	if !looksLikeXML(raw) {
+		return appMsgInnerXML{}, false
+	}
+	var msg appMsgXML
+	if err := xml.Unmarshal([]byte(raw), &msg); err != nil {
+		return appMsgInnerXML{}, false
+	}
+	if msg.AppMsg.Type == 0 && msg.AppMsg.Title == "" {
+		return appMsgInnerXML{}, false
+	}
+	return msg.AppMsg, true
+}
+
+func looksLikeXML(s string) bool {
+	return strings.HasPrefix(strings.TrimSpace(s), "<")
 }
 
 func firstNonNilMap(values ...any) map[string]any {

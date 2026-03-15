@@ -64,10 +64,11 @@ func GetMessageByID(msgID string) (*MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE id = ?`, msgID,
 	).Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.MessageType, &m.Channel,
-		&m.ChannelMessageID, &m.TraceID, &m.Initiator, &m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt)
+		&m.ChannelMessageID, &m.TraceID, &m.Initiator, &m.SenderName, &m.SenderID,
+		(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -81,7 +82,7 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE session_id = ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, limit,
@@ -98,7 +99,8 @@ func GetSessionMessages(sessionID string, limit int) ([]MessageData, error) {
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+			&m.SenderName, &m.SenderID,
+			(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -114,7 +116,7 @@ func GetLatestSessionMessages(sessionID string, limit int) ([]MessageData, error
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE session_id = ?
 		 ORDER BY created_at DESC LIMIT ?`,
 		sessionID, limit,
@@ -131,7 +133,8 @@ func GetLatestSessionMessages(sessionID string, limit int) ([]MessageData, error
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+			&m.SenderName, &m.SenderID,
+			(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -151,7 +154,7 @@ func GetRecentMessagesBefore(sessionID string, beforeTime int64, limit int) ([]M
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE session_id = ? AND created_at < ?
 		 ORDER BY created_at DESC LIMIT ?`,
 		sessionID, beforeTime, limit,
@@ -168,7 +171,8 @@ func GetRecentMessagesBefore(sessionID string, beforeTime int64, limit int) ([]M
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+			&m.SenderName, &m.SenderID,
+			(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -194,7 +198,7 @@ func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]Message
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE session_id = ? AND created_at < ?
 		 ORDER BY created_at ASC LIMIT ?`,
 		sessionID, beforeTime, limit,
@@ -211,7 +215,8 @@ func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]Message
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+			&m.SenderName, &m.SenderID,
+			(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -227,7 +232,7 @@ func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]Mes
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
-		        COALESCE(attachments_json,'[]'), created_at
+		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages
 		 WHERE session_id = ? AND created_at < ? AND content LIKE ?
 		 ORDER BY created_at DESC LIMIT ?`,
@@ -245,7 +250,8 @@ func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]Mes
 			&m.ID, &m.SessionID, &m.Role, &m.Content,
 			&m.MessageType, &m.Channel, &m.ChannelMessageID,
 			&m.TraceID, &m.Initiator,
-			&m.SenderName, &m.SenderID, (*jsonStringSliceAttachment)(&m.Attachments), &m.CreatedAt,
+			&m.SenderName, &m.SenderID,
+			(*jsonStringSliceAttachment)(&m.Attachments), (*jsonStringMapAny)(&m.ChannelMeta), &m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -292,12 +298,24 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 		}
 	}
 
+	var channelMeta map[string]any
+	if v, ok := params["channelMeta"].(map[string]any); ok {
+		channelMeta = v
+	}
+	var channelMetaJSON *string
+	if len(channelMeta) > 0 {
+		if raw, err := json.Marshal(channelMeta); err == nil {
+			s := string(raw)
+			channelMetaJSON = &s
+		}
+	}
+
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO messages
-		 (id, session_id, role, content, message_type, channel, channel_message_id, trace_id, initiator, sender_name, sender_id, attachments_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, sessionID, role, content, msgType, channel, channelMessageID, traceID, initiator, senderName, senderID, attachmentsJSON, now,
+		 (id, session_id, role, content, message_type, channel, channel_message_id, channel_meta, trace_id, initiator, sender_name, sender_id, attachments_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, sessionID, role, content, msgType, channel, channelMessageID, channelMetaJSON, traceID, initiator, senderName, senderID, attachmentsJSON, now,
 	)
 	if err != nil {
 		return nil, err
@@ -315,6 +333,7 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 		SenderName:       senderName,
 		SenderID:         senderID,
 		Attachments:      attachments,
+		ChannelMeta:      channelMeta,
 		CreatedAt:        now,
 	}, nil
 }
@@ -340,5 +359,30 @@ func (a *jsonStringSliceAttachment) Scan(src interface{}) error {
 		return err
 	}
 	*a = attachments
+	return nil
+}
+
+type jsonStringMapAny map[string]any
+
+func (m *jsonStringMapAny) Scan(src interface{}) error {
+	var raw string
+	switch v := src.(type) {
+	case string:
+		raw = v
+	case []byte:
+		raw = string(v)
+	default:
+		*m = nil
+		return nil
+	}
+	if raw == "" {
+		*m = nil
+		return nil
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return err
+	}
+	*m = result
 	return nil
 }

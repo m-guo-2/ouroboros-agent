@@ -175,6 +175,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"senderName":       msg.SenderName,
 		"senderId":         msg.ChannelUserID,
 		"attachments":      msg.Attachments,
+		"channelMeta":      msg.ChannelMeta,
 	})
 
 	// 6. Update session to processing and enqueue.

@@ -428,7 +428,7 @@ func reconstructHistoryFromMessages(sessionID string) []types.AgentMessage {
 			if msg.MessageType == "structured" {
 				continue
 			}
-			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content, msg.Attachments, nil)
+			text := formatUserMessage(msg.SenderName, msg.Channel, msg.MessageType, msg.ChannelMessageID, msg.Content, msg.Attachments, msg.ChannelMeta)
 			result = append(result, types.AgentMessage{
 				Role:    "user",
 				Content: []types.ContentBlock{{Type: "text", Text: text}},

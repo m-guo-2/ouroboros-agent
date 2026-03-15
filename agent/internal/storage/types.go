@@ -93,5 +93,6 @@ type MessageData struct {
 	SenderName       string           `json:"senderName"`
 	SenderID         string           `json:"senderId"`
 	Attachments      []AttachmentData `json:"attachments,omitempty"`
+	ChannelMeta      map[string]any   `json:"channelMeta,omitempty"`
 	CreatedAt        int64            `json:"createdAt"`
 }
