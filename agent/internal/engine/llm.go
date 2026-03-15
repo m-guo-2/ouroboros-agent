@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -20,6 +22,34 @@ var (
 	anthropicHTTPClient = sharedlogger.NewClient("anthropic", 120*time.Second)
 	openaiHTTPClient    = sharedlogger.NewClient("openai", 120*time.Second)
 )
+
+const maxLLMRetries = 3
+
+func isRetryableHTTPStatus(code int) bool {
+	return code == 408 || code == 429 || code >= 500
+}
+
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func llmRetryWait(ctx context.Context, attempt int) error {
+	base := 1 * time.Second
+	delay := base * time.Duration(1<<uint(attempt))
+	jitter := time.Duration(rand.Int63n(int64(delay / 2)))
+	wait := delay/2 + jitter
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 type LLMResponse struct {
 	Content    []types.ContentBlock
@@ -195,63 +225,88 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := anthropicHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Anthropic API read body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errMsg := string(respBody)
-		if strings.Contains(errMsg, "tool_call_id") || strings.Contains(errMsg, "tool_use_id") {
-			logger.Error(ctx, "Anthropic API tool_call_id 错误，发送的消息诊断",
-				"status", resp.StatusCode,
-				"rawError", errMsg,
-				"diagnostic", BuildToolUseDiagnostic(sanitized))
+	var lastErr error
+	for attempt := 0; attempt < maxLLMRetries; attempt++ {
+		if attempt > 0 {
+			if err := llmRetryWait(ctx, attempt-1); err != nil {
+				return nil, lastErr
+			}
+			logger.Warn(ctx, "LLM 调用重试",
+				"traceEvent", "llm_retry",
+				"provider", "anthropic",
+				"attempt", attempt+1,
+				"maxRetries", maxLLMRetries,
+				"lastError", lastErr.Error())
 		}
-		return nil, fmt.Errorf("Anthropic API %d: %s", resp.StatusCode, errMsg)
-	}
 
-	var data struct {
-		Content    []types.ContentBlock `json:"content"`
-		StopReason string               `json:"stop_reason"`
-		Usage      struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
 
-	if err := json.Unmarshal(respBody, &data); err != nil {
-		return nil, err
-	}
+		resp, err := anthropicHTTPClient.Do(req)
+		if err != nil {
+			if !isRetryableError(err) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
 
-	return &LLMResponse{
-		Content:    data.Content,
-		StopReason: data.StopReason,
-		Usage: struct {
-			InputTokens  int
-			OutputTokens int
-		}{
-			InputTokens:  data.Usage.InputTokens,
-			OutputTokens: data.Usage.OutputTokens,
-		},
-		RawRequest:  json.RawMessage(reqBody),
-		RawResponse: json.RawMessage(respBody),
-	}, nil
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("Anthropic API read body: %w", err)
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			errMsg := string(respBody)
+			if strings.Contains(errMsg, "tool_call_id") || strings.Contains(errMsg, "tool_use_id") {
+				logger.Error(ctx, "Anthropic API tool_call_id 错误，发送的消息诊断",
+					"status", resp.StatusCode,
+					"rawError", errMsg,
+					"diagnostic", BuildToolUseDiagnostic(sanitized))
+			}
+			lastErr = fmt.Errorf("Anthropic API %d: %s", resp.StatusCode, errMsg)
+			if !isRetryableHTTPStatus(resp.StatusCode) {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		var data struct {
+			Content    []types.ContentBlock `json:"content"`
+			StopReason string               `json:"stop_reason"`
+			Usage      struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+
+		if err := json.Unmarshal(respBody, &data); err != nil {
+			lastErr = err
+			continue
+		}
+
+		return &LLMResponse{
+			Content:    data.Content,
+			StopReason: data.StopReason,
+			Usage: struct {
+				InputTokens  int
+				OutputTokens int
+			}{
+				InputTokens:  data.Usage.InputTokens,
+				OutputTokens: data.Usage.OutputTokens,
+			},
+			RawRequest:  json.RawMessage(reqBody),
+			RawResponse: json.RawMessage(respBody),
+		}, nil
+	}
+	return nil, lastErr
 }
 
 // ==================== OpenAI Compatible Client ====================
@@ -379,111 +434,137 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	resp, err := openaiHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("OpenAI API read body: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("OpenAI API %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var data struct {
-		Choices []struct {
-			Message struct {
-				Content   *string `json:"content"`
-				ToolCalls []struct {
-					ID       string `json:"id"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-
-	if err := json.Unmarshal(respBody, &data); err != nil {
-		return nil, err
-	}
-
-	if len(data.Choices) == 0 {
-		return nil, fmt.Errorf("OpenAI API returned 0 choices")
-	}
-
-	choice := data.Choices[0]
-	var content []types.ContentBlock
-
-	if choice.Message.Content != nil && *choice.Message.Content != "" {
-		content = append(content, types.ContentBlock{
-			Type: "text",
-			Text: *choice.Message.Content,
-		})
-	}
-
-	for _, tc := range choice.Message.ToolCalls {
-		var input map[string]interface{}
-		if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-			input = map[string]interface{}{"raw": tc.Function.Arguments}
+	var lastErr error
+	for attempt := 0; attempt < maxLLMRetries; attempt++ {
+		if attempt > 0 {
+			if err := llmRetryWait(ctx, attempt-1); err != nil {
+				return nil, lastErr
+			}
+			logger.Warn(ctx, "LLM 调用重试",
+				"traceEvent", "llm_retry",
+				"provider", "openai",
+				"attempt", attempt+1,
+				"maxRetries", maxLLMRetries,
+				"lastError", lastErr.Error())
 		}
-		content = append(content, types.ContentBlock{
-			Type:  "tool_use",
-			ID:    tc.ID,
-			Name:  tc.Function.Name,
-			Input: input,
-		})
-	}
 
-	if len(content) == 0 {
-		content = append(content, types.ContentBlock{
-			Type: "text",
-			Text: "",
-		})
-	}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
 
-	stopMap := map[string]string{
-		"stop":       "end_turn",
-		"tool_calls": "tool_use",
-		"length":     "max_tokens",
-	}
+		resp, err := openaiHTTPClient.Do(req)
+		if err != nil {
+			if !isRetryableError(err) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
 
-	stopReason := stopMap[choice.FinishReason]
-	if stopReason == "" {
-		stopReason = "end_turn"
-	}
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("OpenAI API read body: %w", err)
+			continue
+		}
 
-	return &LLMResponse{
-		Content:    content,
-		StopReason: stopReason,
-		Usage: struct {
-			InputTokens  int
-			OutputTokens int
-		}{
-			InputTokens:  data.Usage.PromptTokens,
-			OutputTokens: data.Usage.CompletionTokens,
-		},
-		RawRequest:  json.RawMessage(reqBody),
-		RawResponse: json.RawMessage(respBody),
-	}, nil
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("OpenAI API %d: %s", resp.StatusCode, string(respBody))
+			if !isRetryableHTTPStatus(resp.StatusCode) {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		var data struct {
+			Choices []struct {
+				Message struct {
+					Content   *string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+
+		if err := json.Unmarshal(respBody, &data); err != nil {
+			lastErr = err
+			continue
+		}
+
+		if len(data.Choices) == 0 {
+			lastErr = fmt.Errorf("OpenAI API returned 0 choices")
+			continue
+		}
+
+		choice := data.Choices[0]
+		var content []types.ContentBlock
+
+		if choice.Message.Content != nil && *choice.Message.Content != "" {
+			content = append(content, types.ContentBlock{
+				Type: "text",
+				Text: *choice.Message.Content,
+			})
+		}
+
+		for _, tc := range choice.Message.ToolCalls {
+			var input map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+				input = map[string]interface{}{"raw": tc.Function.Arguments}
+			}
+			content = append(content, types.ContentBlock{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: input,
+			})
+		}
+
+		if len(content) == 0 {
+			content = append(content, types.ContentBlock{
+				Type: "text",
+				Text: "",
+			})
+		}
+
+		stopMap := map[string]string{
+			"stop":       "end_turn",
+			"tool_calls": "tool_use",
+			"length":     "max_tokens",
+		}
+
+		stopReason := stopMap[choice.FinishReason]
+		if stopReason == "" {
+			stopReason = "end_turn"
+		}
+
+		return &LLMResponse{
+			Content:    content,
+			StopReason: stopReason,
+			Usage: struct {
+				InputTokens  int
+				OutputTokens int
+			}{
+				InputTokens:  data.Usage.PromptTokens,
+				OutputTokens: data.Usage.CompletionTokens,
+			},
+			RawRequest:  json.RawMessage(reqBody),
+			RawResponse: json.RawMessage(respBody),
+		}, nil
+	}
+	return nil, lastErr
 }
