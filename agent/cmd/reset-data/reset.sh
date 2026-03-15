@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DB_PATH="${1:-data/config.db}"
+DB_PATH="${1:-/opt/moli/data/config.db}"
 
 if [ ! -f "$DB_PATH" ]; then
   echo "❌ 数据库不存在: $DB_PATH"
