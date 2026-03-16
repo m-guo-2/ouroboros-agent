@@ -748,6 +748,10 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	channelUserID := firstMsg.SenderID
 	traceID := firstMsg.TraceID
 
+	if traceID != "" {
+		ctx = logger.WithTrace(ctx, traceID, worker.SessionID)
+	}
+
 	logger.Business(ctx, "开始处理会话",
 		"agentId", agentID, "channel", channel, "userId", userID,
 		"eventCount", len(events))
