@@ -192,11 +192,11 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 
 	var sections []string
 	if len(alwaysDocs) > 0 {
-		sections = append(sections, "## 必召回 Skills\n\n"+strings.Join(alwaysDocs, "\n\n---\n\n"))
+		sections = append(sections, "## Skills\n\n"+strings.Join(alwaysDocs, "\n\n---\n\n"))
 	}
 	if len(onDemandSummaries) > 0 {
 		sections = append(sections, fmt.Sprintf(
-			"## 按需加载 Skills\n以下技能已绑定为按需加载模式。你已经知道它们的名称和用途；当需要详细工作流、完整说明或参考资料时，再使用 `load_skill` / `load_skill_reference` 获取详情。\n%s",
+			"## 更多可用技能\n\n以下技能的名称和用途已列出。需要完整说明或参考资料时，使用 `load_skill` 获取详情。\n\n%s",
 			strings.Join(onDemandSummaries, "\n"),
 		))
 	}
@@ -204,7 +204,7 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 
 	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
 		Name:        "load_skill",
-		Description: "加载一个已绑定为按需加载模式的技能的完整文档和工具参考。当 system prompt 中的技能简介不足以完成任务时，先调用此工具获取详细说明。",
+		Description: "获取指定技能的完整文档和工具定义。当技能简介不足以完成任务时，使用此工具获取详细说明。",
 		InputSchema: types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -220,7 +220,7 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 
 	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
 		Name:        "load_skill_reference",
-		Description: "加载一个已绑定为按需加载模式的技能的详细 API 参考文档。当 load_skill 返回的 readme 概览不够详细时，使用此工具按需加载具体的参考文件。",
+		Description: "获取指定技能的详细参考文档。当 load_skill 返回的文档不够详细时，根据其 references 列表加载具体的参考文件。",
 		InputSchema: types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{

@@ -297,7 +297,7 @@ export function AgentDetail() {
                 <label className="text-sm font-medium text-slate-700 mb-1.5 block">
                   系统提示词
                   <span className="ml-2 text-xs font-normal text-slate-400">
-                    绑定的技能会在运行时自动附加到最终 prompt：必召回注入完整内容，按需加载注入名称和描述
+                    绑定的技能会自动附加到最终 prompt。「始终展开」注入完整内容；「按需展开」仅注入名称和简介，模型通过工具获取详情
                   </span>
                 </label>
                 <Textarea
@@ -382,7 +382,7 @@ export function AgentDetail() {
                                 }`}
                                 onClick={() => setSkillMode(skill.id, "always")}
                               >
-                                必召回
+                                始终展开
                               </button>
                               <button
                                 type="button"
@@ -393,7 +393,7 @@ export function AgentDetail() {
                                 }`}
                                 onClick={() => setSkillMode(skill.id, "on_demand")}
                               >
-                                按需加载
+                                按需展开
                               </button>
                             </div>
                           </div>
