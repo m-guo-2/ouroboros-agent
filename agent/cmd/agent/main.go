@@ -18,6 +18,7 @@ import (
 	"agent/internal/channels"
 	"agent/internal/config"
 	"agent/internal/dispatcher"
+	"agent/internal/eventlog"
 	"agent/internal/github"
 	"agent/internal/logger"
 	"agent/internal/runner"
@@ -52,6 +53,9 @@ func main() {
 		logger.Error(ctx, "数据库初始化失败", "error", err.Error(), "path", cfg.DBPath)
 		os.Exit(1)
 	}
+
+	// --- Session recovery: resume sessions interrupted by previous crash ---
+	recoverSessions(ctx)
 
 	// --- Fast init: no network, all local ---
 
@@ -187,6 +191,45 @@ func spaHandler(dir, _ string) http.Handler {
 		}
 		http.ServeFileFS(w, r, fsys, p)
 	})
+}
+
+// recoverSessions scans for sessions that were in "processing" state when
+// the previous process exited. Sessions with pending events are resumed;
+// sessions with no pending events are marked "interrupted".
+func recoverSessions(ctx context.Context) {
+	sessions, err := storage.GetProcessingSessionsWithPendingEvents()
+	if err != nil {
+		logger.Error(ctx, "会话恢复扫描失败", "error", err.Error())
+		return
+	}
+	if len(sessions) == 0 {
+		return
+	}
+
+	logger.Boundary(ctx, "发现需恢复的会话", "count", len(sessions))
+
+	for _, sd := range sessions {
+		has, err := storage.HasSessionEventsAfter(sd.ID, sd.EventCursor)
+		if err != nil {
+			logger.Error(ctx, "检查会话待处理事件失败",
+				"sessionId", sd.ID, "error", err.Error())
+			continue
+		}
+
+		if !has {
+			_ = storage.UpdateSession(sd.ID, map[string]interface{}{
+				"executionStatus": "interrupted",
+			})
+			logger.Business(ctx, "会话无待处理事件，标记为中断",
+				"sessionId", sd.ID)
+			continue
+		}
+
+		el := eventlog.New(sd.ID, sd.EventCursor)
+		_ = runner.RecoverSession(ctx, sd, el)
+		logger.Business(ctx, "会话已恢复",
+			"sessionId", sd.ID, "eventCursor", sd.EventCursor)
+	}
 }
 
 // handleChannelSend provides a local HTTP facade for the send_channel_message tool

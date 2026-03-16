@@ -65,6 +65,7 @@ type SessionData struct {
 	ChannelName           string `json:"channelName"`
 	WorkDir               string `json:"workDir"`
 	ExecutionStatus       string `json:"executionStatus"`
+	EventCursor           int64  `json:"eventCursor"`
 	CreatedAt             int64  `json:"createdAt"`
 	UpdatedAt             int64  `json:"updatedAt"`
 	Context               string `json:"-"`

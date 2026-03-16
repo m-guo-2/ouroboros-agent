@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/eventlog"
 	"agent/internal/logger"
 	"agent/internal/storage"
 )
@@ -27,15 +28,11 @@ type ProcessRequest struct {
 	TraceID               string                   `json:"traceId,omitempty"`
 }
 
-type QueuedRequest struct {
-	ProcessRequest
-}
-
 type SessionWorker struct {
 	SessionID      string
 	SessionKey     string
 	WorkDir        string
-	Queue          []QueuedRequest
+	EventLog       *eventlog.EventLog
 	Processing     bool
 	CancelFunc     context.CancelFunc
 	LastActivityAt int64
@@ -44,7 +41,6 @@ type SessionWorker struct {
 
 var (
 	SessionIdleTimeoutMs = 10 * 60 * 1000
-	MaxAbsorbRounds      = 5
 	sessionWorkers       = make(map[string]*SessionWorker)
 	workerMutex          sync.Mutex
 	shuttingDown         = false
@@ -86,36 +82,12 @@ func evictSession(sessionID string) {
 	delete(sessionWorkers, sessionID)
 }
 
-func popAllPending(worker *SessionWorker) []QueuedRequest {
-	workerMutex.Lock()
-	defer workerMutex.Unlock()
-	if len(worker.Queue) == 0 {
-		return nil
-	}
-	pending := make([]QueuedRequest, len(worker.Queue))
-	copy(pending, worker.Queue)
-	worker.Queue = worker.Queue[:0]
-	return pending
-}
-
 func drainWorker(worker *SessionWorker) {
 	for {
-		workerMutex.Lock()
-		if len(worker.Queue) == 0 {
-			worker.Processing = false
-			resetIdleTimer(worker)
-			workerMutex.Unlock()
-			return
-		}
-		req := worker.Queue[0]
-		worker.Queue = worker.Queue[1:]
-		workerMutex.Unlock()
-
 		baseCtx, cancel := context.WithCancel(context.Background())
-		traceID, sessionID := req.TraceID, worker.SessionID
-		ctx := logger.WithTrace(baseCtx, traceID, sessionID)
+		ctx := logger.WithTrace(baseCtx, fmt.Sprintf("drain-%d", time.Now().UnixNano()), worker.SessionID)
 
-		logger.Business(ctx, "出队开始处理", "queueRemaining", len(worker.Queue))
+		logger.Business(ctx, "开始处理会话事件")
 
 		_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 			"executionStatus": "processing",
@@ -125,14 +97,14 @@ func drainWorker(worker *SessionWorker) {
 		worker.CancelFunc = cancel
 		workerMutex.Unlock()
 
-		err := processOneEvent(ctx, worker, req)
+		err := processSession(ctx, worker)
 
 		workerMutex.Lock()
 		worker.CancelFunc = nil
 		workerMutex.Unlock()
 
 		if err != nil {
-			logger.Error(ctx, "处理请求失败", "error", err.Error())
+			logger.Error(ctx, "处理会话失败", "error", err.Error())
 			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 				"executionStatus": "interrupted",
 			})
@@ -141,21 +113,39 @@ func drainWorker(worker *SessionWorker) {
 				"executionStatus": "completed",
 			})
 		}
-		logger.Business(ctx, "请求处理完成")
+		logger.Business(ctx, "会话处理完成")
+
+		// Double-check under mutex before exiting.
+		workerMutex.Lock()
+		has, _ := worker.EventLog.HasNew()
+		if !has {
+			worker.Processing = false
+			resetIdleTimer(worker)
+			workerMutex.Unlock()
+			return
+		}
+		workerMutex.Unlock()
 	}
 }
 
+// EnqueueProcessRequest signals the worker for a session that new events are
+// available. The actual event data has already been persisted to
+// session_events by the dispatcher. This function only manages worker
+// lifecycle: it creates a SessionWorker (with an EventLog) if none exists
+// and starts a drainWorker goroutine when needed.
 func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 	sessionKey := resolveSessionKey(req.Channel, req.ChannelUserID, req.ChannelConversationID)
 
 	var sessionID string
 	var workDir string
+	var eventCursor int64
 
 	if req.SessionID != "" {
 		sd, _ := storage.GetSession(req.SessionID)
 		if sd != nil {
 			sessionID = sd.ID
 			workDir = sd.WorkDir
+			eventCursor = sd.EventCursor
 		}
 	}
 
@@ -164,6 +154,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 		if sd != nil {
 			sessionID = sd.ID
 			workDir = sd.WorkDir
+			eventCursor = sd.EventCursor
 		}
 	}
 
@@ -188,6 +179,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 			"workDir":               workDir,
 			"title":                 title,
 		})
+		eventCursor = 0
 	}
 
 	traceID := req.TraceID
@@ -196,11 +188,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 	}
 
 	traceCtx := logger.WithTrace(ctx, traceID, sessionID)
-	logger.Boundary(traceCtx, "请求入队", "agentId", req.AgentID, "channel", req.Channel)
-
-	queuedReq := QueuedRequest{ProcessRequest: req}
-	queuedReq.SessionID = sessionID
-	queuedReq.TraceID = traceID
+	logger.Boundary(traceCtx, "事件通知", "agentId", req.AgentID, "channel", req.Channel)
 
 	logger.Business(traceCtx, "trace 开始",
 		"traceEvent", "start", "agentId", req.AgentID, "userId", req.UserID, "channel", req.Channel)
@@ -216,7 +204,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 			SessionID:      sessionID,
 			SessionKey:     sessionKey,
 			WorkDir:        workDir,
-			Queue:          []QueuedRequest{},
+			EventLog:       eventlog.New(sessionID, eventCursor),
 			Processing:     false,
 			LastActivityAt: time.Now().UnixMilli(),
 		}
@@ -229,14 +217,44 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 		}
 	}
 
-	worker.Queue = append(worker.Queue, queuedReq)
-
 	if !worker.Processing {
 		worker.Processing = true
 		go drainWorker(worker)
 	}
 	workerMutex.Unlock()
 
+	return nil
+}
+
+// RecoverSession creates a SessionWorker with a pre-initialized EventLog
+// and starts a drainWorker for it. Used at startup to resume sessions that
+// were interrupted by a previous crash.
+func RecoverSession(ctx context.Context, sd storage.SessionData, el *eventlog.EventLog) error {
+	sessionKey := ""
+	if sd.SessionKey != "" {
+		sessionKey = sd.SessionKey
+	}
+
+	workerMutex.Lock()
+	defer workerMutex.Unlock()
+
+	if shuttingDown {
+		return fmt.Errorf("agent is shutting down")
+	}
+	if _, exists := sessionWorkers[sd.ID]; exists {
+		return nil
+	}
+
+	worker := &SessionWorker{
+		SessionID:      sd.ID,
+		SessionKey:     sessionKey,
+		WorkDir:        sd.WorkDir,
+		EventLog:       el,
+		Processing:     true,
+		LastActivityAt: time.Now().UnixMilli(),
+	}
+	sessionWorkers[sd.ID] = worker
+	go drainWorker(worker)
 	return nil
 }
 
@@ -256,7 +274,6 @@ func GracefulShutdown() {
 		if worker.CancelFunc != nil {
 			worker.CancelFunc()
 		}
-		worker.Queue = nil
 		if worker.Processing {
 			processingSessions = append(processingSessions, sessionID)
 		}

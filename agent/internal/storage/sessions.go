@@ -22,7 +22,7 @@ func scanSession(row *sql.Row) (*SessionData, error) {
 	err := row.Scan(
 		&sd.ID, &sd.Title, &agentID, &userID, &sourceChannel,
 		&sessionKey, &channelConvID, &channelName, &workDir,
-		&sd.ExecutionStatus, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+		&sd.ExecutionStatus, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -45,6 +45,7 @@ const sessionSelectSQL = `
 	SELECT id, title, agent_id, user_id, source_channel, session_key,
 	       channel_conversation_id, COALESCE(channel_name,''), work_dir,
 	       COALESCE(execution_status,'idle'),
+	       COALESCE(event_cursor, 0),
 	       created_at,
 	       updated_at,
 	       COALESCE(context,'')
@@ -175,7 +176,7 @@ func ListSessions(agentID, userID, channel string, limit int, beforeUpdatedAt in
 		if err := rows.Scan(
 			&sd.ID, &sd.Title, &agentIDn, &userIDn, &sourceChannel,
 			&sessionKey, &channelConvID, &channelName, &workDir,
-			&sd.ExecutionStatus, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+			&sd.ExecutionStatus, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 		); err != nil {
 			return nil, err
 		}
@@ -209,6 +210,17 @@ func DeleteSession(sessionID string) error {
 	return err
 }
 
+// UpdateSessionContextAndCursor atomically persists both the conversation
+// context and the event cursor in a single UPDATE statement, ensuring crash
+// recovery consistency.
+func UpdateSessionContextAndCursor(sessionID, context, workDir string, eventCursor int64) error {
+	_, err := DB.Exec(
+		`UPDATE agent_sessions SET context = ?, event_cursor = ?, work_dir = ?, updated_at = ? WHERE id = ?`,
+		context, eventCursor, workDir, timeutil.NowMs(), sessionID,
+	)
+	return err
+}
+
 // UpdateSession applies a partial update to session fields.
 // Supported keys: executionStatus, workDir, context, title, sessionKey.
 func UpdateSession(sessionID string, updates map[string]interface{}) error {
@@ -218,6 +230,7 @@ func UpdateSession(sessionID string, updates map[string]interface{}) error {
 		"context":         "context",
 		"title":           "title",
 		"sessionKey":      "session_key",
+		"eventCursor":     "event_cursor",
 	}
 	for key, val := range updates {
 		col, ok := colMap[key]

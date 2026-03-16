@@ -11,6 +11,7 @@ import (
 	"agent/internal/channels"
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
+	"agent/internal/eventlog"
 	"agent/internal/logger"
 	"agent/internal/sanitize"
 	"agent/internal/storage"
@@ -499,6 +500,22 @@ func registerSubagentTools(
 			)
 		}
 
+		savedMsg, saveErr := storage.SaveMessage(map[string]interface{}{
+			"sessionId":   sessionID,
+			"role":        "user",
+			"content":     content,
+			"messageType": "text",
+			"channel":     channel,
+			"initiator":   "system",
+			"senderId":    channelUserID,
+		})
+		if saveErr != nil || savedMsg == nil {
+			logger.Warn(context.Background(), "subagent 事件消息保存失败",
+				"jobId", job.ID, "error", fmt.Sprint(saveErr))
+			return
+		}
+		_ = storage.AppendSessionEvent(sessionID, savedMsg.ID)
+
 		err := EnqueueProcessRequest(context.Background(), ProcessRequest{
 			UserID:                userID,
 			AgentID:               agentID,
@@ -507,7 +524,7 @@ func registerSubagentTools(
 			ChannelUserID:         channelUserID,
 			ChannelConversationID: channelConversationID,
 			MessageType:           "text",
-			MessageID:             fmt.Sprintf("subagent-event-%d", time.Now().UnixNano()),
+			MessageID:             savedMsg.ID,
 			SessionID:             sessionID,
 		})
 		if err != nil {
@@ -668,16 +685,61 @@ func resolveCompactModel(mainModel string) string {
 	return mainModel
 }
 
-func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedRequest) error {
-	logger.Business(ctx, "开始处理事件",
-		"agentId", request.AgentID, "channel", request.Channel, "userId", request.UserID)
+// mergeEventsToMessage converts EventLog events into a single user AgentMessage.
+// Single event: just the formatted content.
+// Multiple events: prefixed with a header showing count.
+func mergeEventsToMessage(events []eventlog.Event) types.AgentMessage {
+	var parts []string
+	if len(events) > 1 {
+		parts = append(parts, fmt.Sprintf("[以下 %d 条消息同时到达]", len(events)))
+	}
+	for _, ev := range events {
+		msg := ev.Message
+		parts = append(parts, formatUserMessage(
+			msg.SenderName, msg.Channel, msg.MessageType,
+			msg.ChannelMessageID, msg.Content,
+			msg.Attachments, msg.ChannelMeta,
+		))
+	}
+	return types.AgentMessage{
+		Role:    "user",
+		Content: []types.ContentBlock{{Type: "text", Text: strings.Join(parts, "\n\n")}},
+	}
+}
+
+func processSession(ctx context.Context, worker *SessionWorker) error {
+	sessionData, err := storage.GetSession(worker.SessionID)
+	if err != nil || sessionData == nil {
+		return fmt.Errorf("session not found: %s", worker.SessionID)
+	}
+
+	events, err := worker.EventLog.DrainNew()
+	if err != nil {
+		return fmt.Errorf("drain initial events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	agentID := sessionData.AgentID
+	channel := sessionData.SourceChannel
+	channelConvID := sessionData.ChannelConversationID
+	userID := sessionData.UserID
+
+	firstMsg := events[0].Message
+	channelUserID := firstMsg.SenderID
+	traceID := firstMsg.TraceID
+
+	logger.Business(ctx, "开始处理会话",
+		"agentId", agentID, "channel", channel, "userId", userID,
+		"eventCount", len(events))
 	logger.Business(ctx, "加载配置中", "traceEvent", "thinking", "source", "system")
 
-	agentConfig, err := storage.GetAgentConfig(request.AgentID)
+	agentConfig, err := storage.GetAgentConfig(agentID)
 	if err != nil || agentConfig == nil {
 		logger.Error(ctx, "Agent 配置未找到",
-			"agentId", request.AgentID, "error", fmt.Sprint(err))
-		return fmt.Errorf("agent not found: %s", request.AgentID)
+			"agentId", agentID, "error", fmt.Sprint(err))
+		return fmt.Errorf("agent not found: %s", agentID)
 	}
 
 	provider := agentConfig.Provider
@@ -685,7 +747,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	if provider == "" || modelName == "" {
 		logger.Error(ctx, "Agent 缺少 provider/model",
 			"provider", provider, "model", modelName)
-		return fmt.Errorf("agent %s missing provider/model", request.AgentID)
+		return fmt.Errorf("agent %s missing provider/model", agentID)
 	}
 
 	logger.Detail(ctx, "Agent 配置已加载", "provider", provider, "model", modelName)
@@ -695,7 +757,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		credentials = &storage.ProviderCredentials{}
 	}
 
-	skillsCtx, err := storage.GetSkillsContext(request.AgentID, agentConfig.Skills)
+	skillsCtx, err := storage.GetSkillsContext(agentID, agentConfig.Skills)
 	if err != nil || skillsCtx == nil {
 		skillsCtx = &storage.SkillContext{
 			Tools:            []types.ToolDefinition{},
@@ -728,6 +790,17 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	ostools.RegisterSaveMemory(registry, worker.SessionID)
 	engine.RegisterTavilyTool(registry)
 
+	// Build a ProcessRequest for tool closures that need session-level metadata.
+	sessionReq := ProcessRequest{
+		UserID:                userID,
+		AgentID:               agentID,
+		Channel:               channel,
+		ChannelUserID:         channelUserID,
+		ChannelConversationID: channelConvID,
+		TraceID:               traceID,
+		SessionID:             worker.SessionID,
+	}
+
 	registry.RegisterBuiltin("send_channel_message", "向当前渠道发送消息。content 填要发出去的话。", types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
@@ -740,28 +813,28 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 		},
 		Required: []string{"content"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
-		channel := request.Channel
-		channelUserID := request.ChannelUserID
+		ch := sessionReq.Channel
+		chUserID := sessionReq.ChannelUserID
 		if cu, ok := input["channelUserId"].(string); ok && cu != "" {
-			channelUserID = cu
+			chUserID = cu
 		}
 		content, ok := input["content"].(string)
 		if !ok || content == "" {
 			return nil, fmt.Errorf("content is required")
 		}
 
-		channelConvID := request.ChannelConversationID
+		chConvID := sessionReq.ChannelConversationID
 		if cc, ok := input["channelConversationId"].(string); ok && cc != "" {
-			channelConvID = cc
+			chConvID = cc
 		}
 
 		outMsg := channels.OutgoingMessage{
-			Channel:               channel,
-			ChannelUserID:         channelUserID,
+			Channel:               ch,
+			ChannelUserID:         chUserID,
 			Content:               content,
-			ChannelConversationID: channelConvID,
+			ChannelConversationID: chConvID,
 			SessionID:             worker.SessionID,
-			TraceID:               request.TraceID,
+			TraceID:               sessionReq.TraceID,
 		}
 		if mt, ok := input["messageType"].(string); ok && mt != "" {
 			outMsg.MessageType = mt
@@ -779,11 +852,11 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 		return map[string]interface{}{
 			"success":       true,
-			"channelUserId": channelUserID,
+			"channelUserId": chUserID,
 		}, nil
 	})
 
-	registerWecomBuiltinTools(registry, request.ProcessRequest)
+	registerWecomBuiltinTools(registry, sessionReq)
 
 	registerRenderCardTool(registry)
 
@@ -812,11 +885,11 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 		dt := &storage.DelayedTask{
 			SessionID:             worker.SessionID,
-			AgentID:               request.AgentID,
-			UserID:                request.UserID,
-			Channel:               request.Channel,
-			ChannelUserID:         request.ChannelUserID,
-			ChannelConversationID: request.ChannelConversationID,
+			AgentID:               sessionReq.AgentID,
+			UserID:                sessionReq.UserID,
+			Channel:               sessionReq.Channel,
+			ChannelUserID:         sessionReq.ChannelUserID,
+			ChannelConversationID: sessionReq.ChannelConversationID,
 			Task:                  task,
 			ExecuteAt:             executeAtMs,
 		}
@@ -917,8 +990,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	var historyMessages []types.AgentMessage
 	var histSource string
 
-	sessionData, err := storage.GetSession(worker.SessionID)
-	if err == nil && sessionData != nil && sessionData.Context != "" {
+	if sessionData.Context != "" {
 		_ = json.Unmarshal([]byte(sessionData.Context), &historyMessages)
 		histSource = "session"
 	}
@@ -933,26 +1005,21 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 	}
 
 	historyMessages = truncateByFullTurns(historyMessages, 10)
-
 	historyMessages = prependSessionMemory(historyMessages, worker.SessionID, modelName)
 
-	currentUserContent := formatUserMessage(request.SenderName, request.Channel, request.MessageType, request.ChannelMessageID, request.Content, request.Attachments, request.ChannelMeta)
-
-	messages := append(historyMessages, types.AgentMessage{
-		Role:    "user",
-		Content: []types.ContentBlock{{Type: "text", Text: currentUserContent}},
-	})
+	initialUserMsg := mergeEventsToMessage(events)
+	messages := append(historyMessages, initialUserMsg)
 
 	registerSubagentTools(
 		registry,
 		llmClient,
 		modelName,
-		request.AgentID,
-		request.UserID,
-		request.Channel,
-		request.ChannelUserID,
-		request.ChannelConversationID,
-		request.TraceID,
+		agentID,
+		userID,
+		channel,
+		channelUserID,
+		channelConvID,
+		traceID,
 		worker.SessionID,
 		messages,
 	)
@@ -973,28 +1040,44 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 				"role":        msg.Role,
 				"content":     msg.Content,
 				"messageType": msg.MessageType,
-				"channel":     request.Channel,
-				"traceId":     request.TraceID,
+				"channel":     channel,
+				"traceId":     traceID,
 				"initiator":   initiator,
 			})
 		}
 		return nil
 	}
 
+	drainCallback := func() []types.AgentMessage {
+		newEvents, err := worker.EventLog.DrainNew()
+		if err != nil || len(newEvents) == 0 {
+			return nil
+		}
+		merged := mergeEventsToMessage(newEvents)
+		return []types.AgentMessage{merged}
+	}
+
+	hasNewCallback := func() bool {
+		has, _ := worker.EventLog.HasNew()
+		return has
+	}
+
 	tools := registry.GetAll()
 
-	for absorbRound := 0; ; absorbRound++ {
-		// === Execute ===
+	// Outer loop: run engine, then check for more events.
+	for {
 		guardRetries := 0
 		for {
 			loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
-				LLMClient:     llmClient,
-				SystemPrompt:  systemPrompt,
-				Messages:      messages,
-				Tools:         tools,
-				Model:         modelName,
-				MaxIterations: 25,
-				OnNewMessages: onNewMessages,
+				LLMClient:      llmClient,
+				SystemPrompt:   systemPrompt,
+				Messages:       messages,
+				Tools:          tools,
+				Model:          modelName,
+				MaxIterations:  25,
+				OnNewMessages:  onNewMessages,
+				DrainNewEvents: drainCallback,
+				HasNewEvents:   hasNewCallback,
 			})
 			if err != nil {
 				logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
@@ -1006,17 +1089,17 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 
 			messages = loopResult.Messages
 
-			requiresInspection := shouldRequireAttachmentInspection(request.Content, request.Attachments)
-			if loopResult.FinalText != "" && requiresInspection && !hasAttachmentInspectionUse(messages, attachmentIDs(request.Attachments)) && guardRetries < 1 {
+			requiresInspection := shouldRequireAttachmentInspection(firstMsg.Content, firstMsg.Attachments)
+			if loopResult.FinalText != "" && requiresInspection && !hasAttachmentInspectionUse(messages, attachmentIDs(firstMsg.Attachments)) && guardRetries < 1 {
 				guardRetries++
 				messages = append(messages, types.AgentMessage{
 					Role:    "user",
-					Content: []types.ContentBlock{{Type: "text", Text: buildAttachmentInspectionReminder(request.Attachments)}},
+					Content: []types.ContentBlock{{Type: "text", Text: buildAttachmentInspectionReminder(firstMsg.Attachments)}},
 				})
 				logger.Business(ctx, "附件分析守卫触发",
 					"traceEvent", "attachment_guard",
 					"retry", guardRetries,
-					"attachmentCount", len(request.Attachments))
+					"attachmentCount", len(firstMsg.Attachments))
 				continue
 			}
 
@@ -1034,7 +1117,7 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			logger.Detail(ctx, "工作目录已更新", "cwd", cwd)
 		}
 
-		// === Checkpoint ===
+		// Persist context + event cursor atomically.
 		if len(messages) > 0 {
 			estimate := EstimateTokens(messages, modelName)
 			logger.Detail(ctx, "上下文 token 估算",
@@ -1076,39 +1159,27 @@ func processOneEvent(ctx context.Context, worker *SessionWorker, request QueuedR
 			redactedMessages := redactMessagesForStorage(messages)
 			contextBytes, err := json.Marshal(redactedMessages)
 			if err == nil {
-				_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
-					"workDir": worker.WorkDir,
-					"context": string(contextBytes),
-				})
+				_ = storage.UpdateSessionContextAndCursor(
+					worker.SessionID,
+					string(contextBytes),
+					worker.WorkDir,
+					worker.EventLog.Cursor(),
+				)
 			}
 		}
 
-		// === Absorb-or-Exit ===
-		if absorbRound >= MaxAbsorbRounds {
-			logger.Warn(ctx, "达到最大吸纳轮次，退出吸纳循环",
-				"maxAbsorbRounds", MaxAbsorbRounds, "sessionId", worker.SessionID)
+		// Check if more events arrived while we were processing.
+		has, _ := worker.EventLog.HasNew()
+		if !has {
 			break
 		}
-
-		pending := popAllPending(worker)
-		if len(pending) == 0 {
+		moreEvents, err := worker.EventLog.DrainNew()
+		if err != nil || len(moreEvents) == 0 {
 			break
 		}
-
-		var parts []string
-		parts = append(parts, fmt.Sprintf("[以下 %d 条消息在处理期间到达]", len(pending)))
-		for _, p := range pending {
-			parts = append(parts, formatUserMessage(p.SenderName, p.Channel, p.MessageType, p.ChannelMessageID, p.Content, p.Attachments, p.ChannelMeta))
-		}
-		merged := strings.Join(parts, "\n\n")
-		messages = append(messages, types.AgentMessage{
-			Role:    "user",
-			Content: []types.ContentBlock{{Type: "text", Text: merged}},
-		})
-
-		logger.Business(ctx, "消息吸纳",
-			"traceEvent", "absorb",
-			"absorbRound", absorbRound+1, "absorbedCount", len(pending))
+		messages = append(messages, mergeEventsToMessage(moreEvents))
+		logger.Business(ctx, "会话继续处理",
+			"traceEvent", "session_continue", "newEventCount", len(moreEvents))
 	}
 
 	return nil

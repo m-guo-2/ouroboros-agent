@@ -265,6 +265,16 @@ func runSchema(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_delayed_tasks_status_time ON delayed_tasks(status, execute_at)`,
 
+		// Session events index (event-log cursor model)
+		`CREATE TABLE IF NOT EXISTS session_events (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			message_id TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_events_session_seq ON session_events(session_id, seq)`,
+
+		`ALTER TABLE agent_sessions ADD COLUMN event_cursor INTEGER DEFAULT 0`,
+
 		// Session-level memory facts (session-memory-facts)
 		`CREATE TABLE IF NOT EXISTS session_facts (
 			id TEXT PRIMARY KEY,

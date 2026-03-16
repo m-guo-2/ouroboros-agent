@@ -15,20 +15,25 @@ import (
 const DefaultMaxIterations = 25
 
 type AgentLoopConfig struct {
-	LLMClient     LLMClient
-	SystemPrompt  string
-	Messages      []types.AgentMessage
-	Tools         []types.RegisteredTool
-	OnNewMessages func(messages []types.AgentMessage) error
-	MaxIterations int
-	Model         string
+	LLMClient      LLMClient
+	SystemPrompt   string
+	Messages       []types.AgentMessage
+	Tools          []types.RegisteredTool
+	OnNewMessages  func(messages []types.AgentMessage) error
+	MaxIterations  int
+	Model          string
+	DrainNewEvents func() []types.AgentMessage
+	HasNewEvents   func() bool
 }
+
+const maxConsecutivePreemptions = 3
 
 type AgentLoopResult struct {
 	FinalText        string
 	Messages         []types.AgentMessage
 	Usage            types.TokenUsage
 	HitMaxIterations bool
+	EventPreempted   bool
 }
 
 func estimateCost(model string, inputTokens, outputTokens int) float64 {
@@ -74,9 +79,11 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 	var totalCostUsd float64
 	iteration := 0
 	emptyResponseRetries := 0
+	consecutivePreemptions := 0
 	var finalText string
 	var loopErr error
 	hitMaxIterations := false
+	eventPreempted := false
 
 	for iteration < maxIters {
 		if ctx.Err() != nil {
@@ -84,6 +91,15 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			logger.Error(ctx, "引擎循环被中止",
 				"traceEvent", "error", "iteration", iteration, "error", loopErr.Error())
 			break
+		}
+
+		// ═══ Checkpoint 1: drain all new events before LLM call ═══
+		if config.DrainNewEvents != nil {
+			if newMsgs := config.DrainNewEvents(); len(newMsgs) > 0 {
+				messages = append(messages, newMsgs...)
+				logger.Business(ctx, "事件合并",
+					"traceEvent", "event_drain", "iteration", iteration, "eventCount", len(newMsgs))
+			}
 		}
 
 		iteration++
@@ -166,6 +182,37 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		assistantBlocks = append(assistantBlocks, toolUseBlocks...)
 		assistantMsg := types.AgentMessage{Role: "assistant", Content: assistantBlocks, ReasoningContent: response.ReasoningContent}
 		messages = append(messages, assistantMsg)
+
+		// ═══ Checkpoint 2: peek for new events before tool execution ═══
+		if config.HasNewEvents != nil &&
+			consecutivePreemptions < maxConsecutivePreemptions &&
+			config.HasNewEvents() {
+
+			var abandonedResults []types.ContentBlock
+			for _, tu := range toolUseBlocks {
+				abandonedResults = append(abandonedResults, types.ContentBlock{
+					Type:      "tool_result",
+					ToolUseID: tu.ID,
+					Content:   "新消息到达，工具未执行。将基于最新信息重新决策。",
+					IsError:   true,
+				})
+			}
+			abandonedMsg := types.AgentMessage{Role: "user", Content: abandonedResults}
+			messages = append(messages, abandonedMsg)
+
+			if config.OnNewMessages != nil {
+				_ = config.OnNewMessages([]types.AgentMessage{assistantMsg, abandonedMsg})
+			}
+
+			consecutivePreemptions++
+			eventPreempted = true
+			logger.Business(ctx, "事件抢占",
+				"traceEvent", "event_preempt", "iteration", iteration,
+				"consecutivePreemptions", consecutivePreemptions,
+				"abandonedTools", len(toolUseBlocks))
+			continue
+		}
+		consecutivePreemptions = 0
 
 		var toolResults []types.ContentBlock
 		for _, toolUse := range toolUseBlocks {
@@ -257,5 +304,6 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			TotalCostUsd: totalCostUsd,
 		},
 		HitMaxIterations: hitMaxIterations,
+		EventPreempted:   eventPreempted,
 	}, loopErr
 }

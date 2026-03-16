@@ -48,7 +48,21 @@ func dispatchDueTasks(ctx context.Context) {
 		}
 
 		content := formatDelayedTaskEvent(task)
-		msgID := fmt.Sprintf("delayed-task-%s", task.ID)
+
+		savedMsg, saveErr := storage.SaveMessage(map[string]interface{}{
+			"sessionId":   task.SessionID,
+			"role":        "user",
+			"content":     content,
+			"messageType": "text",
+			"channel":     task.Channel,
+			"initiator":   "system",
+			"senderId":    task.ChannelUserID,
+		})
+		if saveErr != nil || savedMsg == nil {
+			logger.Error(ctx, "保存延时任务消息失败", "taskId", task.ID, "error", fmt.Sprint(saveErr))
+			continue
+		}
+		_ = storage.AppendSessionEvent(task.SessionID, savedMsg.ID)
 
 		err := EnqueueProcessRequest(ctx, ProcessRequest{
 			UserID:                task.UserID,
@@ -58,7 +72,7 @@ func dispatchDueTasks(ctx context.Context) {
 			ChannelUserID:         task.ChannelUserID,
 			ChannelConversationID: task.ChannelConversationID,
 			MessageType:           "text",
-			MessageID:             msgID,
+			MessageID:             savedMsg.ID,
 			SessionID:             task.SessionID,
 		})
 		if err != nil {

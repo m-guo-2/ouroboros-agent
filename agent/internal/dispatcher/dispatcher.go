@@ -160,9 +160,9 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"agentId", agentCfg.ID, "userId", userID,
 		"channel", msg.Channel, "sessionId", session.ID)
 
-	// 5. Persist the incoming user message.
+	// 5. Persist the incoming user message and append to session event log.
 	msgID := newID()
-	_, _ = storage.SaveMessage(map[string]interface{}{
+	savedMsg, _ := storage.SaveMessage(map[string]interface{}{
 		"id":               msgID,
 		"sessionId":        session.ID,
 		"role":             "user",
@@ -177,6 +177,9 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"attachments":      msg.Attachments,
 		"channelMeta":      msg.ChannelMeta,
 	})
+	if savedMsg != nil {
+		_ = storage.AppendSessionEvent(session.ID, savedMsg.ID)
+	}
 
 	// 6. Update session to processing and enqueue.
 	_ = storage.UpdateSession(session.ID, map[string]interface{}{
