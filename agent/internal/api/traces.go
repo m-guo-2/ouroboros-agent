@@ -138,7 +138,7 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 		return nil
 	}
 
-	var steps []executionStep
+	steps := make([]executionStep, 0)
 	var startedAt int64
 	var completedAtVal int64
 	var hasCompleted bool

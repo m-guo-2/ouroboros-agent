@@ -110,6 +110,7 @@ export function buildTimeline(
 }
 
 export function splitIntoRounds(steps: ExecutionStep[]): RoundData[] {
+  if (!steps || steps.length === 0) return [{ roundNumber: 1, steps: [] }]
   const rounds: RoundData[] = []
   let current: ExecutionStep[] = []
   let roundNum = 1
@@ -192,6 +193,7 @@ export function groupStepsByIteration(steps: ExecutionStep[]): IterationData[] {
  * Skips absorb/compact (handled elsewhere).
  */
 export function flattenSteps(steps: ExecutionStep[]): FlatEvent[] {
+  if (!steps || steps.length === 0) return []
   const events: FlatEvent[] = []
   const toolCallMap = new Map<string, ExecutionStep>()
 

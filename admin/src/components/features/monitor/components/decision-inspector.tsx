@@ -17,7 +17,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
 
   const rounds = useMemo(() => {
     if (!trace) return []
-    return splitIntoRounds(trace.steps)
+    return splitIntoRounds(trace.steps ?? [])
   }, [trace])
 
   const isRunning = trace?.status === "running" && !!isSessionProcessing
@@ -39,7 +39,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
     )
   }
 
-  const compactSteps = trace.steps.filter(s => s.type === "compact")
+  const compactSteps = (trace.steps ?? []).filter(s => s.type === "compact")
 
   return (
     <div className="flex flex-col h-full">
