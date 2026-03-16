@@ -4,7 +4,6 @@ package channels
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -85,28 +84,30 @@ func SendToChannel(msg OutgoingMessage) error {
 		msg.MessageType = "text"
 	}
 
-	msgID := newMsgID()
 	now := timeutil.NowMs()
 	// Best-effort DB write — never block the send on a DB error.
-	_, _ = storage.DB.Exec(
-		`INSERT INTO messages (id, session_id, role, content, message_type, channel, trace_id, initiator, status, created_at)
-		 VALUES (?, ?, 'assistant', ?, ?, ?, ?, 'agent', 'sending', ?)`,
-		msgID, msg.SessionID, msg.Content, msg.MessageType, msg.Channel, msg.TraceID, now,
+	res, _ := storage.DB.Exec(
+		`INSERT INTO messages (session_id, role, content, message_type, channel, trace_id, initiator, status, created_at)
+		 VALUES (?, 'assistant', ?, ?, ?, ?, 'agent', 'sending', ?)`,
+		msg.SessionID, msg.Content, msg.MessageType, msg.Channel, msg.TraceID, now,
 	)
+	var msgID int64
+	if res != nil {
+		msgID, _ = res.LastInsertId()
+	}
 
 	err := adapter.Send(msg)
+	if msgID > 0 {
+		if err != nil {
+			_, _ = storage.DB.Exec(`UPDATE messages SET status = 'failed' WHERE id = ?`, msgID)
+		} else {
+			_, _ = storage.DB.Exec(`UPDATE messages SET status = 'sent' WHERE id = ?`, msgID)
+		}
+	}
 	if err != nil {
-		_, _ = storage.DB.Exec(`UPDATE messages SET status = 'failed' WHERE id = ?`, msgID)
 		return err
 	}
-	_, _ = storage.DB.Exec(`UPDATE messages SET status = 'sent' WHERE id = ?`, msgID)
 	return nil
-}
-
-func newMsgID() string {
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("out-%x%d", b, time.Now().UnixNano()%1e6)
 }
 
 // InitBuiltinAdapters registers feishu, qiwei, and webui adapters.

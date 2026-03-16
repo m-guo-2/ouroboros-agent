@@ -5,10 +5,10 @@ import "database/sql"
 type SessionEventRow struct {
 	Seq       int64
 	SessionID string
-	MessageID string
+	MessageID int64
 }
 
-func AppendSessionEvent(sessionID, messageID string) error {
+func AppendSessionEvent(sessionID string, messageID int64) error {
 	_, err := DB.Exec(
 		`INSERT INTO session_events (session_id, message_id) VALUES (?, ?)`,
 		sessionID, messageID,

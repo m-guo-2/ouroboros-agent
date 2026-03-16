@@ -10,9 +10,12 @@ import (
 	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
+const traceCacheMaxSize = 500
+
 var completedTraceCache struct {
 	mu    sync.RWMutex
 	items map[string]*executionTrace
+	order []string // FIFO insertion order
 }
 
 func init() {
@@ -298,6 +301,14 @@ func (h *tracesHandler) serveTrace(w http.ResponseWriter, r *http.Request, trace
 
 	if t.Status == "completed" || t.Status == "error" {
 		completedTraceCache.mu.Lock()
+		if _, exists := completedTraceCache.items[traceID]; !exists {
+			if len(completedTraceCache.order) >= traceCacheMaxSize {
+				evict := completedTraceCache.order[0]
+				completedTraceCache.order = completedTraceCache.order[1:]
+				delete(completedTraceCache.items, evict)
+			}
+			completedTraceCache.order = append(completedTraceCache.order, traceID)
+		}
 		completedTraceCache.items[traceID] = t
 		completedTraceCache.mu.Unlock()
 	}

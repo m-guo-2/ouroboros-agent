@@ -62,17 +62,15 @@ export function buildTimeline(
   const events: TimelineEvent[] = []
 
   const compactionsByTime = [...compactions].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    (a, b) => a.createdAt - b.createdAt
   )
   let cIdx = 0
 
   for (const exchange of exchanges) {
-    const exchangeTime = exchange.userMessage.createdAt
-      ? new Date(exchange.userMessage.createdAt).getTime()
-      : 0
+    const exchangeTime = exchange.userMessage.createdAt ?? 0
 
     while (cIdx < compactionsByTime.length) {
-      const cTime = new Date(compactionsByTime[cIdx].createdAt).getTime()
+      const cTime = compactionsByTime[cIdx].createdAt
       if (cTime < exchangeTime) {
         events.push({ type: "compaction", data: compactionsByTime[cIdx] })
         cIdx++

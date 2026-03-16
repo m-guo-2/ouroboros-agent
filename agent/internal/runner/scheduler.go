@@ -87,7 +87,7 @@ func dispatchDueTasks(ctx context.Context) {
 
 func formatDelayedTaskEvent(task storage.DelayedTask) string {
 	return fmt.Sprintf(`【系统事件：定时任务到期】
-task_id: %s
+task_id: %d
 创建时间: %s
 计划执行时间: %s
 实际触发时间: %s

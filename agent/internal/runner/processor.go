@@ -184,7 +184,7 @@ func prependSessionMemory(messages []types.AgentMessage, sessionID, model string
 	return result
 }
 
-func truncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.AgentMessage {
+func TruncateByFullTurns(messages []types.AgentMessage, maxTurns int) []types.AgentMessage {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -478,25 +478,30 @@ func registerSubagentTools(
 	channelConversationID string,
 	traceID string,
 	sessionID string,
-	messages []types.AgentMessage,
 ) {
 	manager := subagent.DefaultManager()
 
-	notifyMain := func(job *subagent.Job, failed bool) {
+	notifyMain := func(job *subagent.Job) {
 		if job == nil {
 			return
 		}
 
 		var content string
-		if failed {
+		switch job.Status {
+		case subagent.JobCanceled:
 			content = fmt.Sprintf(
-				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\nerror=%s\n\n已产生影响：\n%s\n\n请基于失败原因决定是否重试、降级或改用其他路径继续任务。",
-				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Error), formatImpacts(job.Impacts),
+				"【subagent中断】\nsubagent=%s\njobId=%s\nstatus=canceled\n\n%s\n\n已执行操作：\n%s",
+				job.Profile, job.ID, strings.TrimSpace(job.Result), formatImpacts(job.Impacts),
 			)
-		} else {
+		case subagent.JobFailed:
 			content = fmt.Sprintf(
-				"【subagent完成通知】\nsubagent=%s\njobId=%s\nstatus=%s\n\n总结：\n%s\n\n已产生影响：\n%s\n\n请基于该结果继续主任务。",
-				job.Profile, job.ID, job.Status, strings.TrimSpace(job.Result), formatImpacts(job.Impacts),
+				"【subagent失败】\nsubagent=%s\njobId=%s\nstatus=failed\n\n错误：%s\n\n已执行操作：\n%s",
+				job.Profile, job.ID, strings.TrimSpace(job.Error), formatImpacts(job.Impacts),
+			)
+		default:
+			content = fmt.Sprintf(
+				"【subagent完成】\nsubagent=%s\njobId=%s\nstatus=completed\n\n%s\n\n已执行操作：\n%s",
+				job.Profile, job.ID, strings.TrimSpace(job.Result), formatImpacts(job.Impacts),
 			)
 		}
 
@@ -533,60 +538,73 @@ func registerSubagentTools(
 		}
 	}
 
-	registry.RegisterBuiltin("run_subagent_async", "异步启动一个 subagent 子任务，立即返回 jobId。子任务完成后可用 get_subagent_status 查询自然语言总结。", types.JSONSchema{
-		Type: "object",
-		Properties: map[string]interface{}{
-			"task":            map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述"},
-			"subagent":        map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis / web_research / data_report，默认 developer"},
-			"timeout_seconds": map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 600）"},
-		},
-		Required: []string{"task"},
-	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
-		task, _ := input["task"].(string)
-		task = strings.TrimSpace(task)
-		if task == "" {
-			return nil, fmt.Errorf("task is required")
-		}
+	registry.RegisterBuiltin("run_subagent_async",
+		"异步启动一个 subagent 子任务，立即返回 jobId。子任务完成/中断/失败后系统会自动通知你。"+
+			"也可用 get_subagent_status 主动查询。支持类型：developer / file_analysis / web_research / data_report。"+
+			"context 字段用于传递子 agent 需要的背景信息（如用户偏好、先前决策、约束条件），由你筛选和精炼，不要传入完整对话历史。",
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"task":            map[string]interface{}{"type": "string", "description": "要交给 subagent 的任务描述，应包含完成任务所需的全部数据和意图"},
+				"subagent":        map[string]interface{}{"type": "string", "description": "子代理类型，支持 developer / file_analysis / web_research / data_report，默认 developer"},
+				"context":         map[string]interface{}{"type": "string", "description": "传给子 agent 的背景信息摘要（可选）。用于补充 task 中未包含的决策背景、用户偏好或约束条件"},
+				"timeout_seconds": map[string]interface{}{"type": "integer", "description": "超时秒数（可选，默认 600）"},
+			},
+			Required: []string{"task"},
+		}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
+			task, _ := input["task"].(string)
+			task = strings.TrimSpace(task)
+			if task == "" {
+				return nil, fmt.Errorf("task is required")
+			}
 
-		profile, _ := input["subagent"].(string)
-		timeout := 10 * time.Minute
-		if t, ok := input["timeout_seconds"].(float64); ok && t > 0 {
-			timeout = time.Duration(int(t)) * time.Second
-		}
+			profile, _ := input["subagent"].(string)
+			contextHint, _ := input["context"].(string)
+			timeout := 10 * time.Minute
+			if t, ok := input["timeout_seconds"].(float64); ok && t > 0 {
+				timeout = time.Duration(int(t)) * time.Second
+			}
 
-		job, err := manager.Start(subagent.StartRequest{
-			Profile:       profile,
-			Task:          task,
-			Model:         modelName,
-			LLMClient:     llmClient,
-			Messages:      messages,
-			Tools:         registry.GetAll(),
-			ParentTraceID: traceID,
-			SessionID:     sessionID,
-			Timeout:       timeout,
-			OnCompleted: func(j *subagent.Job) {
-				notifyMain(j, false)
-			},
-			OnFailed: func(j *subagent.Job) {
-				notifyMain(j, true)
-			},
-			OnCanceled: func(j *subagent.Job) {
-				notifyMain(j, true)
-			},
+			job, err := manager.Start(subagent.StartRequest{
+				Profile:       profile,
+				Task:          task,
+				Context:       contextHint,
+				Model:         modelName,
+				LLMClient:     llmClient,
+				Tools:         registry.GetAll(),
+				ParentTraceID: traceID,
+				SessionID:     sessionID,
+				Timeout:       timeout,
+				OnDone:        notifyMain,
+				CompactMessages: func(compCtx context.Context, msgs []types.AgentMessage) ([]types.AgentMessage, bool, error) {
+					estimate := EstimateTokens(msgs, modelName)
+					if !ShouldCompact(estimate) {
+						return msgs, false, nil
+					}
+					compactModel := ResolveCompactModel(modelName)
+					result, err := CompactContext(compCtx, msgs, modelName, llmClient, compactModel, sessionID)
+					if err != nil {
+						return TruncateByFullTurns(msgs, 10), true, nil
+					}
+					if result.Compacted {
+						return result.Messages, true, nil
+					}
+					return msgs, false, nil
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"jobId":     job.ID,
+				"status":    job.Status,
+				"name":      job.Name,
+				"subagent":  job.Profile,
+				"detailDir": job.DetailDir,
+				"message":   "subagent 已启动，完成后系统会自动通知你",
+			}, nil
 		})
-		if err != nil {
-			return nil, err
-		}
-
-		return map[string]interface{}{
-			"jobId":     job.ID,
-			"status":    job.Status,
-			"name":      job.Name,
-			"subagent":  job.Profile,
-			"detailDir": job.DetailDir,
-			"message":   "subagent 已启动，请稍后用 get_subagent_status 查询结果",
-		}, nil
-	})
 
 	registry.RegisterBuiltin("get_subagent_status", "查询 subagent 异步任务状态。完成时返回自然语言总结 result。", types.JSONSchema{
 		Type: "object",
@@ -663,7 +681,7 @@ func formatImpacts(impacts []subagent.Impact) string {
 	return strings.Join(lines, "\n")
 }
 
-func resolveCompactModel(mainModel string) string {
+func ResolveCompactModel(mainModel string) string {
 	cheapModels := map[string]string{
 		"claude-opus-4-5":            "claude-3-5-haiku-20241022",
 		"claude-sonnet-4-5":          "claude-3-5-haiku-20241022",
@@ -907,15 +925,15 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	registry.RegisterBuiltin("cancel_delayed_task", "取消一个尚未执行的延时任务。", types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
-			"task_id": map[string]interface{}{"type": "string", "description": "要取消的任务 ID"},
+			"task_id": map[string]interface{}{"type": "integer", "description": "要取消的任务 ID"},
 		},
 		Required: []string{"task_id"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
-		taskID, _ := input["task_id"].(string)
-		taskID = strings.TrimSpace(taskID)
-		if taskID == "" {
-			return nil, fmt.Errorf("task_id is required")
+		taskIDFloat, ok := input["task_id"].(float64)
+		if !ok || taskIDFloat == 0 {
+			return nil, fmt.Errorf("task_id is required and must be a number")
 		}
+		taskID := int64(taskIDFloat)
 		if err := storage.CancelDelayedTask(taskID, worker.SessionID); err != nil {
 			return nil, err
 		}
@@ -1004,7 +1022,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		}
 	}
 
-	historyMessages = truncateByFullTurns(historyMessages, 10)
+	historyMessages = TruncateByFullTurns(historyMessages, 10)
 	historyMessages = prependSessionMemory(historyMessages, worker.SessionID, modelName)
 
 	initialUserMsg := mergeEventsToMessage(events)
@@ -1021,7 +1039,6 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		channelConvID,
 		traceID,
 		worker.SessionID,
-		messages,
 	)
 
 	logger.Detail(ctx, "历史消息加载诊断",
@@ -1125,7 +1142,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				"ratio", fmt.Sprintf("%.2f", estimate.Ratio), "method", estimate.Method)
 
 			if ShouldCompact(estimate) {
-				compactModel := resolveCompactModel(modelName)
+				compactModel := ResolveCompactModel(modelName)
 				var compactLLM engine.LLMClient
 				if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
 					compactLLM = engine.NewAnthropicClient(engine.AnthropicClientConfig{

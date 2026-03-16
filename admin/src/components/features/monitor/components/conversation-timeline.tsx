@@ -45,7 +45,7 @@ export function ConversationTimeline({
   }
 
   const compactionsByTime = useMemo(() =>
-    [...compactions].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
+    [...compactions].sort((a, b) => a.createdAt - b.createdAt),
     [compactions]
   )
 
@@ -85,13 +85,11 @@ export function ConversationTimeline({
       )}
       <div className="divide-y divide-slate-100 py-2">
         {exchanges.map((exchange) => {
-          const exchangeTime = exchange.userMessage.createdAt
-            ? new Date(exchange.userMessage.createdAt).getTime()
-            : 0
+          const exchangeTime = exchange.userMessage.createdAt ?? 0
 
           const compactionsBeforeThis: CompactionData[] = []
           while (cIdx < compactionsByTime.length) {
-            const cTime = new Date(compactionsByTime[cIdx].createdAt).getTime()
+            const cTime = compactionsByTime[cIdx].createdAt
             if (cTime < exchangeTime) {
               compactionsBeforeThis.push(compactionsByTime[cIdx])
               cIdx++

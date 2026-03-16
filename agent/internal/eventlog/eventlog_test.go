@@ -25,7 +25,7 @@ func setupTestDB(t *testing.T) func() {
 	}
 }
 
-func saveTestMessage(t *testing.T, sessionID, content string) string {
+func saveTestMessage(t *testing.T, sessionID, content string) int64 {
 	t.Helper()
 	msg, err := storage.SaveMessage(map[string]interface{}{
 		"sessionId": sessionID,
@@ -38,7 +38,7 @@ func saveTestMessage(t *testing.T, sessionID, content string) string {
 	return msg.ID
 }
 
-func appendEvent(t *testing.T, sessionID, messageID string) {
+func appendEvent(t *testing.T, sessionID string, messageID int64) {
 	t.Helper()
 	if err := storage.AppendSessionEvent(sessionID, messageID); err != nil {
 		t.Fatalf("append event: %v", err)

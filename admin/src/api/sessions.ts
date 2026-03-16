@@ -15,7 +15,7 @@ export const sessionsApi = {
 
   getById: (id: string) => fetchApi<AgentSession>(`/agent-sessions/${id}`),
 
-  getMessages: (id: string, limit = 10, before?: number) => {
+  getMessages: (id: string, limit = 50, before?: number) => {
     const params = new URLSearchParams({ limit: String(limit) })
     if (before) params.set("before", String(before))
     return fetchApi<MessageData[]>(`/agent-sessions/${id}/messages?${params}`)

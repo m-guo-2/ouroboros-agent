@@ -40,8 +40,8 @@ export interface AgentProfile {
   isActive?: boolean
   avatarUrl?: string
   isDefault?: boolean
-  createdAt?: string
-  updatedAt?: string
+  createdAt?: number
+  updatedAt?: number
 }
 
 // ===== Sessions =====
@@ -57,8 +57,8 @@ export interface AgentSession {
   channelName: string
   workDir: string
   executionStatus: string
-  createdAt: string
-  updatedAt: string
+  createdAt: number
+  updatedAt: number
 }
 
 export interface AgentSessionListItem extends AgentSession {
@@ -66,7 +66,7 @@ export interface AgentSessionListItem extends AgentSession {
 }
 
 export interface MessageData {
-  id: string
+  id: number
   sessionId: string
   role: string
   content: string
@@ -76,7 +76,7 @@ export interface MessageData {
   initiator?: string
   senderName?: string
   senderId?: string
-  createdAt?: string
+  createdAt?: number
 }
 
 // ===== Skills =====
@@ -233,13 +233,13 @@ export interface TraceListItem {
 // ===== Compactions =====
 
 export interface CompactionData {
-  id: string
+  id: number
   sessionId: string
   summary: string
-  archivedBeforeTime: string
+  archivedBeforeTime: number
   archivedMessageCount: number
   tokenCountBefore: number
   tokenCountAfter: number
   compactModel: string
-  createdAt: string
+  createdAt: number
 }

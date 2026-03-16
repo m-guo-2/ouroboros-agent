@@ -122,7 +122,7 @@ func CompactContext(
 	if err != nil {
 		logger.Warn(ctx, "压缩元数据写入失败，回退到硬截断",
 			"error", err.Error(), "sessionId", sessionID)
-		fallback := truncateByFullTurns(messages, 10)
+		fallback := TruncateByFullTurns(messages, 10)
 		return &CompactResult{
 			Messages:     fallback,
 			Compacted:    true,

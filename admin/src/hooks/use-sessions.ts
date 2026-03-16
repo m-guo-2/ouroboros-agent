@@ -3,7 +3,7 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tansta
 import { sessionsApi } from "@/api/sessions"
 import type { AgentSession, MessageData } from "@/api/types"
 
-const MESSAGES_PAGE_SIZE = 10
+const MESSAGES_PAGE_SIZE = 50
 
 export function useSessions(filters?: { agentId?: string; channel?: string; limit?: number }) {
   return useQuery({
@@ -39,7 +39,7 @@ export function useSessionMessages(sessionId: string | undefined, opts?: { refet
     getNextPageParam: (lastPage) => {
       if (lastPage.length < pageSize) return undefined
       const oldest = lastPage[0]
-      return oldest?.createdAt ? Number(oldest.createdAt) : undefined
+      return oldest?.id || undefined
     },
     enabled: !!sessionId,
     refetchInterval: opts?.refetchInterval ?? false,

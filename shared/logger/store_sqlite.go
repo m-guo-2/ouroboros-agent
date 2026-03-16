@@ -330,8 +330,16 @@ func (s *SQLiteStore) ListTraces(filter TraceFilter) ([]TraceSummary, error) {
 func (s *SQLiteStore) ReadTraceEvents(traceID string) ([]TraceEvent, error) {
 	dates := s.availableDates()
 	var events []TraceEvent
+	extraDays := 0
 
 	for _, date := range dates {
+		if len(events) > 0 {
+			extraDays++
+			if extraDays > 1 {
+				break
+			}
+		}
+
 		db, err := s.readerFor(date)
 		if err != nil || db == nil {
 			continue
@@ -383,8 +391,16 @@ func (s *SQLiteStore) ReadLLMIO(ref string) ([]byte, error) {
 func (s *SQLiteStore) ListLLMIORefs(traceID string) ([]string, error) {
 	dates := s.availableDates()
 	var refs []string
+	extraDays := 0
 
 	for _, date := range dates {
+		if len(refs) > 0 {
+			extraDays++
+			if extraDays > 1 {
+				break
+			}
+		}
+
 		db, err := s.readerFor(date)
 		if err != nil || db == nil {
 			continue

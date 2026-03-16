@@ -42,12 +42,9 @@ func ResolveUser(channelType, channelUserID, displayName string) (string, bool, 
 		return "", false, fmt.Errorf("insert user: %w", err)
 	}
 
-	b2 := make([]byte, 6)
-	_, _ = rand.Read(b2)
-	bindingID := fmt.Sprintf("uc-%x", b2)
 	if _, err = DB.Exec(
-		`INSERT OR IGNORE INTO user_channels (id, user_id, channel_type, channel_user_id, display_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		bindingID, userID, channelType, channelUserID, displayName, now,
+		`INSERT OR IGNORE INTO user_channels (user_id, channel_type, channel_user_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+		userID, channelType, channelUserID, displayName, now,
 	); err != nil {
 		return "", false, fmt.Errorf("insert user_channel: %w", err)
 	}

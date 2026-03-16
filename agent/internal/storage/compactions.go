@@ -7,7 +7,7 @@ import (
 )
 
 type CompactionData struct {
-	ID                   string `json:"id"`
+	ID                   int64  `json:"id"`
 	SessionID            string `json:"sessionId"`
 	Summary              string `json:"summary"`
 	ArchivedBeforeTime   int64  `json:"archivedBeforeTime"`
@@ -19,14 +19,13 @@ type CompactionData struct {
 }
 
 func SaveCompaction(data CompactionData) error {
-	id := newID()
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO context_compactions
-		 (id, session_id, summary, archived_before_time, archived_message_count,
+		 (session_id, summary, archived_before_time, archived_message_count,
 		  token_count_before, token_count_after, compact_model, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, data.SessionID, data.Summary, data.ArchivedBeforeTime,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		data.SessionID, data.Summary, data.ArchivedBeforeTime,
 		data.ArchivedMessageCount, data.TokenCountBefore, data.TokenCountAfter, data.CompactModel, now,
 	)
 	return err

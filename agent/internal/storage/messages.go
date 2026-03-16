@@ -57,7 +57,7 @@ func DeleteSessionMessages(sessionID string) error {
 }
 
 // GetMessageByID retrieves a single message by ID.
-func GetMessageByID(msgID string) (*MessageData, error) {
+func GetMessageByID(msgID int64) (*MessageData, error) {
 	var m MessageData
 	err := DB.QueryRow(
 		`SELECT id, session_id, role, content,
@@ -118,7 +118,7 @@ func GetLatestSessionMessages(sessionID string, limit int) ([]MessageData, error
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
 		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages WHERE session_id = ?
-		 ORDER BY created_at DESC LIMIT ?`,
+		 ORDER BY id DESC LIMIT ?`,
 		sessionID, limit,
 	)
 	if err != nil {
@@ -147,17 +147,17 @@ func GetLatestSessionMessages(sessionID string, limit int) ([]MessageData, error
 	return msgs, nil
 }
 
-// GetRecentMessagesBefore returns N messages immediately before beforeTime, in chronological (ASC) order.
-func GetRecentMessagesBefore(sessionID string, beforeTime int64, limit int) ([]MessageData, error) {
+// GetRecentMessagesBefore returns N messages with id < beforeID, in chronological (ASC) order.
+func GetRecentMessagesBefore(sessionID string, beforeID int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, role, content,
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
 		        COALESCE(attachments_json,'[]'), channel_meta, created_at
-		 FROM messages WHERE session_id = ? AND created_at < ?
-		 ORDER BY created_at DESC LIMIT ?`,
-		sessionID, beforeTime, limit,
+		 FROM messages WHERE session_id = ? AND id < ?
+		 ORDER BY id DESC LIMIT ?`,
+		sessionID, beforeID, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -191,17 +191,17 @@ func reverseMessages(msgs []MessageData) {
 	}
 }
 
-// GetMessagesBefore returns messages for a session created before the given time (Unix ms), oldest-first.
-func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]MessageData, error) {
+// GetMessagesBefore returns messages for a session with id < beforeID, oldest-first.
+func GetMessagesBefore(sessionID string, beforeID int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, role, content,
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
 		        COALESCE(trace_id,''), COALESCE(initiator,''),
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
 		        COALESCE(attachments_json,'[]'), channel_meta, created_at
-		 FROM messages WHERE session_id = ? AND created_at < ?
-		 ORDER BY created_at ASC LIMIT ?`,
-		sessionID, beforeTime, limit,
+		 FROM messages WHERE session_id = ? AND id < ?
+		 ORDER BY id ASC LIMIT ?`,
+		sessionID, beforeID, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -226,7 +226,7 @@ func GetMessagesBefore(sessionID string, beforeTime int64, limit int) ([]Message
 }
 
 // SearchMessages returns messages for a session whose content matches the query string.
-func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]MessageData, error) {
+func SearchMessages(sessionID, query string, beforeID int64, limit int) ([]MessageData, error) {
 	rows, err := DB.Query(
 		`SELECT id, session_id, role, content,
 		        COALESCE(message_type,'text'), COALESCE(channel,''), COALESCE(channel_message_id,''),
@@ -234,9 +234,9 @@ func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]Mes
 		        COALESCE(sender_name,''), COALESCE(sender_id,''),
 		        COALESCE(attachments_json,'[]'), channel_meta, created_at
 		 FROM messages
-		 WHERE session_id = ? AND created_at < ? AND content LIKE ?
-		 ORDER BY created_at DESC LIMIT ?`,
-		sessionID, beforeTime, "%"+query+"%", limit,
+		 WHERE session_id = ? AND id < ? AND content LIKE ?
+		 ORDER BY id DESC LIMIT ?`,
+		sessionID, beforeID, "%"+query+"%", limit,
 	)
 	if err != nil {
 		return nil, err
@@ -260,9 +260,8 @@ func SearchMessages(sessionID, query string, beforeTime int64, limit int) ([]Mes
 	return msgs, rows.Err()
 }
 
-// SaveMessage inserts a new message row and returns a stub record.
+// SaveMessage inserts a new message row and returns a stub record with the auto-generated ID.
 func SaveMessage(params map[string]interface{}) (*MessageData, error) {
-	id := newID()
 	sessionID, _ := params["sessionId"].(string)
 	role, _ := params["role"].(string)
 	content, _ := params["content"].(string)
@@ -311,15 +310,16 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	}
 
 	now := timeutil.NowMs()
-	_, err := DB.Exec(
+	res, err := DB.Exec(
 		`INSERT INTO messages
-		 (id, session_id, role, content, message_type, channel, channel_message_id, channel_meta, trace_id, initiator, sender_name, sender_id, attachments_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, sessionID, role, content, msgType, channel, channelMessageID, channelMetaJSON, traceID, initiator, senderName, senderID, attachmentsJSON, now,
+		 (session_id, role, content, message_type, channel, channel_message_id, channel_meta, trace_id, initiator, sender_name, sender_id, attachments_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, role, content, msgType, channel, channelMessageID, channelMetaJSON, traceID, initiator, senderName, senderID, attachmentsJSON, now,
 	)
 	if err != nil {
 		return nil, err
 	}
+	id, _ := res.LastInsertId()
 	return &MessageData{
 		ID:               id,
 		SessionID:        sessionID,

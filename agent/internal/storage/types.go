@@ -82,7 +82,7 @@ type AttachmentData struct {
 
 // MessageData represents a single stored message.
 type MessageData struct {
-	ID               string           `json:"id"`
+	ID               int64            `json:"id"`
 	SessionID        string           `json:"sessionId"`
 	Role             string           `json:"role"`
 	Content          string           `json:"content"`

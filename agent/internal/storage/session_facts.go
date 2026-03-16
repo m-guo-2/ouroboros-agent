@@ -7,7 +7,7 @@ import (
 )
 
 type SessionFact struct {
-	ID        string `json:"id"`
+	ID        int64  `json:"id"`
 	SessionID string `json:"sessionId"`
 	Fact      string `json:"fact"`
 	Category  string `json:"category"`
@@ -29,7 +29,7 @@ func SaveSessionFacts(sessionID string, facts []string, category string) (int, e
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO session_facts (id, session_id, fact, category, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO session_facts (session_id, fact, category, created_at) VALUES (?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("prepare: %w", err)
@@ -42,7 +42,7 @@ func SaveSessionFacts(sessionID string, facts []string, category string) (int, e
 		if f == "" {
 			continue
 		}
-		if _, err := stmt.Exec(newID(), sessionID, f, category, now); err != nil {
+		if _, err := stmt.Exec(sessionID, f, category, now); err != nil {
 			return saved, fmt.Errorf("insert fact: %w", err)
 		}
 		saved++

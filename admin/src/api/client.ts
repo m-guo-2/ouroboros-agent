@@ -39,9 +39,13 @@ export async function fetchApi<T>(
   })
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Request failed" }))
-    return { success: false, error: error.error || response.statusText }
+    const body = await response.json().catch(() => ({ error: "Request failed" }))
+    throw new Error(body.error || response.statusText)
   }
 
-  return response.json()
+  const result: ApiResponse<T> = await response.json()
+  if (result.success === false) {
+    throw new Error(result.error || result.message || "Unknown API error")
+  }
+  return result
 }

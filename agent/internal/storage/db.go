@@ -108,7 +108,7 @@ func runSchema(db *sql.DB) error {
 
 		// User-channel bindings
 		`CREATE TABLE IF NOT EXISTS user_channels (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL,
 			channel_type TEXT NOT NULL,
 			channel_user_id TEXT NOT NULL,
@@ -131,7 +131,7 @@ func runSchema(db *sql.DB) error {
 
 		// User memory facts
 		`CREATE TABLE IF NOT EXISTS user_memory_facts (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_id TEXT NOT NULL,
 			agent_id TEXT NOT NULL DEFAULT '',
 			category TEXT NOT NULL,
@@ -152,10 +152,10 @@ func runSchema(db *sql.DB) error {
 
 		// Messages (per-session, append-only)
 		`CREATE TABLE IF NOT EXISTS messages (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
 			role TEXT NOT NULL,
-			content TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
 			message_type TEXT DEFAULT 'text',
 			channel TEXT,
 			channel_message_id TEXT,
@@ -166,11 +166,11 @@ func runSchema(db *sql.DB) error {
 			sender_name TEXT,
 			sender_id TEXT,
 			attachments_json TEXT DEFAULT '[]',
+			channel_meta TEXT,
 			status TEXT DEFAULT 'sent',
 			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)`,
 
 		// LLM models (admin config)
 		`CREATE TABLE IF NOT EXISTS models (
@@ -226,6 +226,7 @@ func runSchema(db *sql.DB) error {
 		`ALTER TABLE messages ADD COLUMN sender_name TEXT`,
 		`ALTER TABLE messages ADD COLUMN sender_id TEXT`,
 		`ALTER TABLE messages ADD COLUMN attachments_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE messages ADD COLUMN channel_meta TEXT`,
 		`ALTER TABLE agent_configs ADD COLUMN user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE agent_configs ADD COLUMN provider TEXT`,
 		`ALTER TABLE agent_configs ADD COLUMN model TEXT`,
@@ -236,7 +237,7 @@ func runSchema(db *sql.DB) error {
 
 		// Context compaction tracking (031)
 		`CREATE TABLE IF NOT EXISTS context_compactions (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
 			summary TEXT NOT NULL,
 			archived_before_time INTEGER NOT NULL,
@@ -250,7 +251,7 @@ func runSchema(db *sql.DB) error {
 
 		// Delayed tasks for proactive agent capability
 		`CREATE TABLE IF NOT EXISTS delayed_tasks (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
 			agent_id TEXT NOT NULL,
 			user_id TEXT NOT NULL,
@@ -269,7 +270,7 @@ func runSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS session_events (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
-			message_id TEXT NOT NULL
+			message_id INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_events_session_seq ON session_events(session_id, seq)`,
 
@@ -277,7 +278,7 @@ func runSchema(db *sql.DB) error {
 
 		// Session-level memory facts (session-memory-facts)
 		`CREATE TABLE IF NOT EXISTS session_facts (
-			id TEXT PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
 			fact TEXT NOT NULL,
 			category TEXT NOT NULL DEFAULT 'general',

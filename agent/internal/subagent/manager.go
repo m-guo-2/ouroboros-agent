@@ -51,20 +51,24 @@ type Job struct {
 	Impacts       []Impact  `json:"impacts,omitempty"`
 }
 
+// CompactFunc compresses messages when context window fills up.
+// Returns (compressed messages, was compacted, error).
+// If nil, no compression is performed.
+type CompactFunc func(ctx context.Context, messages []types.AgentMessage) ([]types.AgentMessage, bool, error)
+
 type StartRequest struct {
-	Name          string
-	Profile       string
-	Task          string
-	Model         string
-	LLMClient     engine.LLMClient
-	Messages      []types.AgentMessage
-	Tools         []types.RegisteredTool
-	ParentTraceID string
-	SessionID     string
-	Timeout       time.Duration
-	OnCompleted   func(*Job)
-	OnFailed      func(*Job)
-	OnCanceled    func(*Job)
+	Name            string
+	Profile         string
+	Task            string
+	Context         string
+	Model           string
+	LLMClient       engine.LLMClient
+	Tools           []types.RegisteredTool
+	ParentTraceID   string
+	SessionID       string
+	Timeout         time.Duration
+	OnDone          func(*Job)
+	CompactMessages CompactFunc
 }
 
 type Manager struct {
@@ -201,6 +205,11 @@ func (m *Manager) Cancel(jobID string, reason string) (*Job, error) {
 	return nil, fmt.Errorf("subagent job not found: %s", jobID)
 }
 
+const (
+	subagentMaxIterations = 25
+	subagentMaxReentries  = 3
+)
+
 func (m *Manager) run(jobID string, req StartRequest) {
 	if err := m.update(jobID, func(j *Job) {
 		j.Status = JobRunning
@@ -224,26 +233,84 @@ func (m *Manager) run(jobID string, req StartRequest) {
 	toolDefs = append(toolDefs, ostools.NewSaveMemoryTool(req.SessionID))
 	toolDefs = m.wrapToolsWithImpact(jobID, toolDefs)
 	subPrompt := buildSubagentSystemPrompt(req.Profile)
-	subMessages := append(copyMessages(req.Messages), taskMessage(req.Task))
+	messages := buildInitialMessages(req.Context, req.Task)
 
-	loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
-		LLMClient:     req.LLMClient,
-		SystemPrompt:  subPrompt,
-		Messages:      subMessages,
-		Tools:         toolDefs,
-		Model:         req.Model,
-		MaxIterations: 15,
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-			m.markCanceledWithCallback(jobID, "canceled by main agent", req.OnCanceled)
+	var loopResult *engine.AgentLoopResult
+	var loopErr error
+
+	for reentry := 0; reentry <= subagentMaxReentries; reentry++ {
+		loopResult, loopErr = engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
+			LLMClient:     req.LLMClient,
+			SystemPrompt:  subPrompt,
+			Messages:      messages,
+			Tools:         toolDefs,
+			Model:         req.Model,
+			MaxIterations: subagentMaxIterations,
+		})
+
+		if loopErr != nil {
+			break
+		}
+		if loopResult == nil {
+			break
+		}
+
+		messages = loopResult.Messages
+
+		if loopResult.FinalText != "" || ctx.Err() != nil {
+			break
+		}
+		if !loopResult.HitMaxIterations {
+			break
+		}
+
+		if reentry == subagentMaxReentries {
+			logger.Warn(ctx, "子 agent 达到最大 re-entry 次数",
+				"jobId", jobID, "reentry", reentry)
+			break
+		}
+
+		if req.CompactMessages != nil {
+			compacted, didCompact, compactErr := req.CompactMessages(ctx, messages)
+			if compactErr != nil {
+				logger.Warn(ctx, "子 agent 上下文压缩失败",
+					"jobId", jobID, "error", compactErr.Error())
+			} else if didCompact {
+				messages = compacted
+				logger.Business(ctx, "子 agent 上下文压缩",
+					"traceEvent", "compact", "jobId", jobID)
+			}
+		}
+
+		logger.Business(ctx, "子 agent re-entry",
+			"traceEvent", "subagent_reentry", "jobId", jobID, "reentry", reentry+1)
+	}
+
+	if loopErr != nil {
+		if errors.Is(loopErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			impacts := m.getImpacts(jobID)
+			result := buildCanceledResult(loopResult, impacts)
+			_ = os.WriteFile(filepath.Join(m.jobDetailDir(jobID), "result.txt"), []byte(result), 0o644)
+			_ = m.appendEvent(jobID, map[string]interface{}{
+				"type":      "canceled",
+				"timestamp": time.Now().UnixMilli(),
+				"resultLen": len(result),
+			})
+			_ = m.update(jobID, func(j *Job) {
+				j.Status = JobCanceled
+				j.Result = result
+				j.UpdatedAt = time.Now().UnixMilli()
+			})
+			m.fireDone(jobID, req.OnDone)
 			return
 		}
-		m.markFailedWithCallback(jobID, err.Error(), req.OnFailed)
+		m.markFailed(jobID, loopErr.Error())
+		m.fireDone(jobID, req.OnDone)
 		return
 	}
 	if loopResult == nil {
-		m.markFailedWithCallback(jobID, "subagent run returned nil result", req.OnFailed)
+		m.markFailed(jobID, "subagent run returned nil result")
+		m.fireDone(jobID, req.OnDone)
 		return
 	}
 
@@ -266,11 +333,91 @@ func (m *Manager) run(jobID string, req StartRequest) {
 		j.UpdatedAt = time.Now().UnixMilli()
 	})
 
-	if req.OnCompleted != nil {
+	m.fireDone(jobID, req.OnDone)
+}
+
+func (m *Manager) fireDone(jobID string, onDone func(*Job)) {
+	if onDone != nil {
 		if job, ok := m.Get(jobID); ok {
-			go req.OnCompleted(job)
+			go onDone(job)
 		}
 	}
+}
+
+func (m *Manager) getImpacts(jobID string) []Impact {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	job, ok := m.jobs[jobID]
+	if !ok || len(job.Impacts) == 0 {
+		return nil
+	}
+	out := make([]Impact, len(job.Impacts))
+	copy(out, job.Impacts)
+	return out
+}
+
+func buildInitialMessages(contextHint, task string) []types.AgentMessage {
+	var messages []types.AgentMessage
+	if strings.TrimSpace(contextHint) != "" {
+		messages = append(messages, types.AgentMessage{
+			Role: "user",
+			Content: []types.ContentBlock{
+				{Type: "text", Text: "[背景信息]\n" + contextHint},
+			},
+		})
+	}
+	messages = append(messages, taskMessage(task))
+	return messages
+}
+
+func buildCanceledResult(loopResult *engine.AgentLoopResult, impacts []Impact) string {
+	var sb strings.Builder
+	sb.WriteString("[子任务被中断]\n")
+
+	if len(impacts) == 0 && loopResult == nil {
+		sb.WriteString("尚未开始执行，无可记录操作。")
+		return sb.String()
+	}
+
+	if len(impacts) > 0 {
+		sb.WriteString("已执行操作：\n")
+		for i, imp := range impacts {
+			if i >= 15 {
+				sb.WriteString(fmt.Sprintf("- ... 其余 %d 条操作省略\n", len(impacts)-15))
+				break
+			}
+			sb.WriteString("- " + strings.TrimSpace(imp.Summary) + "\n")
+		}
+	} else {
+		sb.WriteString("已执行操作：无\n")
+	}
+
+	if loopResult != nil {
+		lastText := extractLastAssistantText(loopResult.Messages)
+		if lastText != "" {
+			const maxLen = 500
+			if len(lastText) > maxLen {
+				lastText = lastText[:maxLen] + "..."
+			}
+			sb.WriteString("\n最后状态：" + lastText)
+		}
+	}
+
+	return sb.String()
+}
+
+func extractLastAssistantText(messages []types.AgentMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "assistant" {
+			continue
+		}
+		for _, b := range messages[i].Content {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				return strings.TrimSpace(b.Text)
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Manager) markFailed(jobID, errMsg string) {
@@ -299,23 +446,6 @@ func (m *Manager) markCanceled(jobID, reason string) {
 	})
 }
 
-func (m *Manager) markFailedWithCallback(jobID, errMsg string, cb func(*Job)) {
-	m.markFailed(jobID, errMsg)
-	if cb != nil {
-		if job, ok := m.Get(jobID); ok {
-			go cb(job)
-		}
-	}
-}
-
-func (m *Manager) markCanceledWithCallback(jobID, reason string, cb func(*Job)) {
-	m.markCanceled(jobID, reason)
-	if cb != nil {
-		if job, ok := m.Get(jobID); ok {
-			go cb(job)
-		}
-	}
-}
 
 func (m *Manager) setCancel(jobID string, cancel context.CancelFunc) {
 	m.mu.Lock()
@@ -448,11 +578,20 @@ func taskMessage(task string) types.AgentMessage {
 	}
 }
 
+var subagentToolBlacklist = map[string]bool{
+	"run_subagent_async":   true,
+	"get_subagent_status":  true,
+	"cancel_subagent":      true,
+}
+
 func filterToolsByProfile(profile string, tools []types.RegisteredTool) []types.RegisteredTool {
 	allowed := allowedToolsForProfile(profile)
 	out := make([]types.RegisteredTool, 0, len(tools))
 	for _, t := range tools {
 		name := t.Definition.Name
+		if subagentToolBlacklist[name] {
+			continue
+		}
 		if !allowed[name] {
 			continue
 		}

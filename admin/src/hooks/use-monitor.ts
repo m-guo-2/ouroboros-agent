@@ -22,7 +22,7 @@ export function useMonitorSessions(filters?: { agentId?: string; channel?: strin
     getNextPageParam: (lastPage) => {
       if (lastPage.length < pageSize) return undefined
       const last = lastPage[lastPage.length - 1]
-      return last?.updatedAt ? new Date(last.updatedAt).getTime() : undefined
+      return last?.updatedAt || undefined
     },
   })
 

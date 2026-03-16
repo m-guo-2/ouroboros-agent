@@ -7,7 +7,7 @@ import (
 )
 
 type DelayedTask struct {
-	ID                    string
+	ID                    int64
 	SessionID             string
 	AgentID               string
 	UserID                string
@@ -22,19 +22,20 @@ type DelayedTask struct {
 }
 
 func CreateDelayedTask(task *DelayedTask) error {
-	if task.ID == "" {
-		task.ID = fmt.Sprintf("dt-%d", timeutil.NowMs())
-	}
 	now := timeutil.NowMs()
-	_, err := DB.Exec(
+	res, err := DB.Exec(
 		`INSERT INTO delayed_tasks
-			(id, session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id, task, execute_at, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-		task.ID, task.SessionID, task.AgentID, task.UserID,
+			(session_id, agent_id, user_id, channel, channel_user_id, channel_conversation_id, task, execute_at, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+		task.SessionID, task.AgentID, task.UserID,
 		task.Channel, task.ChannelUserID, task.ChannelConversationID,
 		task.Task, task.ExecuteAt, now, now,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	task.ID, _ = res.LastInsertId()
+	return nil
 }
 
 func QueryDueTasks() ([]DelayedTask, error) {
@@ -66,7 +67,7 @@ func QueryDueTasks() ([]DelayedTask, error) {
 	return tasks, rows.Err()
 }
 
-func MarkTaskDispatched(id string) error {
+func MarkTaskDispatched(id int64) error {
 	now := timeutil.NowMs()
 	res, err := DB.Exec(
 		`UPDATE delayed_tasks SET status = 'dispatched', updated_at = ? WHERE id = ? AND status = 'pending'`,
@@ -82,7 +83,7 @@ func MarkTaskDispatched(id string) error {
 	return nil
 }
 
-func CancelDelayedTask(id, sessionID string) error {
+func CancelDelayedTask(id int64, sessionID string) error {
 	now := timeutil.NowMs()
 	res, err := DB.Exec(
 		`UPDATE delayed_tasks SET status = 'cancelled', updated_at = ?
