@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +60,19 @@ func createShellExecutor() types.ToolExecutor {
 	}
 }
 
+var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
+
+// expandEnvVars replaces ${VAR_NAME} placeholders with their environment variable values.
+func expandEnvVars(s string) string {
+	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		name := strings.TrimSuffix(strings.TrimPrefix(match, "${"), "}")
+		if val, ok := os.LookupEnv(name); ok {
+			return val
+		}
+		return match
+	})
+}
+
 func createSkillHTTPExecutor(executor storage.SkillToolExecutor) types.ToolExecutor {
 	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 		if executor.URL == "" {
@@ -83,6 +98,9 @@ func createSkillHTTPExecutor(executor storage.SkillToolExecutor) types.ToolExecu
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+		for k, v := range executor.Headers {
+			req.Header.Set(k, expandEnvVars(v))
+		}
 
 		client := sharedlogger.NewClient("skill-http", 30*time.Second)
 		resp, err := client.Do(req)

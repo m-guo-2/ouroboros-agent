@@ -44,11 +44,12 @@ type ProviderCredentials struct {
 
 // SkillToolExecutor describes how to invoke a skill's tool.
 type SkillToolExecutor struct {
-	Type    string `json:"type"` // "http" | "shell" | "script" | "internal"
-	URL     string `json:"url,omitempty"`
-	Method  string `json:"method,omitempty"`
-	Command string `json:"command,omitempty"`
-	Handler string `json:"handler,omitempty"`
+	Type    string            `json:"type"` // "http" | "shell" | "script" | "internal"
+	URL     string            `json:"url,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Handler string            `json:"handler,omitempty"`
 }
 
 // SkillContext is the compiled output of all enabled skills for an agent.
