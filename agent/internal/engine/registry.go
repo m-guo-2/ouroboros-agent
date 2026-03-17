@@ -280,6 +280,36 @@ func (r *ToolRegistry) RegisterSkills(skillsCtx *storage.SkillContext, internalH
 	}
 }
 
+// RegisterSkillTools dynamically registers tools from an on-demand skill after load_skill.
+func (r *ToolRegistry) RegisterSkillTools(tools []types.ToolDefinition, executors map[string]storage.SkillToolExecutor) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, toolDef := range tools {
+		executor, ok := executors[toolDef.Name]
+		if !ok {
+			continue
+		}
+
+		var execute types.ToolExecutor
+		switch executor.Type {
+		case "shell":
+			execute = createShellExecutor()
+		case "http":
+			execute = createSkillHTTPExecutor(executor)
+		default:
+			continue
+		}
+
+		r.tools[toolDef.Name] = types.RegisteredTool{
+			Definition: toolDef,
+			Execute:    execute,
+			Source:     "skill",
+			SourceName: toolDef.Name,
+		}
+	}
+}
+
 func (r *ToolRegistry) RegisterMcpServer(ctx context.Context, config McpServerConfig) int {
 	req, err := http.NewRequestWithContext(ctx, "POST", config.BaseURL+"/tools/list", bytes.NewReader([]byte("{}")))
 	if err != nil {

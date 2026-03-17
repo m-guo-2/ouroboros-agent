@@ -1021,6 +1021,12 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				}
 				return nil, fmt.Errorf("%s. available skills: %s", err.Error(), strings.Join(available, ", "))
 			}
+
+			toolDefs, executors, toolErr := storage.GetSkillToolsForRegistry(skillID)
+			if toolErr == nil && len(toolDefs) > 0 {
+				registry.RegisterSkillTools(toolDefs, executors)
+			}
+
 			return detail, nil
 		},
 		"load_skill_reference": func(c context.Context, input map[string]interface{}) (interface{}, error) {
@@ -1113,8 +1119,6 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		return has
 	}
 
-	tools := registry.GetAll()
-
 	// Outer loop: run engine, then check for more events.
 	for {
 		guardRetries := 0
@@ -1123,7 +1127,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				LLMClient:      llmClient,
 				SystemPrompt:   systemPrompt,
 				Messages:       messages,
-				Tools:          tools,
+				Registry:       registry,
 				Model:          modelName,
 				MaxIterations:  25,
 				OnNewMessages:  onNewMessages,

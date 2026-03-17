@@ -18,7 +18,8 @@ type AgentLoopConfig struct {
 	LLMClient      LLMClient
 	SystemPrompt   string
 	Messages       []types.AgentMessage
-	Tools          []types.RegisteredTool
+	Tools          []types.RegisteredTool // static tool list (used when Registry is nil)
+	Registry       *ToolRegistry          // if set, tools are read from registry each iteration
 	OnNewMessages  func(messages []types.AgentMessage) error
 	MaxIterations  int
 	Model          string
@@ -66,12 +67,23 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 	messages := make([]types.AgentMessage, len(config.Messages))
 	copy(messages, config.Messages)
 
-	toolMap := make(map[string]types.RegisteredTool)
-	var toolDefs []types.ToolDefinition
-	for _, t := range config.Tools {
-		toolMap[t.Definition.Name] = t
-		toolDefs = append(toolDefs, t.Definition)
+	buildToolIndex := func() (map[string]types.RegisteredTool, []types.ToolDefinition) {
+		var src []types.RegisteredTool
+		if config.Registry != nil {
+			src = config.Registry.GetAll()
+		} else {
+			src = config.Tools
+		}
+		m := make(map[string]types.RegisteredTool, len(src))
+		d := make([]types.ToolDefinition, 0, len(src))
+		for _, t := range src {
+			m[t.Definition.Name] = t
+			d = append(d, t.Definition)
+		}
+		return m, d
 	}
+
+	toolMap, toolDefs := buildToolIndex()
 
 	const maxEmptyResponseRetries = 3
 
@@ -100,6 +112,10 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 				logger.Business(ctx, "事件合并",
 					"traceEvent", "event_drain", "iteration", iteration, "eventCount", len(newMsgs))
 			}
+		}
+
+		if config.Registry != nil {
+			toolMap, toolDefs = buildToolIndex()
 		}
 
 		iteration++

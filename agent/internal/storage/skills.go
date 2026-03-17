@@ -241,6 +241,30 @@ func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext
 	return ctx, nil
 }
 
+// GetSkillToolsForRegistry returns structured tool definitions and executors for dynamic registration.
+func GetSkillToolsForRegistry(skillID string) ([]types.ToolDefinition, map[string]SkillToolExecutor, error) {
+	d := store().GetByID(skillID)
+	if d == nil || !d.Enabled {
+		return nil, nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	}
+
+	var dbTools []dbSkillTool
+	toolsJSON, _ := json.Marshal(d.Tools)
+	_ = json.Unmarshal(toolsJSON, &dbTools)
+
+	var defs []types.ToolDefinition
+	executors := make(map[string]SkillToolExecutor)
+	for _, t := range dbTools {
+		defs = append(defs, types.ToolDefinition{
+			Name:        t.Name,
+			Description: fmt.Sprintf("[Skill: %s] %s", d.Name, t.Description),
+			InputSchema: t.InputSchema,
+		})
+		executors[t.Name] = t.Executor
+	}
+	return defs, executors, nil
+}
+
 // GetSkillDetail returns a skill's readme, tool definitions, and reference index for load_skill.
 func GetSkillDetail(skillID string) (map[string]interface{}, error) {
 	d := store().GetByID(skillID)
