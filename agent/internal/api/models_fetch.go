@@ -158,9 +158,9 @@ func fetchGLMModels(apiKey string) ([]availableModel, error) {
 	if len(out) == 0 {
 		out = []availableModel{
 			{ID: "glm-4-plus", Name: "GLM-4 Plus", Provider: "glm"},
-			{ID: "glm-4", Name: "GLM-4", Provider: "glm"},
-			{ID: "glm-4-long", Name: "GLM-4 Long", Provider: "glm"},
 			{ID: "glm-4-flash", Name: "GLM-4 Flash", Provider: "glm"},
+			{ID: "glm-4-long", Name: "GLM-4 Long", Provider: "glm"},
+			{ID: "glm-4-flashx", Name: "GLM-4 FlashX", Provider: "glm"},
 		}
 	}
 	return out, nil
