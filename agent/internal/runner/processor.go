@@ -857,34 +857,22 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		Type: "object",
 		Properties: map[string]interface{}{
 			"content":                 map[string]interface{}{"type": "string", "description": "消息内容"},
-			"channelUserId":           map[string]interface{}{"type": "string", "description": "渠道用户 ID"},
-			"channelConversationId":   map[string]interface{}{"type": "string", "description": "群聊 ID"},
 			"messageType":             map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
 			"replyToChannelMessageId": map[string]interface{}{"type": "string", "description": "回复目标的上游消息 ID（可选）"},
 			"channelMeta":             map[string]interface{}{"type": "object", "description": "渠道专用附加参数，如 link/location/miniapp 等类型所需的结构化数据"},
 		},
 		Required: []string{"content"},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
-		ch := sessionReq.Channel
-		chUserID := sessionReq.ChannelUserID
-		if cu, ok := input["channelUserId"].(string); ok && cu != "" {
-			chUserID = cu
-		}
 		content, ok := input["content"].(string)
 		if !ok || content == "" {
 			return nil, fmt.Errorf("content is required")
 		}
 
-		chConvID := sessionReq.ChannelConversationID
-		if cc, ok := input["channelConversationId"].(string); ok && cc != "" {
-			chConvID = cc
-		}
-
 		outMsg := channels.OutgoingMessage{
-			Channel:               ch,
-			ChannelUserID:         chUserID,
+			Channel:               sessionReq.Channel,
+			ChannelUserID:         sessionReq.ChannelUserID,
 			Content:               content,
-			ChannelConversationID: chConvID,
+			ChannelConversationID: sessionReq.ChannelConversationID,
 			SessionID:             worker.SessionID,
 			TraceID:               sessionReq.TraceID,
 		}
@@ -903,8 +891,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		}
 
 		return map[string]interface{}{
-			"success":       true,
-			"channelUserId": chUserID,
+			"success": true,
 		}, nil
 	})
 

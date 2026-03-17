@@ -9,7 +9,6 @@
 
 - content（必填）：消息内容
 - messageType（可选）：text（默认）/ image / file / rich_text
-- channelUserId / channelConversationId：自动取自消息来源，通常无需填写
 - replyToChannelMessageId（可选）：回复目标的上游消息 ID
 
 ### 示例
