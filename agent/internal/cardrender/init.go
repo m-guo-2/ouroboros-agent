@@ -9,6 +9,7 @@ import (
 
 var (
 	globalRenderer *Renderer
+	globalStorage  oss.Storage
 	initOnce       sync.Once
 	initErr        error
 )
@@ -27,9 +28,16 @@ func Init() error {
 			initErr = fmt.Errorf("cardrender: failed to create OSS storage: %w", err)
 			return
 		}
+		globalStorage = storage
 		globalRenderer = NewRenderer(storage)
 	})
 	return initErr
+}
+
+// OSSStorage returns the shared OSS storage instance initialized by Init().
+// Returns nil if Init() has not been called or failed.
+func OSSStorage() oss.Storage {
+	return globalStorage
 }
 
 // DefaultRenderer returns the globally initialized renderer.

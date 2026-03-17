@@ -868,6 +868,14 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 			return nil, fmt.Errorf("content is required")
 		}
 
+		messageType, _ := input["messageType"].(string)
+
+		resolved, err := resolveMediaContent(c, messageType, content)
+		if err != nil {
+			return nil, err
+		}
+		content = resolved
+
 		outMsg := channels.OutgoingMessage{
 			Channel:               sessionReq.Channel,
 			ChannelUserID:         sessionReq.ChannelUserID,
@@ -876,8 +884,8 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 			SessionID:             worker.SessionID,
 			TraceID:               sessionReq.TraceID,
 		}
-		if mt, ok := input["messageType"].(string); ok && mt != "" {
-			outMsg.MessageType = mt
+		if messageType != "" {
+			outMsg.MessageType = messageType
 		}
 		if replyTo, ok := input["replyToChannelMessageId"].(string); ok && replyTo != "" {
 			outMsg.ReplyToChannelMessageID = replyTo
