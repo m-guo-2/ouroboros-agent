@@ -452,7 +452,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 				"lastError", lastErr.Error())
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, err
 		}
