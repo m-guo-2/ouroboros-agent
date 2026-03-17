@@ -28,6 +28,11 @@ export interface SkillBinding {
   mode: "always" | "on_demand"
 }
 
+export interface SubagentModelConfig {
+  provider: string
+  model: string
+}
+
 export interface AgentProfile {
   id: string
   displayName: string
@@ -35,6 +40,7 @@ export interface AgentProfile {
   modelId?: string
   provider?: string   // 直接指定 LLM 提供商
   model?: string      // 直接指定模型 ID
+  subagentModels?: Record<string, SubagentModelConfig>
   skills?: SkillBinding[]
   channels?: Array<{ type: string; identifier: string }>
   isActive?: boolean

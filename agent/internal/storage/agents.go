@@ -24,27 +24,32 @@ var providerCredentialsKey = map[string]providerKeyConfig{
 	"kimi":      {"api_key.moonshot", "base_url.moonshot", "https://api.moonshot.cn/v1"},
 	"zhipu":     {"api_key.zhipu", "base_url.zhipu", "https://open.bigmodel.cn/api/paas/v4"},
 	"glm":       {"api_key.zhipu", "base_url.zhipu", "https://open.bigmodel.cn/api/paas/v4"},
-	"deepseek":  {"api_key.deepseek", "base_url.deepseek", "https://api.deepseek.com"},
+	"deepseek":    {"api_key.deepseek", "base_url.deepseek", "https://api.deepseek.com"},
+	"volcengine":  {"api_key.volcengine", "base_url.volcengine", "https://ark.cn-beijing.volces.com/api/v3"},
+	"ark":         {"api_key.volcengine", "base_url.volcengine", "https://ark.cn-beijing.volces.com/api/v3"},
 }
 
 const agentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),
-	COALESCE(provider,''), COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(channels,'[]'), is_active`
+	COALESCE(provider,''), COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(channels,'[]'), is_active,
+	COALESCE(subagent_models,'{}')`
 
 // scanAgentConfig scans a single row into AgentConfig.
 // channels in the DB may be stored with either legacy keys (channelType/channelIdentifier)
 // or current keys (type/identifier); both are handled transparently.
 func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	var cfg AgentConfig
-	var skillsJSON, channelsJSON string
+	var skillsJSON, channelsJSON, subagentModelsJSON string
 	var isActive int
 	if err := scan(
 		&cfg.ID, &cfg.ModelID, &cfg.DisplayName, &cfg.SystemPrompt,
 		&cfg.Provider, &cfg.Model, &skillsJSON, &channelsJSON, &isActive,
+		&subagentModelsJSON,
 	); err != nil {
 		return cfg, err
 	}
 	cfg.IsActive = isActive == 1
 	_ = json.Unmarshal([]byte(skillsJSON), &cfg.Skills)
+	_ = json.Unmarshal([]byte(subagentModelsJSON), &cfg.SubagentModels)
 
 	// Support legacy storage format {"channelType":...,"channelIdentifier":...}
 	var rawChannels []map[string]string
@@ -136,16 +141,20 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 	}
 	skillsJSON, _ := json.Marshal(cfg.Skills)
 	channelsJSON, _ := json.Marshal(cfg.Channels)
+	subagentModelsJSON, _ := json.Marshal(cfg.SubagentModels)
+	if cfg.SubagentModels == nil {
+		subagentModelsJSON = []byte("{}")
+	}
 	isActive := 0
 	if cfg.IsActive {
 		isActive = 1
 	}
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, is_active, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, subagent_models, is_active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cfg.ID, "", cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
-		string(skillsJSON), string(channelsJSON), isActive, now, now,
+		string(skillsJSON), string(channelsJSON), string(subagentModelsJSON), isActive, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -192,6 +201,10 @@ func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentCo
 	if channels, ok := updates["channels"]; ok {
 		b, _ := json.Marshal(channels)
 		DB.Exec("UPDATE agent_configs SET channels = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
+	}
+	if subagentModels, ok := updates["subagentModels"]; ok {
+		b, _ := json.Marshal(subagentModels)
+		DB.Exec("UPDATE agent_configs SET subagent_models = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
 	}
 	return GetAgentConfig(agentID)
 }

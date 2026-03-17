@@ -14,7 +14,7 @@ import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
 import { useSkills } from "@/hooks/use-skills"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
-import type { AvailableModel, SkillBinding } from "@/api/types"
+import type { AvailableModel, SkillBinding, SubagentModelConfig } from "@/api/types"
 
 const PROVIDERS = [
   { value: "anthropic", label: "Anthropic (Claude)" },
@@ -22,7 +22,15 @@ const PROVIDERS = [
   { value: "moonshot", label: "Moonshot (Kimi)" },
   { value: "zhipu", label: "智谱 (GLM)" },
   { value: "deepseek", label: "DeepSeek" },
+  { value: "volcengine", label: "火山方舟 (豆包)" },
 ]
+
+const SUBAGENT_PROFILES = [
+  { key: "developer", label: "Developer" },
+  { key: "file_analysis", label: "File Analysis" },
+  { key: "web_research", label: "Web Research" },
+  { key: "data_report", label: "Data Report" },
+] as const
 
 export function AgentDetail() {
   const { id } = useParams<{ id: string }>()
@@ -38,6 +46,7 @@ export function AgentDetail() {
   const [model, setModel] = useState("")
   const [selectedSkills, setSelectedSkills] = useState<SkillBinding[]>([])
   const [isActive, setIsActive] = useState(true)
+  const [subagentModels, setSubagentModels] = useState<Record<string, SubagentModelConfig>>({})
   const [initialized, setInitialized] = useState(false)
 
   // 模型查询相关
@@ -92,6 +101,7 @@ export function AgentDetail() {
     setModel(agent.model ?? "")
     setSelectedSkills(agent.skills ?? [])
     setIsActive(agent.isActive !== false)
+    setSubagentModels(agent.subagentModels ?? {})
     setInitialized(true)
   }
 
@@ -132,6 +142,12 @@ export function AgentDetail() {
   }
 
   const handleSave = async () => {
+    const filteredSubagentModels: Record<string, SubagentModelConfig> = {}
+    for (const [profile, cfg] of Object.entries(subagentModels)) {
+      if (cfg.provider && cfg.model) {
+        filteredSubagentModels[profile] = cfg
+      }
+    }
     const updated = await updateMutation.mutateAsync({
       id: agent.id,
       data: {
@@ -140,6 +156,7 @@ export function AgentDetail() {
         provider: provider || undefined,
         model: model || undefined,
         skills: selectedSkills,
+        subagentModels: filteredSubagentModels,
         isActive,
       },
     })
@@ -306,6 +323,52 @@ export function AgentDetail() {
                   rows={8}
                   className="font-mono text-xs"
                 />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-700 mb-1.5 block">
+                  子 Agent 模型配置
+                  <span className="ml-2 text-xs font-normal text-slate-400">
+                    为每个 subagent profile 单独指定模型，留空则继承主 Agent 模型
+                  </span>
+                </label>
+                <div className="space-y-2 mt-2">
+                  {SUBAGENT_PROFILES.map((p) => {
+                    const cfg = subagentModels[p.key] ?? { provider: "", model: "" }
+                    return (
+                      <div key={p.key} className="flex items-center gap-2 p-2.5 border border-slate-200 rounded-md bg-slate-50/50">
+                        <span className="text-xs font-medium text-slate-600 w-28 shrink-0">{p.label}</span>
+                        <select
+                          className="flex h-8 rounded-md border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500 w-40"
+                          value={cfg.provider}
+                          onChange={(e) => {
+                            setSubagentModels((prev) => ({
+                              ...prev,
+                              [p.key]: { ...cfg, provider: e.target.value, model: "" },
+                            }))
+                          }}
+                        >
+                          <option value="">继承主模型</option>
+                          {PROVIDERS.map((prov) => (
+                            <option key={prov.value} value={prov.value}>{prov.label}</option>
+                          ))}
+                        </select>
+                        <Input
+                          value={cfg.model}
+                          onChange={(e) => {
+                            setSubagentModels((prev) => ({
+                              ...prev,
+                              [p.key]: { ...cfg, model: e.target.value },
+                            }))
+                          }}
+                          placeholder={cfg.provider ? "输入模型 ID" : "继承主 Agent 模型"}
+                          disabled={!cfg.provider}
+                          className="flex-1 h-8 text-xs"
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
 
               {showPreview && (

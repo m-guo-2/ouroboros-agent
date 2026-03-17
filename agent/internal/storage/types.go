@@ -8,17 +8,24 @@ type SkillBinding struct {
 	Mode string `json:"mode"` // "always" | "on_demand"
 }
 
+// SubagentModelConfig holds per-profile model override for a subagent.
+type SubagentModelConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 // AgentConfig holds the runtime configuration for an agent.
 type AgentConfig struct {
-	ID           string           `json:"id"`
-	DisplayName  string           `json:"displayName"`
-	SystemPrompt string           `json:"systemPrompt"`
-	ModelID      string           `json:"modelId,omitempty"`
-	Provider     string           `json:"provider,omitempty"`
-	Model        string           `json:"model,omitempty"`
-	Skills       []SkillBinding   `json:"skills"`
-	Channels     []ChannelBinding `json:"channels"`
-	IsActive     bool             `json:"isActive"`
+	ID             string                          `json:"id"`
+	DisplayName    string                          `json:"displayName"`
+	SystemPrompt   string                          `json:"systemPrompt"`
+	ModelID        string                          `json:"modelId,omitempty"`
+	Provider       string                          `json:"provider,omitempty"`
+	Model          string                          `json:"model,omitempty"`
+	SubagentModels map[string]SubagentModelConfig  `json:"subagentModels,omitempty"`
+	Skills         []SkillBinding                  `json:"skills"`
+	Channels       []ChannelBinding                `json:"channels"`
+	IsActive       bool                            `json:"isActive"`
 }
 
 // ChannelBinding describes which channel an agent is bound to.

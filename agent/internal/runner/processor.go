@@ -70,6 +70,47 @@ func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	return result
 }
 
+// buildLLMClient creates an LLM client for the given provider and credentials.
+func buildLLMClient(provider string, creds *storage.ProviderCredentials) engine.LLMClient {
+	if provider == "claude" || strings.Contains(creds.BaseURL, "anthropic") {
+		return engine.NewAnthropicClient(engine.AnthropicClientConfig{
+			APIKey:    creds.APIKey,
+			BaseURL:   creds.BaseURL,
+			MaxTokens: 8192,
+		})
+	}
+	return engine.NewOpenAICompatibleClient(engine.OpenAICompatibleClientConfig{
+		APIKey:    creds.APIKey,
+		BaseURL:   creds.BaseURL,
+		MaxTokens: 8192,
+	})
+}
+
+// resolveSubagentLLM returns the LLM client and model name for a subagent profile.
+// If the agent has a per-profile override with valid credentials, a dedicated client is built.
+// Otherwise the main agent's client and model are returned.
+func resolveSubagentLLM(
+	agentConfig *storage.AgentConfig,
+	profile string,
+	mainClient engine.LLMClient,
+	mainModel string,
+) (engine.LLMClient, string) {
+	if agentConfig.SubagentModels == nil {
+		return mainClient, mainModel
+	}
+	override, ok := agentConfig.SubagentModels[profile]
+	if !ok || override.Provider == "" || override.Model == "" {
+		return mainClient, mainModel
+	}
+	creds, err := storage.GetProviderCredentials(override.Provider)
+	if err != nil || creds == nil {
+		logger.Warn(context.Background(), "子 agent 模型 provider credentials 不可用，回退到主 agent 模型",
+			"profile", profile, "provider", override.Provider, "error", fmt.Sprint(err))
+		return mainClient, mainModel
+	}
+	return buildLLMClient(override.Provider, creds), override.Model
+}
+
 func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageData {
 	var result []storage.MessageData
 	for _, msg := range loopMessages {
@@ -471,7 +512,7 @@ func registerSubagentTools(
 	registry *engine.ToolRegistry,
 	llmClient engine.LLMClient,
 	modelName string,
-	agentID string,
+	agentConfig *storage.AgentConfig,
 	userID string,
 	channel string,
 	channelUserID string,
@@ -523,7 +564,7 @@ func registerSubagentTools(
 
 		err := EnqueueProcessRequest(context.Background(), ProcessRequest{
 			UserID:                userID,
-			AgentID:               agentID,
+			AgentID:               agentConfig.ID,
 			Content:               content,
 			Channel:               channel,
 			ChannelUserID:         channelUserID,
@@ -565,24 +606,26 @@ func registerSubagentTools(
 				timeout = time.Duration(int(t)) * time.Second
 			}
 
+			subClient, subModel := resolveSubagentLLM(agentConfig, profile, llmClient, modelName)
+
 			job, err := manager.Start(subagent.StartRequest{
 				Profile:       profile,
 				Task:          task,
 				Context:       contextHint,
-				Model:         modelName,
-				LLMClient:     llmClient,
+				Model:         subModel,
+				LLMClient:     subClient,
 				Tools:         registry.GetAll(),
 				ParentTraceID: traceID,
 				SessionID:     sessionID,
 				Timeout:       timeout,
 				OnDone:        notifyMain,
 				CompactMessages: func(compCtx context.Context, msgs []types.AgentMessage) ([]types.AgentMessage, bool, error) {
-					estimate := EstimateTokens(msgs, modelName)
+					estimate := EstimateTokens(msgs, subModel)
 					if !ShouldCompact(estimate) {
 						return msgs, false, nil
 					}
-					compactModel := ResolveCompactModel(modelName)
-					result, err := CompactContext(compCtx, msgs, modelName, llmClient, compactModel, sessionID)
+					compactModel := ResolveCompactModel(subModel)
+					result, err := CompactContext(compCtx, msgs, subModel, subClient, compactModel, sessionID)
 					if err != nil {
 						return TruncateByFullTurns(msgs, 10), true, nil
 					}
@@ -789,20 +832,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		}
 	}
 
-	var llmClient engine.LLMClient
-	if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
-		llmClient = engine.NewAnthropicClient(engine.AnthropicClientConfig{
-			APIKey:    credentials.APIKey,
-			BaseURL:   credentials.BaseURL,
-			MaxTokens: 8192,
-		})
-	} else {
-		llmClient = engine.NewOpenAICompatibleClient(engine.OpenAICompatibleClientConfig{
-			APIKey:    credentials.APIKey,
-			BaseURL:   credentials.BaseURL,
-			MaxTokens: 8192,
-		})
-	}
+	llmClient := buildLLMClient(provider, credentials)
 
 	shellSession := ostools.NewShellSession(worker.WorkDir)
 
@@ -1036,7 +1066,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		registry,
 		llmClient,
 		modelName,
-		agentID,
+		agentConfig,
 		userID,
 		channel,
 		channelUserID,

@@ -170,6 +170,13 @@ func buildSettingGroups() map[string]settingGroup {
 				{Key: "base_url.deepseek", Label: "DeepSeek Base URL", Placeholder: "https://api.deepseek.com", Description: "可选，自定义 DeepSeek 兼容地址"},
 			},
 		},
+		"volcengine": {
+			Label: "火山方舟 (Volcengine Ark)",
+			Keys: []settingKeyDef{
+				{Key: "api_key.volcengine", Label: "Volcengine API Key", Secret: true, Placeholder: "xxx", Description: "用于火山方舟（豆包等）模型调用"},
+				{Key: "base_url.volcengine", Label: "Volcengine Base URL", Placeholder: "https://ark.cn-beijing.volces.com/api/v3", Description: "可选，自定义火山方舟 API 地址"},
+			},
+		},
 		"tavily": {
 			Label: "Tavily Web Search",
 			Keys: []settingKeyDef{

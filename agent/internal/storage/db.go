@@ -285,6 +285,8 @@ func runSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_facts_session ON session_facts(session_id)`,
+
+		`ALTER TABLE agent_configs ADD COLUMN subagent_models TEXT DEFAULT '{}'`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
@@ -308,6 +310,7 @@ func seedDefaultModels(db *sql.DB) {
 		{"model-glm4", "GLM-4 Plus", "glm", "glm-4-plus"},
 		{"model-deepseek-chat", "DeepSeek Chat (V3)", "deepseek", "deepseek-chat"},
 		{"model-deepseek-reasoner", "DeepSeek Reasoner (R1)", "deepseek", "deepseek-reasoner"},
+		{"model-doubao-pro", "Doubao 1.5 Pro", "volcengine", "doubao-1-5-pro-256k"},
 	}
 
 	for _, s := range seeds {

@@ -8,6 +8,27 @@ import (
 	"agent/internal/storage"
 )
 
+func parseSubagentModels(raw interface{}) map[string]storage.SubagentModelConfig {
+	top, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := make(map[string]storage.SubagentModelConfig, len(top))
+	for profile, v := range top {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		p, _ := m["provider"].(string)
+		model, _ := m["model"].(string)
+		if p == "" && model == "" {
+			continue
+		}
+		out[profile] = storage.SubagentModelConfig{Provider: p, Model: model}
+	}
+	return out
+}
+
 func parseSkillBindings(raw interface{}) []storage.SkillBinding {
 	var bindings []storage.SkillBinding
 	items, ok := raw.([]interface{})
@@ -71,6 +92,9 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if body["skills"] != nil {
 			cfg.Skills = parseSkillBindings(body["skills"])
+		}
+		if body["subagentModels"] != nil {
+			cfg.SubagentModels = parseSubagentModels(body["subagentModels"])
 		}
 		if v, ok := body["channels"].([]interface{}); ok {
 			for _, c := range v {

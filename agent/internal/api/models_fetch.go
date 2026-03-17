@@ -21,7 +21,7 @@ type availableModel struct {
 }
 
 func fetchAvailableModels(provider, apiKey, baseURL string) ([]availableModel, error) {
-	_ = baseURL // model discovery always uses official provider endpoints
+	_ = baseURL // most providers use official endpoints; volcengine uses the configured base URL
 	switch strings.ToLower(provider) {
 	case "claude", "anthropic":
 		return fetchClaudeModels(apiKey)
@@ -33,6 +33,8 @@ func fetchAvailableModels(provider, apiKey, baseURL string) ([]availableModel, e
 		return fetchGLMModels(apiKey)
 	case "deepseek":
 		return fetchDeepSeekModels(apiKey)
+	case "volcengine", "ark":
+		return fetchVolcengineModels(apiKey, baseURL)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
@@ -194,6 +196,47 @@ func fetchDeepSeekModels(apiKey string) ([]availableModel, error) {
 		return deepSeekFallbackModels(), nil
 	}
 	return out, nil
+}
+
+func fetchVolcengineModels(apiKey, baseURL string) ([]availableModel, error) {
+	if baseURL == "" {
+		baseURL = "https://ark.cn-beijing.volces.com/api/v3"
+	}
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := modelFetchClient.Do(req)
+	if err != nil {
+		return volcengineFallbackModels(), nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return volcengineFallbackModels(), nil
+	}
+	var data struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&data) != nil {
+		return volcengineFallbackModels(), nil
+	}
+	var out []availableModel
+	for _, m := range data.Data {
+		out = append(out, availableModel{ID: m.ID, Name: m.ID, Provider: "volcengine"})
+	}
+	if len(out) == 0 {
+		return volcengineFallbackModels(), nil
+	}
+	return out, nil
+}
+
+func volcengineFallbackModels() []availableModel {
+	return []availableModel{
+		{ID: "doubao-1-5-pro-256k", Name: "Doubao 1.5 Pro 256K", Provider: "volcengine"},
+		{ID: "doubao-1-5-pro-32k", Name: "Doubao 1.5 Pro 32K", Provider: "volcengine"},
+		{ID: "doubao-1-5-lite-32k", Name: "Doubao 1.5 Lite 32K", Provider: "volcengine"},
+		{ID: "doubao-1-5-thinking-pro-250k", Name: "Doubao 1.5 Thinking Pro", Provider: "volcengine"},
+	}
 }
 
 func deepSeekFallbackModels() []availableModel {
