@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react"
-import { Activity, PanelRight, RefreshCw } from "lucide-react"
+import { Activity, MessageSquare, Brain, Clock, PanelRight, RefreshCw } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -11,6 +11,16 @@ import { buildExchanges } from "./lib/build-timeline"
 import { SessionList } from "./components/session-list"
 import { ConversationTimeline } from "./components/conversation-timeline"
 import { DecisionInspector } from "./components/decision-inspector"
+import { SessionMemoryPanel } from "./components/session-memory-panel"
+import { SessionDelayedTasksPanel } from "./components/session-delayed-tasks-panel"
+
+type MonitorTab = "conversation" | "memory" | "tasks"
+
+const TABS: { id: MonitorTab; label: string; icon: typeof MessageSquare }[] = [
+  { id: "conversation", label: "对话", icon: MessageSquare },
+  { id: "memory", label: "记忆", icon: Brain },
+  { id: "tasks", label: "定时任务", icon: Clock },
+]
 
 export function MonitorPage() {
   const queryClient = useQueryClient()
@@ -18,6 +28,7 @@ export function MonitorPage() {
   const [selectedExchangeIndex, setSelectedExchangeIndex] = useState<number | null>(null)
   const [search, setSearch] = useState("")
   const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [activeTab, setActiveTab] = useState<MonitorTab>("conversation")
   const {
     sessions,
     isLoading,
@@ -152,7 +163,7 @@ export function MonitorPage() {
         search={search}
         onSearchChange={setSearch}
         selectedSessionId={effectiveSessionId}
-        onSelectSession={(id) => { setSelectedSessionId(id); setSelectedExchangeIndex(null) }}
+        onSelectSession={(id) => { setSelectedSessionId(id); setSelectedExchangeIndex(null); setActiveTab("conversation") }}
         onDeleteSession={handleDeleteSession}
         onRefresh={handleRefreshSessions}
         isRefreshing={isRefreshingSessions}
@@ -182,14 +193,16 @@ export function MonitorPage() {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={handleRefreshMessages}
-                  disabled={isRefreshingMessages}
-                  className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors"
-                  title="刷新对话"
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingMessages && "animate-spin")} />
-                </button>
+                {activeTab === "conversation" && (
+                  <button
+                    onClick={handleRefreshMessages}
+                    disabled={isRefreshingMessages}
+                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 disabled:opacity-40 transition-colors"
+                    title="刷新对话"
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingMessages && "animate-spin")} />
+                  </button>
+                )}
                 {!inspectorOpen && (
                   <button onClick={() => setInspectorOpen(true)}
                     className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
@@ -199,19 +212,50 @@ export function MonitorPage() {
               </div>
             </div>
 
-            <ConversationTimeline
-              exchanges={exchanges}
-              compactions={compactions}
-              isProcessing={!!isProcessing}
-              activeTraceId={activeTraceId}
-              selectedTrace={selectedTrace}
-              selectedExchangeIndex={effectiveExchangeIndex}
-              onSelectExchange={handleSelectExchange}
-              isLoadingMessages={isLoadingMessages}
-              hasMoreMessages={!!hasMoreMessages}
-              onLoadMoreMessages={() => void fetchMoreMessages()}
-              isLoadingMoreMessages={isFetchingMoreMessages}
-            />
+            {/* Tab bar */}
+            <div className="flex items-center gap-0.5 px-5 py-1.5 border-b border-slate-200 bg-white shrink-0">
+              {TABS.map((tab) => {
+                const Icon = tab.icon
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
+                      activeTab === tab.id
+                        ? "bg-slate-100 text-slate-900"
+                        : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {tab.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Tab content */}
+            {activeTab === "conversation" && (
+              <ConversationTimeline
+                exchanges={exchanges}
+                compactions={compactions}
+                isProcessing={!!isProcessing}
+                activeTraceId={activeTraceId}
+                selectedTrace={selectedTrace}
+                selectedExchangeIndex={effectiveExchangeIndex}
+                onSelectExchange={handleSelectExchange}
+                isLoadingMessages={isLoadingMessages}
+                hasMoreMessages={!!hasMoreMessages}
+                onLoadMoreMessages={() => void fetchMoreMessages()}
+                isLoadingMoreMessages={isFetchingMoreMessages}
+              />
+            )}
+            {activeTab === "memory" && (
+              <SessionMemoryPanel sessionId={effectiveSessionId} enabled={activeTab === "memory"} />
+            )}
+            {activeTab === "tasks" && (
+              <SessionDelayedTasksPanel sessionId={effectiveSessionId} enabled={activeTab === "tasks"} />
+            )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">

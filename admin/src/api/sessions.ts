@@ -1,5 +1,5 @@
 import { fetchApi } from "./client"
-import type { AgentSession, AgentSessionListItem, MessageData, CompactionData } from "./types"
+import type { AgentSession, AgentSessionListItem, MessageData, CompactionData, SessionFact, DelayedTask } from "./types"
 
 export const sessionsApi = {
   getAll: (filters?: { agentId?: string; channel?: string; userId?: string; limit?: number; before?: number }) => {
@@ -24,4 +24,13 @@ export const sessionsApi = {
   delete: (id: string) => fetchApi<void>(`/agent-sessions/${id}`, { method: "DELETE" }),
 
   getCompactions: (id: string) => fetchApi<CompactionData[]>(`/agent-sessions/${id}/compactions`),
+
+  getFacts: (id: string) => fetchApi<SessionFact[]>(`/agent-sessions/${id}/facts`),
+
+  getDelayedTasks: (id: string, status?: string) => {
+    const params = new URLSearchParams()
+    if (status && status !== "all") params.set("status", status)
+    const qs = params.toString()
+    return fetchApi<DelayedTask[]>(`/agent-sessions/${id}/delayed-tasks${qs ? `?${qs}` : ""}`)
+  },
 }

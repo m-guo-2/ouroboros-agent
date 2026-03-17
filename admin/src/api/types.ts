@@ -236,6 +236,33 @@ export interface TraceListItem {
   startedAt: number
 }
 
+// ===== Session Facts =====
+
+export interface SessionFact {
+  id: number
+  sessionId: string
+  fact: string
+  category: string
+  createdAt: number
+}
+
+// ===== Delayed Tasks =====
+
+export interface DelayedTask {
+  id: number
+  sessionId: string
+  agentId: string
+  userId: string
+  channel: string
+  channelUserId: string
+  channelConversationId: string
+  task: string
+  executeAt: number
+  status: "pending" | "dispatched" | "cancelled"
+  createdAt: number
+  updatedAt: number
+}
+
 // ===== Compactions =====
 
 export interface CompactionData {

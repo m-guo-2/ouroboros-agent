@@ -43,6 +43,14 @@ func handleSessionsWithID(w http.ResponseWriter, r *http.Request) {
 		getSessionCompactions(w, r, id)
 		return
 	}
+	if sub == "facts" {
+		getSessionFacts(w, r, id)
+		return
+	}
+	if sub == "delayed-tasks" {
+		getSessionDelayedTasks(w, r, id)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -182,6 +190,39 @@ func getSessionCompactions(w http.ResponseWriter, r *http.Request, id string) {
 		compactions = []storage.CompactionData{}
 	}
 	ok(w, compactions)
+}
+
+func getSessionFacts(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	facts, err := storage.GetSessionFacts(id)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if facts == nil {
+		facts = []storage.SessionFact{}
+	}
+	ok(w, facts)
+}
+
+func getSessionDelayedTasks(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	status := r.URL.Query().Get("status")
+	tasks, err := storage.ListDelayedTasksBySession(id, status)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if tasks == nil {
+		tasks = []storage.DelayedTask{}
+	}
+	ok(w, tasks)
 }
 
 func parseInt64(raw string, defaultValue int64) int64 {
