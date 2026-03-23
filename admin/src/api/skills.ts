@@ -1,5 +1,5 @@
 import { fetchApi } from "./client"
-import type { SkillListItem, SkillDetail, SkillVersionSummary, SkillVersionDetail } from "./types"
+import type { SkillListItem, SkillDetail } from "./types"
 
 export const skillsApi = {
   getAll: () => fetchApi<SkillListItem[]>("/skills"),
@@ -26,15 +26,4 @@ export const skillsApi = {
   delete: (id: string) => fetchApi<void>(`/skills/${id}`, { method: "DELETE" }),
 
   refresh: () => fetchApi<{ refreshed: number }>("/skills/refresh", { method: "POST" }),
-
-  getVersions: (id: string) => fetchApi<SkillVersionSummary[]>(`/skills/${id}/versions`),
-
-  getVersion: (id: string, version: number) =>
-    fetchApi<SkillVersionDetail>(`/skills/${id}/versions/${version}`),
-
-  restoreVersion: (id: string, version: number) =>
-    fetchApi<{ name: string; version: number; message: string }>(
-      `/skills/${id}/versions/${version}/restore`,
-      { method: "POST" },
-    ),
 }

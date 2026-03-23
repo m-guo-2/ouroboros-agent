@@ -8,6 +8,7 @@ import (
 
 	"agent/internal/eventlog"
 	"agent/internal/logger"
+	"agent/internal/sandbox"
 	"agent/internal/storage"
 )
 
@@ -44,6 +45,7 @@ var (
 	sessionWorkers       = make(map[string]*SessionWorker)
 	workerMutex          sync.Mutex
 	shuttingDown         = false
+	sandboxMgr           = sandbox.NewManager("/tmp/agent-sandboxes")
 )
 
 func resolveSessionKey(channel, channelUserId, channelConversationId string) string {
@@ -80,6 +82,8 @@ func evictSession(sessionID string) {
 		worker.IdleTimer.Stop()
 	}
 	delete(sessionWorkers, sessionID)
+
+	go func() { _ = sandboxMgr.Destroy(sessionID) }()
 }
 
 func drainWorker(worker *SessionWorker) {
@@ -286,4 +290,6 @@ func GracefulShutdown() {
 			"executionStatus": "interrupted",
 		})
 	}
+
+	sandboxMgr.Shutdown()
 }

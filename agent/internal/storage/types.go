@@ -1,13 +1,5 @@
 package storage
 
-import "agent/internal/types"
-
-// SkillBinding describes how a skill is bound to an agent.
-type SkillBinding struct {
-	ID   string `json:"id"`
-	Mode string `json:"mode"` // "always" | "on_demand"
-}
-
 // SubagentModelConfig holds per-profile model override for a subagent.
 type SubagentModelConfig struct {
 	Provider string `json:"provider"`
@@ -16,16 +8,17 @@ type SubagentModelConfig struct {
 
 // AgentConfig holds the runtime configuration for an agent.
 type AgentConfig struct {
-	ID             string                          `json:"id"`
-	DisplayName    string                          `json:"displayName"`
-	SystemPrompt   string                          `json:"systemPrompt"`
-	ModelID        string                          `json:"modelId,omitempty"`
-	Provider       string                          `json:"provider,omitempty"`
-	Model          string                          `json:"model,omitempty"`
-	SubagentModels map[string]SubagentModelConfig  `json:"subagentModels,omitempty"`
-	Skills         []SkillBinding                  `json:"skills"`
-	Channels       []ChannelBinding                `json:"channels"`
-	IsActive       bool                            `json:"isActive"`
+	ID             string                         `json:"id"`
+	DisplayName    string                         `json:"displayName"`
+	SystemPrompt   string                         `json:"systemPrompt"`
+	ModelID        string                         `json:"modelId,omitempty"`
+	Provider       string                         `json:"provider,omitempty"`
+	Model          string                         `json:"model,omitempty"`
+	SubagentModels map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
+	Skills         []string                       `json:"skills"`
+	SubagentSkills map[string][]string            `json:"subagentSkills,omitempty"`
+	Channels       []ChannelBinding               `json:"channels"`
+	IsActive       bool                           `json:"isActive"`
 }
 
 // ChannelBinding describes which channel an agent is bound to.
@@ -42,23 +35,12 @@ type ProviderCredentials struct {
 	BaseURL  string
 }
 
-// SkillToolExecutor describes how to invoke a skill's tool.
-type SkillToolExecutor struct {
-	Type    string            `json:"type"` // "http" | "shell" | "script" | "internal"
-	URL     string            `json:"url,omitempty"`
-	Method  string            `json:"method,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Command string            `json:"command,omitempty"`
-	Handler string            `json:"handler,omitempty"`
-}
-
-// SkillContext is the compiled output of all enabled skills for an agent.
+// SkillContext is the compiled output of bound skills for an agent.
+// All skills use progressive loading: Level 1 metadata index in prompt,
+// Level 2 full content via load_skill, Level 3 references via load_skill_reference.
 type SkillContext struct {
-	SkillsSnippet    string // text appended to the system prompt
-	Tools            []types.ToolDefinition
-	ToolExecutors    map[string]SkillToolExecutor
-	SkillDocs        map[string]string
-	LoadableSkillIDs map[string]bool
+	SkillsSnippet    string          // Level 1 metadata index injected into system prompt
+	LoadableSkillIDs map[string]bool // skill IDs that load_skill can load
 }
 
 // SessionData represents a persisted agent session.

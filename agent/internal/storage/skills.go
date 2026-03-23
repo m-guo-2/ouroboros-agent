@@ -1,27 +1,21 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"agent/internal/github"
-	"agent/internal/types"
 )
 
 // SkillRecord mirrors the skill data shape expected by API handlers.
 type SkillRecord struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Version     string                 `json:"version"`
-	Type        string                 `json:"type"`
-	Enabled     bool                   `json:"enabled"`
-	Triggers    []interface{}          `json:"triggers"`
-	Tools       []interface{}          `json:"tools"`
-	Readme      string                 `json:"readme"`
-	References  []string               `json:"references,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Enabled     bool     `json:"enabled"`
+	Readme      string   `json:"readme"`
+	Scripts     []string `json:"scripts,omitempty"`
+	References  []string `json:"references,omitempty"`
 }
 
 func fromGitHub(d *github.SkillData) *SkillRecord {
@@ -30,18 +24,16 @@ func fromGitHub(d *github.SkillData) *SkillRecord {
 	}
 	return &SkillRecord{
 		ID: d.ID, Name: d.Name, Description: d.Description,
-		Version: d.Version, Type: d.Type, Enabled: d.Enabled,
-		Triggers: d.Triggers, Tools: d.Tools,
-		Readme: d.Readme, References: d.References, Metadata: d.Metadata,
+		Enabled: d.Enabled, Readme: d.Readme,
+		Scripts: d.Scripts, References: d.References,
 	}
 }
 
 func toGitHub(s *SkillRecord) github.SkillData {
 	return github.SkillData{
 		ID: s.ID, Name: s.Name, Description: s.Description,
-		Version: s.Version, Type: s.Type, Enabled: s.Enabled,
-		Triggers: s.Triggers, Tools: s.Tools,
-		Readme: s.Readme, References: s.References, Metadata: s.Metadata,
+		Enabled: s.Enabled, Readme: s.Readme,
+		Scripts: s.Scripts, References: s.References,
 	}
 }
 
@@ -103,202 +95,59 @@ func DeleteSkill(skillID string) (bool, error) {
 	return true, nil
 }
 
-// dbSkillTool mirrors the JSON structure stored in skills.tools.
-type dbSkillTool struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	InputSchema types.JSONSchema  `json:"inputSchema"`
-	Executor    SkillToolExecutor `json:"executor"`
-}
-
-func normalizeSkillBindingMode(mode string) string {
-	if mode == "always" {
-		return "always"
-	}
-	return "on_demand"
-}
-
-// GetSkillsContext compiles the bound skills for an agent.
-//
-// Bound skills are split into two runtime modes:
-//   - mode "always": full readme inlined into SkillsSnippet, tools registered
-//   - mode "on_demand": only name/description/id index in SkillsSnippet, no tools
-//
-// Unbound skills are not exposed to the agent.
-func GetSkillsContext(agentID string, agentSkills []SkillBinding) (*SkillContext, error) {
+// GetSkillsContext compiles a Level 1 metadata index for the given skill IDs.
+// All skills use progressive loading — no always/on_demand distinction.
+func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
 	all := store().GetAll()
 
-	var enabled []github.SkillData
+	enabledMap := make(map[string]github.SkillData)
 	for _, s := range all {
 		if s.Enabled {
-			enabled = append(enabled, s)
+			enabledMap[s.ID] = s
 		}
-	}
-
-	bindingMode := make(map[string]string, len(agentSkills))
-	for _, b := range agentSkills {
-		if b.ID == "" {
-			continue
-		}
-		bindingMode[b.ID] = normalizeSkillBindingMode(b.Mode)
 	}
 
 	ctx := &SkillContext{
-		Tools:            []types.ToolDefinition{},
-		ToolExecutors:    map[string]SkillToolExecutor{},
-		SkillDocs:        map[string]string{},
-		LoadableSkillIDs: map[string]bool{},
+		LoadableSkillIDs: make(map[string]bool),
 	}
 
-	var alwaysDocs []string
-	var onDemandSummaries []string
-
-	for _, s := range enabled {
-		var dbTools []dbSkillTool
-		toolsJSON, _ := json.Marshal(s.Tools)
-		_ = json.Unmarshal(toolsJSON, &dbTools)
-
-		mode, bound := bindingMode[s.ID]
-		if !bound {
+	var lines []string
+	for _, id := range skillIDs {
+		s, ok := enabledMap[id]
+		if !ok {
 			continue
 		}
-
-		switch {
-		case mode == "always":
-			doc := fmt.Sprintf("### Skill: %s\n%s", s.Name, s.Description)
-			if s.Readme != "" {
-				doc += "\n\n" + s.Readme
-			}
-			alwaysDocs = append(alwaysDocs, doc)
-
-			for _, t := range dbTools {
-				ctx.Tools = append(ctx.Tools, types.ToolDefinition{
-					Name:        t.Name,
-					Description: fmt.Sprintf("[Skill: %s] %s", s.Name, t.Description),
-					InputSchema: t.InputSchema,
-				})
-				ctx.ToolExecutors[t.Name] = t.Executor
-			}
-
-		case mode == "on_demand":
-			onDemandSummaries = append(onDemandSummaries,
-				fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
-			if s.Readme != "" {
-				ctx.SkillDocs[s.ID] = s.Readme
-			}
-			ctx.LoadableSkillIDs[s.ID] = true
-		}
+		lines = append(lines, fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
+		ctx.LoadableSkillIDs[s.ID] = true
 	}
 
-	var sections []string
-	if len(alwaysDocs) > 0 {
-		sections = append(sections, "## Skills\n\n"+strings.Join(alwaysDocs, "\n\n---\n\n"))
+	if len(lines) > 0 {
+		ctx.SkillsSnippet = fmt.Sprintf(
+			"## 可用技能\n\n以下技能可通过 load_skill 加载完整说明，通过 run_script 执行脚本。\n\n%s",
+			strings.Join(lines, "\n"),
+		)
 	}
-	if len(onDemandSummaries) > 0 {
-		sections = append(sections, fmt.Sprintf(
-			"## 更多可用技能\n\n以下技能的名称和用途已列出。需要完整说明或参考资料时，使用 `load_skill` 获取详情。\n\n%s",
-			strings.Join(onDemandSummaries, "\n"),
-		))
-	}
-	ctx.SkillsSnippet = strings.Join(sections, "\n\n")
-
-	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
-		Name:        "load_skill",
-		Description: "获取指定技能的完整文档和工具定义。当技能简介不足以完成任务时，使用此工具获取详细说明。",
-		InputSchema: types.JSONSchema{
-			Type: "object",
-			Properties: map[string]interface{}{
-				"skill_id": map[string]interface{}{
-					"type":        "string",
-					"description": "要加载的技能 ID",
-				},
-			},
-			Required: []string{"skill_id"},
-		},
-	})
-	ctx.ToolExecutors["load_skill"] = SkillToolExecutor{Type: "internal", Handler: "load_skill"}
-
-	ctx.Tools = append(ctx.Tools, types.ToolDefinition{
-		Name:        "load_skill_reference",
-		Description: "获取指定技能的详细参考文档。当 load_skill 返回的文档不够详细时，根据其 references 列表加载具体的参考文件。",
-		InputSchema: types.JSONSchema{
-			Type: "object",
-			Properties: map[string]interface{}{
-				"skill_id": map[string]interface{}{
-					"type":        "string",
-					"description": "技能 ID",
-				},
-				"reference": map[string]interface{}{
-					"type":        "string",
-					"description": "参考文件名（从 load_skill 返回的 references 列表中选择）",
-				},
-			},
-			Required: []string{"skill_id", "reference"},
-		},
-	})
-	ctx.ToolExecutors["load_skill_reference"] = SkillToolExecutor{Type: "internal", Handler: "load_skill_reference"}
 
 	return ctx, nil
 }
 
-// GetSkillToolsForRegistry returns structured tool definitions and executors for dynamic registration.
-func GetSkillToolsForRegistry(skillID string) ([]types.ToolDefinition, map[string]SkillToolExecutor, error) {
-	d := store().GetByID(skillID)
-	if d == nil || !d.Enabled {
-		return nil, nil, fmt.Errorf("skill not found or disabled: %s", skillID)
-	}
-
-	var dbTools []dbSkillTool
-	toolsJSON, _ := json.Marshal(d.Tools)
-	_ = json.Unmarshal(toolsJSON, &dbTools)
-
-	var defs []types.ToolDefinition
-	executors := make(map[string]SkillToolExecutor)
-	for _, t := range dbTools {
-		defs = append(defs, types.ToolDefinition{
-			Name:        t.Name,
-			Description: fmt.Sprintf("[Skill: %s] %s", d.Name, t.Description),
-			InputSchema: t.InputSchema,
-		})
-		executors[t.Name] = t.Executor
-	}
-	return defs, executors, nil
-}
-
-// GetSkillDetail returns a skill's readme, tool definitions, and reference index for load_skill.
+// GetSkillDetail returns a skill's content, scripts list, and reference index for load_skill.
 func GetSkillDetail(skillID string) (map[string]interface{}, error) {
 	d := store().GetByID(skillID)
 	if d == nil || !d.Enabled {
 		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
 	}
 
-	var toolRefs []map[string]interface{}
-	for _, t := range d.Tools {
-		if m, ok := t.(map[string]interface{}); ok {
-			ref := map[string]interface{}{
-				"name":        m["name"],
-				"description": m["description"],
-			}
-			if schema, ok := m["inputSchema"]; ok {
-				ref["inputSchema"] = schema
-			}
-			if exec, ok := m["executor"]; ok {
-				ref["executor"] = exec
-			}
-			toolRefs = append(toolRefs, ref)
-		}
-	}
-
 	result := map[string]interface{}{
-		"skill_id":    d.ID,
-		"name":        d.Name,
-		"description": d.Description,
-		"readme":      d.Readme,
-		"tools":       toolRefs,
+		"skill_id": d.ID,
+		"name":     d.Name,
+		"content":  d.Readme,
+	}
+	if len(d.Scripts) > 0 {
+		result["scripts"] = d.Scripts
 	}
 	if len(d.References) > 0 {
 		result["references"] = d.References
-		result["references_hint"] = "如需查看详细 API 参考文档，使用 load_skill_reference 工具加载具体的 reference 文件。"
 	}
 	return result, nil
 }

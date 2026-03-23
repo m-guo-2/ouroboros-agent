@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,8 +13,11 @@ import (
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
 	"agent/internal/eventlog"
+	"agent/internal/github"
 	"agent/internal/logger"
+	"agent/internal/sandbox"
 	"agent/internal/sanitize"
+	"agent/internal/skillexec"
 	"agent/internal/storage"
 	"agent/internal/subagent"
 	"agent/internal/timeutil"
@@ -57,12 +61,21 @@ const dataReportInstruction = `
 
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	result := agentSystemPrompt
+
+	// Prefer {{skills}} template placeholder; fall back to append.
 	if skillsSnippet != "" {
-		if result != "" {
-			result += "\n\n"
+		if strings.Contains(result, "{{skills}}") {
+			result = strings.Replace(result, "{{skills}}", skillsSnippet, 1)
+		} else {
+			if result != "" {
+				result += "\n\n"
+			}
+			result += skillsSnippet
 		}
-		result += skillsSnippet
+	} else if strings.Contains(result, "{{skills}}") {
+		result = strings.Replace(result, "{{skills}}", "", 1)
 	}
+
 	result += memoryInstruction
 	if cardrender.Available() {
 		result += dataReportInstruction
@@ -109,6 +122,26 @@ func resolveSubagentLLM(
 		return mainClient, mainModel
 	}
 	return buildLLMClient(override.Provider, creds), override.Model
+}
+
+// resolveSubagentSkillsSnippet compiles a skill metadata snippet for a subagent
+// based on the agent's SubagentSkills config (per-profile skill IDs).
+// Returns empty if no per-profile override is configured.
+func resolveSubagentSkillsSnippet(agentConfig *storage.AgentConfig, profile string) string {
+	var skillIDs []string
+	if agentConfig.SubagentSkills != nil {
+		if ids, ok := agentConfig.SubagentSkills[profile]; ok {
+			skillIDs = ids
+		}
+	}
+	if len(skillIDs) == 0 {
+		return ""
+	}
+	ctx, err := storage.GetSkillsContext(skillIDs)
+	if err != nil || ctx == nil {
+		return ""
+	}
+	return ctx.SkillsSnippet
 }
 
 func toPersistableMessages(loopMessages []types.AgentMessage) []storage.MessageData {
@@ -608,6 +641,8 @@ func registerSubagentTools(
 
 			subClient, subModel := resolveSubagentLLM(agentConfig, profile, llmClient, modelName)
 
+			subSkillsSnippet := resolveSubagentSkillsSnippet(agentConfig, profile)
+
 			job, err := manager.Start(subagent.StartRequest{
 				Profile:       profile,
 				Task:          task,
@@ -615,6 +650,7 @@ func registerSubagentTools(
 				Model:         subModel,
 				LLMClient:     subClient,
 				Tools:         registry.GetAll(),
+				SkillsSnippet: subSkillsSnippet,
 				ParentTraceID: traceID,
 				SessionID:     sessionID,
 				Timeout:       timeout,
@@ -822,17 +858,30 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		credentials = &storage.ProviderCredentials{}
 	}
 
-	skillsCtx, err := storage.GetSkillsContext(agentID, agentConfig.Skills)
+	skillsCtx, err := storage.GetSkillsContext(agentConfig.Skills)
 	if err != nil || skillsCtx == nil {
 		skillsCtx = &storage.SkillContext{
-			Tools:            []types.ToolDefinition{},
-			ToolExecutors:    map[string]storage.SkillToolExecutor{},
-			SkillDocs:        map[string]string{},
 			LoadableSkillIDs: map[string]bool{},
 		}
 	}
 
 	llmClient := buildLLMClient(provider, credentials)
+
+	sb, isNew, sbErr := sandboxMgr.GetOrCreate(worker.SessionID)
+	if sbErr != nil {
+		logger.Warn(ctx, "沙箱创建失败，使用宿主机执行", "error", sbErr.Error())
+		sb = nil
+	} else if isNew {
+		skillBasePaths := make(map[string]string)
+		for _, sid := range agentConfig.Skills {
+			if bp := github.DefaultStore.GetBasePath(sid); bp != "" {
+				skillBasePaths[sid] = bp
+			}
+		}
+		if err := sb.SyncSkills(skillBasePaths); err != nil {
+			logger.Warn(ctx, "沙箱 skill 同步失败", "error", err.Error())
+		}
+	}
 
 	shellSession := ostools.NewShellSession(worker.WorkDir)
 
@@ -841,6 +890,10 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	ostools.RegisterRecallContext(registry, worker.SessionID)
 	ostools.RegisterSaveMemory(registry, worker.SessionID)
 	engine.RegisterTavilyTool(registry)
+
+	if sb != nil {
+		sandbox.RegisterTools(registry, sb)
+	}
 
 	// Build a ProcessRequest for tool closures that need session-level metadata.
 	sessionReq := ProcessRequest{
@@ -995,6 +1048,8 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		}, nil
 	})
 
+	loadedSkills := make(map[string]bool)
+
 	internalHandlers := map[string]types.ToolExecutor{
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)
@@ -1006,22 +1061,13 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				for id := range skillsCtx.LoadableSkillIDs {
 					available = append(available, id)
 				}
-				return nil, fmt.Errorf("skill %q is not bound as on-demand. available skills: %s", skillID, strings.Join(available, ", "))
+				return nil, fmt.Errorf("skill %q is not bound to this agent. available skills: %s", skillID, strings.Join(available, ", "))
 			}
 			detail, err := storage.GetSkillDetail(skillID)
 			if err != nil {
-				available := make([]string, 0, len(skillsCtx.LoadableSkillIDs))
-				for id := range skillsCtx.LoadableSkillIDs {
-					available = append(available, id)
-				}
-				return nil, fmt.Errorf("%s. available skills: %s", err.Error(), strings.Join(available, ", "))
+				return nil, err
 			}
-
-			toolDefs, executors, toolErr := storage.GetSkillToolsForRegistry(skillID)
-			if toolErr == nil && len(toolDefs) > 0 {
-				registry.RegisterSkillTools(toolDefs, executors)
-			}
-
+			loadedSkills[skillID] = true
 			return detail, nil
 		},
 		"load_skill_reference": func(c context.Context, input map[string]interface{}) (interface{}, error) {
@@ -1030,13 +1076,123 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 			if skillID == "" || refName == "" {
 				return nil, fmt.Errorf("skill_id and reference are required")
 			}
-			if !skillsCtx.LoadableSkillIDs[skillID] {
-				return nil, fmt.Errorf("skill %q is not bound as on-demand", skillID)
+			if !loadedSkills[skillID] {
+				return nil, fmt.Errorf("skill %q has not been loaded yet; call load_skill first", skillID)
 			}
 			return storage.GetSkillReference(skillID, refName)
 		},
+		"run_script": func(c context.Context, input map[string]interface{}) (interface{}, error) {
+			skillID, _ := input["skill_id"].(string)
+			script, _ := input["script"].(string)
+			args, _ := input["args"].(string)
+			asyncMode, _ := input["async"].(bool)
+			if skillID == "" || script == "" {
+				return nil, fmt.Errorf("skill_id and script are required")
+			}
+			if !loadedSkills[skillID] {
+				return nil, fmt.Errorf("skill %q has not been loaded yet; call load_skill first", skillID)
+			}
+
+			var basePath string
+			if sb != nil {
+				basePath = sb.SkillBasePath(skillID)
+			} else {
+				basePath = github.DefaultStore.GetBasePath(skillID)
+			}
+			if basePath == "" {
+				return nil, fmt.Errorf("skill %q has no local files", skillID)
+			}
+
+			d := github.DefaultStore.GetByID(skillID)
+			if d == nil {
+				return nil, fmt.Errorf("skill %q not found", skillID)
+			}
+			scriptAllowed := false
+			for _, s := range d.Scripts {
+				if s == script {
+					scriptAllowed = true
+					break
+				}
+			}
+			if !scriptAllowed {
+				return nil, fmt.Errorf("script %q not in skill %s scripts list: %v", script, skillID, d.Scripts)
+			}
+
+			req := skillexec.ScriptRequest{
+				BasePath: basePath,
+				Script:   script,
+				Args:     args,
+			}
+
+			if !asyncMode {
+				executor := skillexec.NewLocalExecutor()
+				result, err := executor.Execute(c, req)
+				if err != nil {
+					return nil, err
+				}
+				return result, nil
+			}
+
+			b := make([]byte, 4)
+			_, _ = rand.Read(b)
+			taskID := fmt.Sprintf("script-%x", b)
+
+			go func() {
+				asyncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+
+				executor := skillexec.NewLocalExecutor()
+				result, err := executor.Execute(asyncCtx, req)
+
+				var content string
+				if err != nil {
+					content = fmt.Sprintf("【脚本失败】\ntask_id=%s\nskill=%s script=%s\n\n错误: %s", taskID, skillID, script, err)
+				} else if result.ExitCode != 0 {
+					content = fmt.Sprintf("【脚本失败】\ntask_id=%s\nskill=%s script=%s\nexit_code=%d\n\n%s", taskID, skillID, script, result.ExitCode, result.Output)
+				} else {
+					content = fmt.Sprintf("【脚本完成】\ntask_id=%s\nskill=%s script=%s\n\n%s", taskID, skillID, script, result.Output)
+				}
+
+				savedMsg, saveErr := storage.SaveMessage(map[string]interface{}{
+					"sessionId":   sessionReq.SessionID,
+					"role":        "user",
+					"content":     content,
+					"messageType": "text",
+					"channel":     sessionReq.Channel,
+					"initiator":   "system",
+					"senderId":    sessionReq.ChannelUserID,
+				})
+				if saveErr != nil || savedMsg == nil {
+					logger.Warn(context.Background(), "async script 结果保存失败",
+						"taskId", taskID, "error", fmt.Sprint(saveErr))
+					return
+				}
+				_ = storage.AppendSessionEvent(sessionReq.SessionID, savedMsg.ID)
+
+				if err := EnqueueProcessRequest(context.Background(), ProcessRequest{
+					UserID:                sessionReq.UserID,
+					AgentID:               sessionReq.AgentID,
+					Content:               content,
+					Channel:               sessionReq.Channel,
+					ChannelUserID:         sessionReq.ChannelUserID,
+					ChannelConversationID: sessionReq.ChannelConversationID,
+					MessageType:           "text",
+					MessageID:             savedMsg.ID,
+					SessionID:             sessionReq.SessionID,
+				}); err != nil {
+					logger.Warn(context.Background(), "async script 完成事件入队失败",
+						"taskId", taskID, "error", err.Error())
+				}
+			}()
+
+			return map[string]interface{}{
+				"task_id": taskID,
+				"status":  "running",
+				"message": "脚本已在后台执行，完成后系统会自动通知你",
+			}, nil
+		},
 	}
-	registry.RegisterSkills(skillsCtx, internalHandlers)
+	registry.RegisterSkillInternalTools(internalHandlers)
 
 	systemPrompt := BuildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SkillsSnippet)
 

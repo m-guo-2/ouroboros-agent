@@ -14,7 +14,7 @@ import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
 import { useSkills } from "@/hooks/use-skills"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
-import type { AvailableModel, SkillBinding, SubagentModelConfig } from "@/api/types"
+import type { AvailableModel, SubagentModelConfig } from "@/api/types"
 
 const PROVIDERS = [
   { value: "anthropic", label: "Anthropic (Claude)" },
@@ -44,9 +44,10 @@ export function AgentDetail() {
   const [prompt, setPrompt] = useState("")
   const [provider, setProvider] = useState("")
   const [model, setModel] = useState("")
-  const [selectedSkills, setSelectedSkills] = useState<SkillBinding[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [isActive, setIsActive] = useState(true)
   const [subagentModels, setSubagentModels] = useState<Record<string, SubagentModelConfig>>({})
+  const [subagentSkills, setSubagentSkills] = useState<Record<string, string[]>>({})
   const [initialized, setInitialized] = useState(false)
 
   // 模型查询相关
@@ -102,6 +103,7 @@ export function AgentDetail() {
     setSelectedSkills(agent.skills ?? [])
     setIsActive(agent.isActive !== false)
     setSubagentModels(agent.subagentModels ?? {})
+    setSubagentSkills(agent.subagentSkills ?? {})
     setInitialized(true)
   }
 
@@ -148,6 +150,12 @@ export function AgentDetail() {
         filteredSubagentModels[profile] = cfg
       }
     }
+    const filteredSubagentSkills: Record<string, string[]> = {}
+    for (const [profile, ids] of Object.entries(subagentSkills)) {
+      if (ids.length > 0) {
+        filteredSubagentSkills[profile] = ids
+      }
+    }
     const updated = await updateMutation.mutateAsync({
       id: agent.id,
       data: {
@@ -157,6 +165,7 @@ export function AgentDetail() {
         model: model || undefined,
         skills: selectedSkills,
         subagentModels: filteredSubagentModels,
+        subagentSkills: filteredSubagentSkills,
         isActive,
       },
     })
@@ -172,19 +181,21 @@ export function AgentDetail() {
   }
 
   const toggleSkill = (skillId: string) => {
-    setSelectedSkills((prev) => {
-      const existing = prev.find((s) => s.id === skillId)
-      if (existing) {
-        return prev.filter((s) => s.id !== skillId)
-      }
-      return [...prev, { id: skillId, mode: "on_demand" as const }]
-    })
+    setSelectedSkills((prev) =>
+      prev.includes(skillId)
+        ? prev.filter((id) => id !== skillId)
+        : [...prev, skillId]
+    )
   }
 
-  const setSkillMode = (skillId: string, mode: SkillBinding["mode"]) => {
-    setSelectedSkills((prev) =>
-      prev.map((s) => (s.id === skillId ? { ...s, mode } : s))
-    )
+  const toggleSubagentSkill = (profile: string, skillId: string) => {
+    setSubagentSkills((prev) => {
+      const current = prev[profile] ?? []
+      const next = current.includes(skillId)
+        ? current.filter((id) => id !== skillId)
+        : [...current, skillId]
+      return { ...prev, [profile]: next }
+    })
   }
 
   return (
@@ -314,7 +325,7 @@ export function AgentDetail() {
                 <label className="text-sm font-medium text-slate-700 mb-1.5 block">
                   系统提示词
                   <span className="ml-2 text-xs font-normal text-slate-400">
-                    绑定的技能会自动附加到最终 prompt。「始终展开」注入完整内容；「按需展开」仅注入名称和简介，模型通过工具获取详情
+                    绑定的技能名称和简介会注入 prompt，模型通过 load_skill / run_script 工具按需加载完整内容和执行脚本
                   </span>
                 </label>
                 <Textarea
@@ -407,7 +418,7 @@ export function AgentDetail() {
         <TabsContent value="skills">
           <Card>
             <CardHeader>
-              <CardTitle>技能绑定</CardTitle>
+              <CardTitle>主 Agent 技能绑定</CardTitle>
             </CardHeader>
             <CardContent>
               {!skills || skills.length === 0 ? (
@@ -415,8 +426,7 @@ export function AgentDetail() {
               ) : (
                 <div className="space-y-2">
                   {skills.map((skill) => {
-                    const binding = selectedSkills.find((s) => s.id === skill.id)
-                    const isBound = !!binding
+                    const isBound = selectedSkills.includes(skill.id)
                     return (
                       <div
                         key={skill.id}
@@ -432,35 +442,52 @@ export function AgentDetail() {
                             onCheckedChange={() => toggleSkill(skill.id)}
                           />
                         </div>
-                        {isBound && (
-                          <div className="mt-2 flex items-center gap-1">
-                            <span className="text-xs text-slate-400 mr-1.5">加载模式</span>
-                            <div className="inline-flex rounded-md border border-slate-200 bg-white text-xs">
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>
+                子 Agent 技能配置
+                <span className="ml-2 text-xs font-normal text-slate-400">
+                  为每个 subagent profile 独立配置技能
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!skills || skills.length === 0 ? (
+                <p className="text-sm text-slate-500">暂无可用技能</p>
+              ) : (
+                <div className="space-y-4">
+                  {SUBAGENT_PROFILES.map((p) => {
+                    const profileSkills = subagentSkills[p.key] ?? []
+                    return (
+                      <div key={p.key} className="border border-slate-200 rounded-md p-3">
+                        <p className="text-sm font-medium text-slate-700 mb-2">{p.label}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {skills.map((skill) => {
+                            const isSelected = profileSkills.includes(skill.id)
+                            return (
                               <button
+                                key={skill.id}
                                 type="button"
-                                className={`px-2.5 py-1 rounded-l-md transition-colors ${
-                                  binding.mode === "always"
-                                    ? "bg-brand-600 text-white"
-                                    : "text-slate-600 hover:bg-slate-50"
+                                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                                  isSelected
+                                    ? "bg-brand-600 text-white border-brand-600"
+                                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                                 }`}
-                                onClick={() => setSkillMode(skill.id, "always")}
+                                onClick={() => toggleSubagentSkill(p.key, skill.id)}
                               >
-                                始终展开
+                                {skill.name}
                               </button>
-                              <button
-                                type="button"
-                                className={`px-2.5 py-1 rounded-r-md border-l border-slate-200 transition-colors ${
-                                  binding.mode === "on_demand"
-                                    ? "bg-brand-600 text-white"
-                                    : "text-slate-600 hover:bg-slate-50"
-                                }`}
-                                onClick={() => setSkillMode(skill.id, "on_demand")}
-                              >
-                                按需展开
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                            )
+                          })}
+                        </div>
                       </div>
                     )
                   })}

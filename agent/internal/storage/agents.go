@@ -31,25 +31,26 @@ var providerCredentialsKey = map[string]providerKeyConfig{
 
 const agentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),
 	COALESCE(provider,''), COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(channels,'[]'), is_active,
-	COALESCE(subagent_models,'{}')`
+	COALESCE(subagent_models,'{}'), COALESCE(subagent_skills,'{}')`
 
 // scanAgentConfig scans a single row into AgentConfig.
 // channels in the DB may be stored with either legacy keys (channelType/channelIdentifier)
 // or current keys (type/identifier); both are handled transparently.
 func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	var cfg AgentConfig
-	var skillsJSON, channelsJSON, subagentModelsJSON string
+	var skillsJSON, channelsJSON, subagentModelsJSON, subagentSkillsJSON string
 	var isActive int
 	if err := scan(
 		&cfg.ID, &cfg.ModelID, &cfg.DisplayName, &cfg.SystemPrompt,
 		&cfg.Provider, &cfg.Model, &skillsJSON, &channelsJSON, &isActive,
-		&subagentModelsJSON,
+		&subagentModelsJSON, &subagentSkillsJSON,
 	); err != nil {
 		return cfg, err
 	}
 	cfg.IsActive = isActive == 1
-	_ = json.Unmarshal([]byte(skillsJSON), &cfg.Skills)
+	cfg.Skills = parseSkillIDs(skillsJSON)
 	_ = json.Unmarshal([]byte(subagentModelsJSON), &cfg.SubagentModels)
+	_ = json.Unmarshal([]byte(subagentSkillsJSON), &cfg.SubagentSkills)
 
 	// Support legacy storage format {"channelType":...,"channelIdentifier":...}
 	var rawChannels []map[string]string
@@ -73,9 +74,29 @@ func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 		cfg.Channels = []ChannelBinding{}
 	}
 	if cfg.Skills == nil {
-		cfg.Skills = []SkillBinding{}
+		cfg.Skills = []string{}
 	}
 	return cfg, nil
+}
+
+// parseSkillIDs handles both the new format ["id1","id2"] and legacy format [{"id":"id1","mode":"always"}].
+func parseSkillIDs(raw string) []string {
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err == nil {
+		return ids
+	}
+	var legacy []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &legacy); err == nil {
+		for _, l := range legacy {
+			if l.ID != "" {
+				ids = append(ids, l.ID)
+			}
+		}
+		return ids
+	}
+	return nil
 }
 
 // GetAgentConfig retrieves an agent's full configuration by ID.
@@ -145,16 +166,20 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 	if cfg.SubagentModels == nil {
 		subagentModelsJSON = []byte("{}")
 	}
+	subagentSkillsJSON, _ := json.Marshal(cfg.SubagentSkills)
+	if cfg.SubagentSkills == nil {
+		subagentSkillsJSON = []byte("{}")
+	}
 	isActive := 0
 	if cfg.IsActive {
 		isActive = 1
 	}
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, subagent_models, is_active, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, subagent_models, subagent_skills, is_active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cfg.ID, "", cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
-		string(skillsJSON), string(channelsJSON), string(subagentModelsJSON), isActive, now, now,
+		string(skillsJSON), string(channelsJSON), string(subagentModelsJSON), string(subagentSkillsJSON), isActive, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -205,6 +230,10 @@ func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentCo
 	if subagentModels, ok := updates["subagentModels"]; ok {
 		b, _ := json.Marshal(subagentModels)
 		DB.Exec("UPDATE agent_configs SET subagent_models = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
+	}
+	if subagentSkills, ok := updates["subagentSkills"]; ok {
+		b, _ := json.Marshal(subagentSkills)
+		DB.Exec("UPDATE agent_configs SET subagent_skills = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
 	}
 	return GetAgentConfig(agentID)
 }

@@ -28,11 +28,12 @@ type Qiwei struct {
 }
 
 type GitHub struct {
-	Token        string `yaml:"token"`
-	SkillsRepo   string `yaml:"skills_repo"`
-	Branch       string `yaml:"branch"`
-	SkillsPath   string `yaml:"skills_path"`
-	SyncInterval string `yaml:"sync_interval"`
+	Token          string `yaml:"token"`
+	SkillsRepo     string `yaml:"skills_repo"`
+	Branch         string `yaml:"branch"`
+	SkillsPath     string `yaml:"skills_path"`
+	SkillsLocalDir string `yaml:"skills_local_dir"` // local disk cache for skill files (scripts, references)
+	SyncInterval   string `yaml:"sync_interval"`
 }
 
 // ParseSyncInterval returns the sync interval as a time.Duration.
@@ -146,5 +147,6 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("GITHUB_SKILLS_REPO", &cfg.GitHub.SkillsRepo)
 	envStr("GITHUB_SKILLS_BRANCH", &cfg.GitHub.Branch)
 	envStr("GITHUB_SKILLS_PATH", &cfg.GitHub.SkillsPath)
+	envStr("GITHUB_SKILLS_LOCAL_DIR", &cfg.GitHub.SkillsLocalDir)
 	envStr("GITHUB_SYNC_INTERVAL", &cfg.GitHub.SyncInterval)
 }

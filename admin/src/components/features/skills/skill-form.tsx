@@ -12,25 +12,15 @@ interface SkillFormDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-const typeOptions = [
-  { value: "knowledge", label: "知识" },
-  { value: "action", label: "动作" },
-  { value: "hybrid", label: "混合" },
-] as const
-
 export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [type, setType] = useState<"knowledge" | "action" | "hybrid">("knowledge")
-  const [triggers, setTriggers] = useState("")
   const [readme, setReadme] = useState("")
   const createMutation = useCreateSkill()
 
   const reset = () => {
     setName("")
     setDescription("")
-    setType("knowledge")
-    setTriggers("")
     setReadme("")
   }
 
@@ -41,10 +31,7 @@ export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
     await createMutation.mutateAsync({
       name: name.trim(),
       description: description.trim(),
-      type,
       enabled: true,
-      triggers: triggers.split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
-      tools: [],
       readme: readme.trim() || undefined,
     })
     reset()
@@ -56,7 +43,7 @@ export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>新建技能</DialogTitle>
-          <DialogDescription>创建一个新的 Skill，工具可在详情页配置</DialogDescription>
+          <DialogDescription>创建一个新的 Skill，脚本和参考文档在 GitHub 仓库中管理</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -64,7 +51,7 @@ export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="如：feishu-agent"
+              placeholder="如：code-review"
               autoFocus
             />
           </div>
@@ -74,47 +61,17 @@ export function SkillFormDialog({ open, onOpenChange }: SkillFormDialogProps) {
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="简要描述技能的功能"
+              placeholder="描述技能的功能和适用场景（LLM 匹配触发的唯一依据）"
             />
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700 mb-1.5 block">类型</label>
-            <div className="flex gap-2">
-              {typeOptions.map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setType(opt.value)}
-                  className={`px-3 py-1.5 text-sm rounded-md border transition-colors cursor-pointer ${
-                    type === opt.value
-                      ? "border-brand-300 bg-brand-50 text-brand-700"
-                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-slate-700 mb-1.5 block">触发词</label>
-            <Input
-              value={triggers}
-              onChange={(e) => setTriggers(e.target.value)}
-              placeholder="逗号分隔，如：飞书, Lark, 群聊"
-            />
-            <p className="text-xs text-slate-400 mt-1">用逗号分隔多个触发词</p>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-slate-700 mb-1.5 block">README</label>
+            <label className="text-sm font-medium text-slate-700 mb-1.5 block">SKILL.md 内容</label>
             <Textarea
               value={readme}
               onChange={(e) => setReadme(e.target.value)}
-              placeholder="技能说明文档（Markdown 格式）"
-              rows={4}
+              placeholder="Markdown 格式的操作指令，包含脚本用法、参数说明等"
+              rows={6}
             />
           </div>
 

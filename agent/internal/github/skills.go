@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,50 +17,40 @@ import (
 )
 
 // SkillData represents a skill stored in the GitHub repo.
+// Standard structure: SKILL.md (frontmatter + body) + scripts/ + references/
 type SkillData struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Version     string                 `json:"version"`
-	Type        string                 `json:"type"`
-	Enabled     bool                   `json:"enabled"`
-	Triggers    []interface{}          `json:"triggers"`
-	Tools       []interface{}          `json:"tools"`
-	Readme      string                 `json:"readme"`
-	References  []string               `json:"references,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Enabled     bool     `json:"enabled"`
+	Readme      string   `json:"readme"`
+	Scripts     []string `json:"scripts,omitempty"`
+	References  []string `json:"references,omitempty"`
+	BasePath    string   `json:"-"` // local disk path, not serialized
 }
 
-// skillManifest is the JSON structure written to manifest.json (no readme).
-type skillManifest struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Version     string                 `json:"version"`
-	Type        string                 `json:"type"`
-	Enabled     bool                   `json:"enabled"`
-	Triggers    []interface{}          `json:"triggers"`
-	Tools       []interface{}          `json:"tools"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-}
 
 type cachedEntry struct {
 	SkillData
-	manifestSHA string
-	readmeSHA   string
+	skillMdSHA string
 }
 
 const defaultBasePath = "skills"
 
-// Store manages skills in a GitHub repository with an in-memory cache.
+// Store manages skills in a GitHub repository with an in-memory cache
+// and local disk mirror for scripts/references.
 //
 // Repo layout:
 //
-//	{basePath}/{skill-id}/manifest.json   — all fields except readme
-//	{basePath}/{skill-id}/README.md       — readme content
+//	{basePath}/{skill-id}/SKILL.md        — standard: frontmatter + body
+//	{basePath}/{skill-id}/manifest.json   — legacy: JSON metadata
+//	{basePath}/{skill-id}/README.md       — legacy: readme content
+//	{basePath}/{skill-id}/scripts/        — executable scripts
+//	{basePath}/{skill-id}/references/     — reference documents
 type Store struct {
 	client   *Client
 	basePath string
+	localDir string // local disk mirror root
 
 	mu    sync.RWMutex
 	cache map[string]*cachedEntry
@@ -82,9 +74,14 @@ func NewStore(gh config.GitHub) error {
 	if base == "" {
 		base = defaultBasePath
 	}
+	localDir := gh.SkillsLocalDir
+	if localDir == "" {
+		localDir = "data/skills"
+	}
 	DefaultStore = &Store{
 		client:   client,
 		basePath: strings.TrimSuffix(base, "/"),
+		localDir: localDir,
 		cache:    make(map[string]*cachedEntry),
 	}
 	return nil
@@ -106,13 +103,13 @@ func (s *Store) Ready() bool {
 	return s.ready.Load()
 }
 
-func (s *Store) skillDir(id string) string    { return s.basePath + "/" + id }
-func (s *Store) manifestPath(id string) string { return s.skillDir(id) + "/manifest.json" }
-func (s *Store) readmePath(id string) string   { return s.skillDir(id) + "/README.md" }
-func (s *Store) skillMdPath(id string) string  { return s.skillDir(id) + "/SKILL.md" }
-func (s *Store) refsDir(id string) string      { return s.skillDir(id) + "/references" }
+func (s *Store) skillDir(id string) string     { return s.basePath + "/" + id }
+func (s *Store) skillMdPath(id string) string   { return s.skillDir(id) + "/SKILL.md" }
+func (s *Store) refsDir(id string) string       { return s.skillDir(id) + "/references" }
+func (s *Store) scriptsDir(id string) string    { return s.skillDir(id) + "/scripts" }
 
-// refresh reloads every skill from the GitHub repo into memory.
+// refresh reloads every skill from the GitHub repo, syncs files to local disk,
+// and updates the in-memory metadata cache.
 func (s *Store) refresh() error {
 	entries, err := s.client.ListDir(s.basePath)
 	if err != nil {
@@ -123,6 +120,10 @@ func (s *Store) refresh() error {
 			return nil
 		}
 		return err
+	}
+
+	if err := os.MkdirAll(s.localDir, 0o755); err != nil {
+		return fmt.Errorf("create local skills dir: %w", err)
 	}
 
 	next := make(map[string]*cachedEntry, len(entries))
@@ -137,6 +138,13 @@ func (s *Store) refresh() error {
 			log.Printf("⚠️  skip skill %s: %s", id, err)
 			continue
 		}
+
+		localSkillDir := filepath.Join(s.localDir, id)
+		if err := s.syncSkillToDisk(id, localSkillDir); err != nil {
+			log.Printf("⚠️  disk sync failed for skill %s: %s", id, err)
+		}
+		entry.BasePath = localSkillDir
+
 		next[id] = entry
 	}
 
@@ -146,66 +154,84 @@ func (s *Store) refresh() error {
 	return nil
 }
 
-// loadSkillEntry loads a single skill's metadata, readme, and reference index.
-// It tries manifest.json first, then falls back to SKILL.md (frontmatter + body).
+// syncSkillToDisk writes SKILL.md, scripts/, and references/ to local disk.
+func (s *Store) syncSkillToDisk(id, localDir string) error {
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		return err
+	}
+
+	if content, _, err := s.client.GetFileContent(s.skillMdPath(id)); err == nil {
+		if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write SKILL.md: %w", err)
+		}
+	}
+
+	// Sync scripts/
+	s.syncDirToDisk(s.scriptsDir(id), filepath.Join(localDir, "scripts"))
+
+	// Sync references/
+	s.syncDirToDisk(s.refsDir(id), filepath.Join(localDir, "references"))
+
+	return nil
+}
+
+// syncDirToDisk downloads all files from a remote directory to a local directory.
+func (s *Store) syncDirToDisk(remoteDir, localDir string) {
+	entries, err := s.client.ListDir(remoteDir)
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	_ = os.MkdirAll(localDir, 0o755)
+	for _, e := range entries {
+		if e.Type != "file" {
+			continue
+		}
+		content, _, err := s.client.GetFileContent(remoteDir + "/" + e.Name)
+		if err != nil {
+			log.Printf("⚠️  skip file %s/%s: %s", remoteDir, e.Name, err)
+			continue
+		}
+		localPath := filepath.Join(localDir, e.Name)
+		if err := os.WriteFile(localPath, []byte(content), 0o755); err != nil {
+			log.Printf("⚠️  write %s: %s", localPath, err)
+		}
+	}
+}
+
+// loadSkillEntry loads a single skill from its SKILL.md (standard format).
 func (s *Store) loadSkillEntry(id string) (*cachedEntry, error) {
 	entry := &cachedEntry{}
 
-	content, sha, err := s.client.GetFileContent(s.manifestPath(id))
-	if err == nil {
-		var m skillManifest
-		if err := json.Unmarshal([]byte(content), &m); err != nil {
-			return nil, fmt.Errorf("invalid manifest: %w", err)
-		}
-		entry.SkillData = SkillData{
-			ID: m.ID, Name: m.Name, Description: m.Description,
-			Version: m.Version, Type: m.Type, Enabled: m.Enabled,
-			Triggers: m.Triggers, Tools: m.Tools, Metadata: m.Metadata,
-		}
-		entry.manifestSHA = sha
-
-		readme, rSHA, err := s.client.GetFileContent(s.readmePath(id))
-		if err == nil {
-			entry.Readme = readme
-			entry.readmeSHA = rSHA
-		}
-	} else if IsNotFound(err) {
-		if err := s.loadFromSkillMd(id, entry); err != nil {
-			return nil, err
-		}
-	} else {
-		return nil, err
+	if err := s.loadFromSkillMd(id, entry); err != nil {
+		return nil, fmt.Errorf("skill %s: %w", id, err)
 	}
 
 	if entry.ID == "" {
 		entry.ID = id
 	}
-	if entry.Triggers == nil {
-		entry.Triggers = []interface{}{}
-	}
-	if entry.Tools == nil {
-		entry.Tools = []interface{}{}
-	}
 
+	entry.Scripts = s.listScripts(id)
 	entry.References = s.listReferences(id)
 
 	return entry, nil
 }
 
-// loadFromSkillMd parses a SKILL.md file (YAML frontmatter + markdown body)
-// as a fallback when manifest.json does not exist.
+// loadFromSkillMd parses a SKILL.md file (YAML frontmatter + markdown body).
+// Standard frontmatter: name + description.
 func (s *Store) loadFromSkillMd(id string, entry *cachedEntry) error {
-	content, _, err := s.client.GetFileContent(s.skillMdPath(id))
+	content, sha, err := s.client.GetFileContent(s.skillMdPath(id))
 	if err != nil {
-		return fmt.Errorf("no manifest.json or SKILL.md: %w", err)
+		return err
 	}
 
+	entry.skillMdSHA = sha
 	fm, body := splitFrontmatter(content)
 
 	entry.SkillData = SkillData{
 		ID:      id,
-		Version: "1.0.0",
-		Type:    "knowledge",
 		Enabled: true,
 	}
 	entry.Readme = body
@@ -219,8 +245,8 @@ func (s *Store) loadFromSkillMd(id string, entry *cachedEntry) error {
 			if v, ok := meta["description"].(string); ok {
 				entry.Description = v
 			}
-			if v, ok := meta["type"].(string); ok {
-				entry.Type = v
+			if v, ok := meta["enabled"].(bool); ok {
+				entry.Enabled = v
 			}
 		}
 	}
@@ -240,6 +266,22 @@ func (s *Store) listReferences(id string) []string {
 	var names []string
 	for _, e := range entries {
 		if e.Type == "file" {
+			names = append(names, e.Name)
+		}
+	}
+	return names
+}
+
+// listScripts returns the file names in the skill's scripts/ directory.
+// Files starting with "_" are internal helpers and excluded from the list.
+func (s *Store) listScripts(id string) []string {
+	entries, err := s.client.ListDir(s.scriptsDir(id))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.Type == "file" && !strings.HasPrefix(e.Name, "_") {
 			names = append(names, e.Name)
 		}
 	}
@@ -366,6 +408,16 @@ func (s *Store) GetByID(id string) *SkillData {
 	return nil
 }
 
+// GetBasePath returns the local disk path for a skill's files.
+func (s *Store) GetBasePath(id string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if e, ok := s.cache[id]; ok {
+		return e.BasePath
+	}
+	return ""
+}
+
 // GetByName returns the first skill with the given name, or nil.
 func (s *Store) GetByName(name string) *SkillData {
 	s.mu.RLock()
@@ -389,7 +441,7 @@ func (s *Store) Create(skill SkillData) (*SkillData, error) {
 	defaults(&skill)
 
 	msg := fmt.Sprintf("create skill: %s", skill.Name)
-	if err := s.writeFiles(skill, "", "", msg); err != nil {
+	if err := s.writeFiles(skill, "", msg); err != nil {
 		return nil, err
 	}
 	if err := s.refresh(); err != nil {
@@ -407,17 +459,15 @@ func (s *Store) Update(id string, updates map[string]interface{}) (*SkillData, e
 		return nil, fmt.Errorf("skill not found: %s", id)
 	}
 	skill := entry.SkillData
-	mSHA := entry.manifestSHA
-	rSHA := entry.readmeSHA
+	sha := entry.skillMdSHA
 	s.mu.RUnlock()
 
-	readmeChanged := applyUpdates(&skill, updates)
+	applyUpdates(&skill, updates)
 
 	msg := fmt.Sprintf("update skill: %s", skill.Name)
-	if err := s.writeFiles(skill, mSHA, rSHA, msg); err != nil {
+	if err := s.writeFiles(skill, sha, msg); err != nil {
 		return nil, err
 	}
-	_ = readmeChanged // writeFiles always writes README if content is non-empty
 
 	if err := s.refresh(); err != nil {
 		return nil, fmt.Errorf("refresh after update: %w", err)
@@ -458,43 +508,34 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
-// writeFiles writes manifest.json and README.md for a skill.
-func (s *Store) writeFiles(skill SkillData, mSHA, rSHA, msg string) error {
-	m := skillManifest{
-		ID: skill.ID, Name: skill.Name, Description: skill.Description,
-		Version: skill.Version, Type: skill.Type, Enabled: skill.Enabled,
-		Triggers: skill.Triggers, Tools: skill.Tools, Metadata: skill.Metadata,
+// writeFiles writes a standard SKILL.md (YAML frontmatter + markdown body).
+func (s *Store) writeFiles(skill SkillData, sha, msg string) error {
+	var buf strings.Builder
+	buf.WriteString("---\n")
+	buf.WriteString("name: " + skill.Name + "\n")
+	buf.WriteString("description: " + skill.Description + "\n")
+	if !skill.Enabled {
+		buf.WriteString("enabled: false\n")
 	}
-	data, _ := json.MarshalIndent(m, "", "  ")
-
-	if err := s.client.PutFile(s.manifestPath(skill.ID), msg, string(data), mSHA); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
-	}
-	if skill.Readme != "" || rSHA != "" {
-		if err := s.client.PutFile(s.readmePath(skill.ID), msg, skill.Readme, rSHA); err != nil {
-			return fmt.Errorf("write readme: %w", err)
+	buf.WriteString("---\n")
+	if skill.Readme != "" {
+		buf.WriteString(skill.Readme)
+		if !strings.HasSuffix(skill.Readme, "\n") {
+			buf.WriteString("\n")
 		}
+	}
+
+	if err := s.client.PutFile(s.skillMdPath(skill.ID), msg, buf.String(), sha); err != nil {
+		return fmt.Errorf("write SKILL.md: %w", err)
 	}
 	return nil
 }
 
 func defaults(s *SkillData) {
-	if s.Version == "" {
-		s.Version = "1.0.0"
-	}
-	if s.Type == "" {
-		s.Type = "knowledge"
-	}
-	if s.Triggers == nil {
-		s.Triggers = []interface{}{}
-	}
-	if s.Tools == nil {
-		s.Tools = []interface{}{}
-	}
+	// No-op: simplified SkillData has no fields requiring defaults
 }
 
-func applyUpdates(s *SkillData, updates map[string]interface{}) bool {
-	readmeChanged := false
+func applyUpdates(s *SkillData, updates map[string]interface{}) {
 	for key, val := range updates {
 		switch key {
 		case "name":
@@ -505,36 +546,14 @@ func applyUpdates(s *SkillData, updates map[string]interface{}) bool {
 			if v, ok := val.(string); ok {
 				s.Description = v
 			}
-		case "version":
-			if v, ok := val.(string); ok {
-				s.Version = v
-			}
-		case "type":
-			if v, ok := val.(string); ok {
-				s.Type = v
-			}
 		case "readme":
 			if v, ok := val.(string); ok {
 				s.Readme = v
-				readmeChanged = true
 			}
 		case "enabled":
 			if v, ok := val.(bool); ok {
 				s.Enabled = v
 			}
-		case "triggers":
-			if v, ok := val.([]interface{}); ok {
-				s.Triggers = v
-			}
-		case "tools":
-			if v, ok := val.([]interface{}); ok {
-				s.Tools = v
-			}
-		case "metadata":
-			if v, ok := val.(map[string]interface{}); ok {
-				s.Metadata = v
-			}
 		}
 	}
-	return readmeChanged
 }

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -287,14 +288,57 @@ func runSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_session_facts_session ON session_facts(session_id)`,
 
 		`ALTER TABLE agent_configs ADD COLUMN subagent_models TEXT DEFAULT '{}'`,
+
+		// Skill system redesign: add subagent_skills column
+		`ALTER TABLE agent_configs ADD COLUMN subagent_skills TEXT DEFAULT '{}'`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
 	}
 
+	migrateSkillBindingsToIDs(db)
 	seedDefaultModels(db)
 
 	return nil
+}
+
+// migrateSkillBindingsToIDs converts legacy skills format [{"id":"x","mode":"y"}] to ["x","y"].
+func migrateSkillBindingsToIDs(db *sql.DB) {
+	rows, err := db.Query("SELECT id, skills FROM agent_configs WHERE skills != '[]' AND skills != ''")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			continue
+		}
+		// Skip if already in new format
+		var ids []string
+		if json.Unmarshal([]byte(raw), &ids) == nil {
+			continue
+		}
+		// Try legacy format
+		var legacy []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+			continue
+		}
+		var newIDs []string
+		for _, l := range legacy {
+			if l.ID != "" {
+				newIDs = append(newIDs, l.ID)
+			}
+		}
+		if len(newIDs) == 0 {
+			continue
+		}
+		b, _ := json.Marshal(newIDs)
+		db.Exec("UPDATE agent_configs SET skills = ? WHERE id = ?", string(b), id)
+	}
 }
 
 func seedDefaultModels(db *sql.DB) {

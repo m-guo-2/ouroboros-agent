@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom"
-import { ArrowLeft, Trash2, Pencil, Save, X, Plus, Minus, Eye, Code } from "lucide-react"
+import { ArrowLeft, Trash2, Pencil, Save, X } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,26 +11,7 @@ import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { MarkdownContent } from "@/components/shared/markdown-content"
-import { SkillVersions } from "./skill-versions"
 import { useSkill, useToggleSkill, useDeleteSkill, useUpdateSkill } from "@/hooks/use-skills"
-import type { SkillManifest } from "@/api/types"
-
-type SkillTool = NonNullable<SkillManifest["tools"]>[number]
-
-const typeOptions = [
-  { value: "knowledge", label: "知识" },
-  { value: "action", label: "动作" },
-  { value: "hybrid", label: "混合" },
-] as const
-
-function emptyTool(): SkillTool {
-  return {
-    name: "",
-    description: "",
-    inputSchema: { type: "object", properties: {}, required: [] },
-    executor: { type: "http", url: "", method: "POST" },
-  }
-}
 
 export function SkillDetail() {
   const { name: skillId } = useParams<{ name: string }>()
@@ -42,27 +23,12 @@ export function SkillDetail() {
 
   const [editing, setEditing] = useState(false)
   const [description, setDescription] = useState("")
-  const [type, setType] = useState<"knowledge" | "action" | "hybrid">("knowledge")
-  const [triggers, setTriggers] = useState("")
   const [readme, setReadme] = useState("")
-  const [tools, setTools] = useState<SkillTool[]>([])
-  const [toolsJson, setToolsJson] = useState("")
-  const [toolsJsonError, setToolsJsonError] = useState("")
-  const [toolEditMode, setToolEditMode] = useState<"visual" | "json">("visual")
-  const [changeSummary, setChangeSummary] = useState("")
 
   const syncFromSkill = useCallback(() => {
     if (!skill) return
     setDescription(skill.description ?? "")
-    setType((skill.type as "knowledge" | "action" | "hybrid") ?? "knowledge")
-    const trigs = Array.isArray(skill.triggers) ? skill.triggers.map(String) : []
-    setTriggers(trigs.join(", "))
     setReadme(skill.readme ?? "")
-    const skillTools = (Array.isArray(skill.tools) ? skill.tools : []) as SkillTool[]
-    setTools(structuredClone(skillTools))
-    setToolsJson(JSON.stringify(skillTools, null, 2))
-    setToolsJsonError("")
-    setChangeSummary("")
   }, [skill])
 
   useEffect(() => { syncFromSkill() }, [syncFromSkill])
@@ -82,24 +48,9 @@ export function SkillDetail() {
 
   const handleSave = async () => {
     if (!skillId) return
-
-    let finalTools = tools
-    if (toolEditMode === "json") {
-      try {
-        finalTools = JSON.parse(toolsJson)
-        setToolsJsonError("")
-      } catch {
-        setToolsJsonError("JSON 格式错误")
-        return
-      }
-    }
-
     await updateMutation.mutateAsync({
       id: skillId,
       description: description.trim(),
-      type,
-      triggers: triggers.split(/[,，\n]/).map(s => s.trim()).filter(Boolean),
-      tools: finalTools,
       readme: readme.trim(),
     })
     setEditing(false)
@@ -117,9 +68,6 @@ export function SkillDetail() {
   if (!skill) {
     return <div className="text-sm text-slate-500">技能未找到</div>
   }
-
-  const skillTools = (Array.isArray(skill.tools) ? skill.tools : []) as SkillTool[]
-  const skillTriggers = Array.isArray(skill.triggers) ? skill.triggers.map(String) : []
 
   return (
     <div>
@@ -170,48 +118,10 @@ export function SkillDetail() {
           <CardHeader><CardTitle>信息</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             {editing ? (
-              <>
-                <div>
-                  <label className="text-xs text-slate-400 mb-1 block">描述</label>
-                  <Input value={description} onChange={(e) => setDescription(e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 mb-1 block">类型</label>
-                  <div className="flex gap-1.5">
-                    {typeOptions.map(opt => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => setType(opt.value)}
-                        className={`px-2.5 py-1 text-xs rounded-md border transition-colors cursor-pointer ${
-                          type === opt.value
-                            ? "border-brand-300 bg-brand-50 text-brand-700"
-                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 mb-1 block">触发词</label>
-                  <Textarea
-                    value={triggers}
-                    onChange={(e) => setTriggers(e.target.value)}
-                    rows={3}
-                    placeholder="逗号分隔"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 mb-1 block">变更说明（可选）</label>
-                  <Input
-                    value={changeSummary}
-                    onChange={(e) => setChangeSummary(e.target.value)}
-                    placeholder="简述本次修改内容"
-                  />
-                </div>
-              </>
+              <div>
+                <label className="text-xs text-slate-400 mb-1 block">描述</label>
+                <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+              </div>
             ) : (
               <>
                 <div>
@@ -219,19 +129,27 @@ export function SkillDetail() {
                   <p className="text-sm font-mono">{skill.id}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">版本</p>
-                  <p className="text-sm font-mono">v{skill.version}</p>
+                  <p className="text-xs text-slate-400">状态</p>
+                  <Badge variant={skill.enabled ? "brand" : "outline"}>
+                    {skill.enabled ? "启用" : "禁用"}
+                  </Badge>
                 </div>
-                <div>
-                  <p className="text-xs text-slate-400">类型</p>
-                  <Badge>{skill.type}</Badge>
-                </div>
-                {skillTriggers.length > 0 && (
+                {skill.scripts && skill.scripts.length > 0 && (
                   <div>
-                    <p className="text-xs text-slate-400 mb-1">触发词</p>
+                    <p className="text-xs text-slate-400 mb-1">脚本</p>
                     <div className="flex flex-wrap gap-1">
-                      {skillTriggers.map((t) => (
-                        <Badge key={t} variant="outline">{t}</Badge>
+                      {skill.scripts.map((s: string) => (
+                        <Badge key={s} variant="outline" className="font-mono text-xs">{s}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {skill.references && skill.references.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-400 mb-1">参考文档</p>
+                    <div className="flex flex-wrap gap-1">
+                      {skill.references.map((r: string) => (
+                        <Badge key={r} variant="outline" className="text-xs">{r}</Badge>
                       ))}
                     </div>
                   </div>
@@ -244,9 +162,7 @@ export function SkillDetail() {
         <div className="lg:col-span-2">
           <Tabs defaultValue="readme">
             <TabsList>
-              <TabsTrigger value="readme">README</TabsTrigger>
-              <TabsTrigger value="tools">工具 ({editing ? tools.length : skillTools.length})</TabsTrigger>
-              <TabsTrigger value="versions">版本历史</TabsTrigger>
+              <TabsTrigger value="readme">SKILL.md</TabsTrigger>
             </TabsList>
 
             <TabsContent value="readme">
@@ -263,286 +179,14 @@ export function SkillDetail() {
                   ) : skill.readme ? (
                     <MarkdownContent content={skill.readme} />
                   ) : (
-                    <p className="text-sm text-slate-400">暂无 README</p>
+                    <p className="text-sm text-slate-400">暂无内容</p>
                   )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="tools">
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle>工具</CardTitle>
-                    {editing && (
-                      <div className="flex items-center gap-2">
-                        <div className="flex rounded-md border border-slate-200 overflow-hidden">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (toolEditMode === "json") {
-                                try {
-                                  setTools(JSON.parse(toolsJson))
-                                  setToolsJsonError("")
-                                } catch { /* keep current tools */ }
-                              }
-                              setToolEditMode("visual")
-                            }}
-                            className={`px-2.5 py-1 text-xs cursor-pointer transition-colors ${
-                              toolEditMode === "visual" ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50"
-                            }`}
-                          >
-                            <Eye className="h-3 w-3 inline mr-1" />可视化
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setToolsJson(JSON.stringify(tools, null, 2))
-                              setToolEditMode("json")
-                            }}
-                            className={`px-2.5 py-1 text-xs cursor-pointer transition-colors ${
-                              toolEditMode === "json" ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50"
-                            }`}
-                          >
-                            <Code className="h-3 w-3 inline mr-1" />JSON
-                          </button>
-                        </div>
-                        {toolEditMode === "visual" && (
-                          <Button
-                            variant="ghost" size="sm"
-                            onClick={() => setTools([...tools, emptyTool()])}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> 添加
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {editing ? (
-                    toolEditMode === "json" ? (
-                      <div>
-                        <Textarea
-                          value={toolsJson}
-                          onChange={(e) => {
-                            setToolsJson(e.target.value)
-                            setToolsJsonError("")
-                          }}
-                          rows={20}
-                          className="font-mono text-xs"
-                          placeholder="[]"
-                        />
-                        {toolsJsonError && (
-                          <p className="text-xs text-red-500 mt-1">{toolsJsonError}</p>
-                        )}
-                      </div>
-                    ) : (
-                      <ToolsVisualEditor tools={tools} onChange={setTools} />
-                    )
-                  ) : skillTools.length > 0 ? (
-                    <div>
-                      <p className="text-xs text-slate-400 mb-2">点击「编辑」可修改工具配置</p>
-                      <div className="space-y-1">
-                        {skillTools.map((tool) => (
-                          <div key={tool.name} className="text-xs p-2 bg-slate-50 rounded">
-                            <p className="font-medium font-mono">{tool.name}</p>
-                            <p className="text-slate-500 mt-0.5">{tool.description}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-400">暂无工具，点击「编辑」可添加</p>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="versions">
-              <Card>
-                <CardContent className="pt-6">
-                  {skillId && <SkillVersions skillName={skillId} currentVersion={parseInt(String(skill.version)) || 1} />}
                 </CardContent>
               </Card>
             </TabsContent>
           </Tabs>
         </div>
       </div>
-    </div>
-  )
-}
-
-function ToolsVisualEditor({ tools, onChange }: { tools: SkillTool[]; onChange: (t: SkillTool[]) => void }) {
-  const update = (index: number, partial: Partial<SkillTool>) => {
-    const next = [...tools]
-    next[index] = { ...next[index], ...partial }
-    onChange(next)
-  }
-
-  const remove = (index: number) => {
-    onChange(tools.filter((_, i) => i !== index))
-  }
-
-  if (tools.length === 0) {
-    return <p className="text-sm text-slate-400">暂无工具，点击「添加」创建</p>
-  }
-
-  return (
-    <div className="space-y-4">
-      {tools.map((tool, i) => (
-        <ToolEditor key={i} tool={tool} onChange={(t) => update(i, t)} onRemove={() => remove(i)} />
-      ))}
-    </div>
-  )
-}
-
-function ToolEditor({
-  tool,
-  onChange,
-  onRemove,
-}: {
-  tool: SkillTool
-  onChange: (partial: Partial<SkillTool>) => void
-  onRemove: () => void
-}) {
-  const [expanded, setExpanded] = useState(!tool.name)
-  const [schemaStr, setSchemaStr] = useState(JSON.stringify(tool.inputSchema, null, 2))
-  const [schemaError, setSchemaError] = useState("")
-
-  useEffect(() => {
-    setSchemaStr(JSON.stringify(tool.inputSchema, null, 2))
-  }, [tool.inputSchema])
-
-  const handleSchemaChange = (value: string) => {
-    setSchemaStr(value)
-    setSchemaError("")
-    try {
-      const parsed = JSON.parse(value)
-      onChange({ inputSchema: parsed })
-    } catch {
-      setSchemaError("JSON 格式错误")
-    }
-  }
-
-  return (
-    <div className="border border-slate-200 rounded-lg overflow-hidden">
-      <div
-        className="flex items-center justify-between px-3 py-2 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-mono font-medium text-slate-800 truncate">
-            {tool.name || "(未命名)"}
-          </span>
-          {tool.executor.type && (
-            <Badge variant="outline" className="text-[10px] shrink-0">{tool.executor.type}</Badge>
-          )}
-        </div>
-        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onRemove() }}>
-          <Minus className="h-3.5 w-3.5 text-red-500" />
-        </Button>
-      </div>
-      {expanded && (
-        <div className="px-3 py-3 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">工具名称</label>
-              <Input
-                value={tool.name}
-                onChange={(e) => onChange({ name: e.target.value })}
-                placeholder="tool_name"
-                className="font-mono text-xs"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">执行类型</label>
-              <div className="flex gap-1">
-                {(["http", "shell", "script", "internal"] as const).map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => onChange({ executor: { ...tool.executor, type: t } })}
-                    className={`px-2 py-1 text-xs rounded border transition-colors cursor-pointer ${
-                      tool.executor.type === t
-                        ? "border-brand-300 bg-brand-50 text-brand-700"
-                        : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-xs text-slate-400 mb-1 block">描述</label>
-            <Input
-              value={tool.description}
-              onChange={(e) => onChange({ description: e.target.value })}
-              placeholder="工具功能描述"
-            />
-          </div>
-
-          {tool.executor.type === "http" && (
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
-                <label className="text-xs text-slate-400 mb-1 block">URL</label>
-                <Input
-                  value={tool.executor.url ?? ""}
-                  onChange={(e) => onChange({ executor: { ...tool.executor, url: e.target.value } })}
-                  placeholder="http://localhost:1998/api/..."
-                  className="font-mono text-xs"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400 mb-1 block">Method</label>
-                <Input
-                  value={tool.executor.method ?? "POST"}
-                  onChange={(e) => onChange({ executor: { ...tool.executor, method: e.target.value } })}
-                  className="font-mono text-xs"
-                />
-              </div>
-            </div>
-          )}
-
-          {(tool.executor.type === "script" || tool.executor.type === "shell") && (
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">Command</label>
-              <Input
-                value={tool.executor.command ?? ""}
-                onChange={(e) => onChange({ executor: { ...tool.executor, command: e.target.value } })}
-                placeholder="python3 script.py"
-                className="font-mono text-xs"
-              />
-            </div>
-          )}
-
-          {tool.executor.type === "internal" && (
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">Handler</label>
-              <Input
-                value={tool.executor.handler ?? ""}
-                onChange={(e) => onChange({ executor: { ...tool.executor, handler: e.target.value } })}
-                placeholder="handler_name"
-                className="font-mono text-xs"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="text-xs text-slate-400 mb-1 block">inputSchema (JSON)</label>
-            <Textarea
-              value={schemaStr}
-              onChange={(e) => handleSchemaChange(e.target.value)}
-              rows={6}
-              className="font-mono text-xs"
-            />
-            {schemaError && <p className="text-xs text-red-500 mt-1">{schemaError}</p>}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

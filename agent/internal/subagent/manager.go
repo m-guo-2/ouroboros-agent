@@ -64,6 +64,7 @@ type StartRequest struct {
 	Model           string
 	LLMClient       engine.LLMClient
 	Tools           []types.RegisteredTool
+	SkillsSnippet   string // Level 1 skill metadata index to inject into subagent prompt
 	ParentTraceID   string
 	SessionID       string
 	Timeout         time.Duration
@@ -233,6 +234,9 @@ func (m *Manager) run(jobID string, req StartRequest) {
 	toolDefs = append(toolDefs, ostools.NewSaveMemoryTool(req.SessionID))
 	toolDefs = m.wrapToolsWithImpact(jobID, toolDefs)
 	subPrompt := buildSubagentSystemPrompt(req.Profile)
+	if req.SkillsSnippet != "" {
+		subPrompt += "\n\n" + req.SkillsSnippet
+	}
 	messages := buildInitialMessages(req.Context, req.Task)
 
 	var loopResult *engine.AgentLoopResult
@@ -600,27 +604,31 @@ func filterToolsByProfile(profile string, tools []types.RegisteredTool) []types.
 	return out
 }
 
+// skillTools are available to all subagent profiles when skills are bound.
+var skillTools = []string{"load_skill", "load_skill_reference", "run_script"}
+
 func allowedToolsForProfile(profile string) map[string]bool {
+	base := map[string]bool{}
 	switch profile {
 	case "file_analysis":
-		return map[string]bool{
+		base = map[string]bool{
 			"read_file": true,
 			"list_dir":  true,
 			"grep":      true,
 		}
 	case "web_research":
-		return map[string]bool{
+		base = map[string]bool{
 			"tavily_search":  true,
 			"recall_context": true,
 		}
 	case "data_report":
-		return map[string]bool{
+		base = map[string]bool{
 			"render_card": true,
 			"read_file":   true,
 			"list_dir":    true,
 		}
 	default: // developer
-		return map[string]bool{
+		base = map[string]bool{
 			"shell":      true,
 			"read_file":  true,
 			"write_file": true,
@@ -628,6 +636,10 @@ func allowedToolsForProfile(profile string) map[string]bool {
 			"grep":       true,
 		}
 	}
+	for _, t := range skillTools {
+		base[t] = true
+	}
+	return base
 }
 
 func copyMessages(in []types.AgentMessage) []types.AgentMessage {

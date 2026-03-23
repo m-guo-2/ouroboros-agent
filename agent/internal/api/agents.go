@@ -29,25 +29,47 @@ func parseSubagentModels(raw interface{}) map[string]storage.SubagentModelConfig
 	return out
 }
 
-func parseSkillBindings(raw interface{}) []storage.SkillBinding {
-	var bindings []storage.SkillBinding
+// parseSubagentSkills extracts per-profile skill ID lists from API input.
+// Input: {"developer": ["skill-a"], "web_research": ["skill-b"]}
+func parseSubagentSkills(raw interface{}) map[string][]string {
+	top, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := make(map[string][]string, len(top))
+	for profile, v := range top {
+		ids := parseSkillIDs(v)
+		if len(ids) > 0 {
+			out[profile] = ids
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// parseSkillIDs extracts skill IDs from API input.
+// Supports new format ["id1","id2"] and legacy format [{"id":"id1","mode":"always"}].
+func parseSkillIDs(raw interface{}) []string {
 	items, ok := raw.([]interface{})
 	if !ok {
-		return bindings
+		return nil
 	}
+	var ids []string
 	for _, item := range items {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
+		switch v := item.(type) {
+		case string:
+			if v != "" {
+				ids = append(ids, v)
+			}
+		case map[string]interface{}:
+			if id, ok := v["id"].(string); ok && id != "" {
+				ids = append(ids, id)
+			}
 		}
-		id, _ := m["id"].(string)
-		mode, _ := m["mode"].(string)
-		if id == "" {
-			continue
-		}
-		bindings = append(bindings, storage.SkillBinding{ID: id, Mode: mode})
 	}
-	return bindings
+	return ids
 }
 
 // GET/POST /api/agents
@@ -91,10 +113,13 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 			cfg.Model = v
 		}
 		if body["skills"] != nil {
-			cfg.Skills = parseSkillBindings(body["skills"])
+			cfg.Skills = parseSkillIDs(body["skills"])
 		}
 		if body["subagentModels"] != nil {
 			cfg.SubagentModels = parseSubagentModels(body["subagentModels"])
+		}
+		if body["subagentSkills"] != nil {
+			cfg.SubagentSkills = parseSubagentSkills(body["subagentSkills"])
 		}
 		if v, ok := body["channels"].([]interface{}); ok {
 			for _, c := range v {
@@ -157,10 +182,10 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 				cfg.SystemPrompt = v
 			}
 			if body["skills"] != nil {
-				cfg.Skills = parseSkillBindings(body["skills"])
+				cfg.Skills = parseSkillIDs(body["skills"])
 			}
 		}
-		skillsCtx, err := storage.GetSkillsContext(id, cfg.Skills)
+		skillsCtx, err := storage.GetSkillsContext(cfg.Skills)
 		if err != nil {
 			skillsCtx = &storage.SkillContext{LoadableSkillIDs: map[string]bool{}}
 		}

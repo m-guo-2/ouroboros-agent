@@ -23,11 +23,6 @@ export interface AvailableModel {
 
 // ===== Agent Profiles =====
 
-export interface SkillBinding {
-  id: string
-  mode: "always" | "on_demand"
-}
-
 export interface SubagentModelConfig {
   provider: string
   model: string
@@ -38,10 +33,11 @@ export interface AgentProfile {
   displayName: string
   systemPrompt?: string
   modelId?: string
-  provider?: string   // 直接指定 LLM 提供商
-  model?: string      // 直接指定模型 ID
+  provider?: string
+  model?: string
   subagentModels?: Record<string, SubagentModelConfig>
-  skills?: SkillBinding[]
+  skills?: string[]
+  subagentSkills?: Record<string, string[]>
   channels?: Array<{ type: string; identifier: string }>
   isActive?: boolean
   avatarUrl?: string
@@ -87,61 +83,23 @@ export interface MessageData {
 
 // ===== Skills =====
 
-export interface SkillManifest {
-  name: string
-  description: string
-  version: number
-  type: "knowledge" | "action" | "hybrid"
-  enabled: boolean
-  triggers?: string[]
-  tools?: Array<{
-    name: string
-    description: string
-    inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] }
-    executor: { type: "http" | "shell" | "script" | "internal"; url?: string; method?: string; command?: string; handler?: string }
-  }>
-}
-
 export interface SkillListItem {
   id: string
   name: string
   description: string
-  version: string
-  type: string
   enabled: boolean
-  triggers: unknown[]
-  tools: unknown[]
+  scripts?: string[]
+  references?: string[]
 }
 
 export interface SkillDetail {
   id: string
   name: string
   description: string
-  version: string
-  type: string
   enabled: boolean
-  triggers: unknown[]
-  tools: unknown[]
   readme: string
-  metadata: Record<string, unknown>
-}
-
-export interface SkillVersionSummary {
-  version: number
-  changeSummary: string
-  createdAt: string
-}
-
-export interface SkillVersionDetail {
-  version: number
-  name: string
-  description: string
-  type: "knowledge" | "action" | "hybrid"
-  triggers: string[]
-  tools: SkillManifest["tools"]
-  readme: string
-  changeSummary: string
-  createdAt: string
+  scripts?: string[]
+  references?: string[]
 }
 
 // ===== Settings =====

@@ -7,14 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
-	"agent/internal/storage"
 	"agent/internal/types"
 
 	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
@@ -54,70 +50,6 @@ func createShellExecutor() types.ToolExecutor {
 
 		var jsonResult interface{}
 		if err := json.Unmarshal(out, &jsonResult); err == nil {
-			return jsonResult, nil
-		}
-		return text, nil
-	}
-}
-
-var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
-
-// expandEnvVars replaces ${VAR_NAME} placeholders with their environment variable values.
-func expandEnvVars(s string) string {
-	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
-		name := strings.TrimSuffix(strings.TrimPrefix(match, "${"), "}")
-		if val, ok := os.LookupEnv(name); ok {
-			return val
-		}
-		return match
-	})
-}
-
-func createSkillHTTPExecutor(executor storage.SkillToolExecutor) types.ToolExecutor {
-	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-		if executor.URL == "" {
-			return nil, fmt.Errorf("HTTP executor missing url")
-		}
-
-		method := executor.Method
-		if method == "" {
-			method = "POST"
-		}
-
-		var reqBody io.Reader
-		if method != "GET" {
-			b, err := json.Marshal(input)
-			if err != nil {
-				return nil, err
-			}
-			reqBody = bytes.NewReader(b)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, method, executor.URL, reqBody)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		for k, v := range executor.Headers {
-			req.Header.Set(k, expandEnvVars(v))
-		}
-
-		client := sharedlogger.NewClient("skill-http", 30*time.Second)
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-
-		respBytes, _ := io.ReadAll(resp.Body)
-		text := string(respBytes)
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("HTTP tool failed: %d %s", resp.StatusCode, text)
-		}
-
-		var jsonResult interface{}
-		if err := json.Unmarshal(respBytes, &jsonResult); err == nil {
 			return jsonResult, nil
 		}
 		return text, nil
@@ -246,86 +178,58 @@ func (r *ToolRegistry) RegisterBuiltin(name, description string, inputSchema typ
 	}
 }
 
-func (r *ToolRegistry) RegisterSkills(skillsCtx *storage.SkillContext, internalHandlers map[string]types.ToolExecutor) {
+// RegisterSkillInternalTools registers the skill system's internal tools
+// (load_skill, load_skill_reference, run_script) into the registry.
+func (r *ToolRegistry) RegisterSkillInternalTools(internalHandlers map[string]types.ToolExecutor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	re := regexp.MustCompile(`\[Skill: (.+?)\]`)
-
-	for _, toolDef := range skillsCtx.Tools {
-		executor, ok := skillsCtx.ToolExecutors[toolDef.Name]
-		if !ok {
-			continue
-		}
-
-		var execute types.ToolExecutor
-		if executor.Type == "shell" {
-			execute = createShellExecutor()
-		} else if executor.Type == "http" {
-			execute = createSkillHTTPExecutor(executor)
-		} else if executor.Type == "internal" {
-			handlerName := executor.Handler
-			if handlerName == "" {
-				handlerName = toolDef.Name
-			}
-			handler, ok := internalHandlers[handlerName]
-			if !ok {
-				// skip missing internal handlers
-				continue
-			}
-			execute = handler
-		} else {
-			// unsupported executor type
-			continue
-		}
-
-		sourceName := "unknown"
-		matches := re.FindStringSubmatch(toolDef.Description)
-		if len(matches) > 1 {
-			sourceName = matches[1]
-		}
-
-		r.tools[toolDef.Name] = types.RegisteredTool{
+	for name, handler := range internalHandlers {
+		r.tools[name] = types.RegisteredTool{
 			Definition: types.ToolDefinition{
-				Name:        toolDef.Name,
-				Description: toolDef.Description,
-				InputSchema: toolDef.InputSchema,
+				Name:        name,
+				Description: skillToolDescriptions[name],
+				InputSchema: skillToolSchemas[name],
 			},
-			Execute:    execute,
-			Source:     "skill",
-			SourceName: sourceName,
+			Execute:    handler,
+			Source:     "builtin",
+			SourceName: "skill-system",
 		}
 	}
 }
 
-// RegisterSkillTools dynamically registers tools from an on-demand skill after load_skill.
-func (r *ToolRegistry) RegisterSkillTools(tools []types.ToolDefinition, executors map[string]storage.SkillToolExecutor) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+var skillToolDescriptions = map[string]string{
+	"load_skill":           "加载指定技能的完整文档、脚本列表和参考资料索引。当技能简介不足以完成任务时，使用此工具获取详细说明。",
+	"load_skill_reference": "获取指定技能的详细参考文档。当 load_skill 返回的文档不够详细时，根据其 references 列表加载具体的参考文件。",
+	"run_script":           "执行指定技能的脚本。skill_id 和 script 为必填参数，args 为传给脚本的命令行参数。async=true 时后台执行并立即返回，完成后系统自动通知。",
+}
 
-	for _, toolDef := range tools {
-		executor, ok := executors[toolDef.Name]
-		if !ok {
-			continue
-		}
-
-		var execute types.ToolExecutor
-		switch executor.Type {
-		case "shell":
-			execute = createShellExecutor()
-		case "http":
-			execute = createSkillHTTPExecutor(executor)
-		default:
-			continue
-		}
-
-		r.tools[toolDef.Name] = types.RegisteredTool{
-			Definition: toolDef,
-			Execute:    execute,
-			Source:     "skill",
-			SourceName: toolDef.Name,
-		}
-	}
+var skillToolSchemas = map[string]types.JSONSchema{
+	"load_skill": {
+		Type: "object",
+		Properties: map[string]interface{}{
+			"skill_id": map[string]interface{}{"type": "string", "description": "要加载的技能 ID"},
+		},
+		Required: []string{"skill_id"},
+	},
+	"load_skill_reference": {
+		Type: "object",
+		Properties: map[string]interface{}{
+			"skill_id":  map[string]interface{}{"type": "string", "description": "技能 ID"},
+			"reference": map[string]interface{}{"type": "string", "description": "参考文件名（从 load_skill 返回的 references 列表中选择）"},
+		},
+		Required: []string{"skill_id", "reference"},
+	},
+	"run_script": {
+		Type: "object",
+		Properties: map[string]interface{}{
+			"skill_id": map[string]interface{}{"type": "string", "description": "技能 ID（从 load_skill 获取）"},
+			"script":   map[string]interface{}{"type": "string", "description": "scripts/ 目录下的脚本文件名"},
+			"args":     map[string]interface{}{"type": "string", "description": "传给脚本的命令行参数"},
+			"async":    map[string]interface{}{"type": "boolean", "description": "是否异步执行。长耗时脚本（如生成PPT）设为 true，立即返回，完成后系统自动通知"},
+		},
+		Required: []string{"skill_id", "script"},
+	},
 }
 
 func (r *ToolRegistry) RegisterMcpServer(ctx context.Context, config McpServerConfig) int {

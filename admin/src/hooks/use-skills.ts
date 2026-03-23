@@ -38,7 +38,6 @@ export function useUpdateSkill() {
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ["skills"] })
       qc.invalidateQueries({ queryKey: ["skills", variables.id] })
-      qc.invalidateQueries({ queryKey: ["skill-versions", variables.id] })
     },
   })
 }
@@ -64,40 +63,5 @@ export function useRefreshSkills() {
   return useMutation({
     mutationFn: () => skillsApi.refresh(),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
-  })
-}
-
-export function useSkillVersions(id: string | undefined) {
-  return useQuery({
-    queryKey: ["skill-versions", id],
-    queryFn: async () => {
-      const res = await skillsApi.getVersions(id!)
-      return res.data ?? []
-    },
-    enabled: !!id,
-  })
-}
-
-export function useSkillVersion(id: string | undefined, version: number | undefined) {
-  return useQuery({
-    queryKey: ["skill-versions", id, version],
-    queryFn: async () => {
-      const res = await skillsApi.getVersion(id!, version!)
-      return res.data
-    },
-    enabled: !!id && version !== undefined,
-  })
-}
-
-export function useRestoreSkillVersion() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, version }: { id: string; version: number }) =>
-      skillsApi.restoreVersion(id, version),
-    onSuccess: (_data, variables) => {
-      qc.invalidateQueries({ queryKey: ["skills"] })
-      qc.invalidateQueries({ queryKey: ["skills", variables.id] })
-      qc.invalidateQueries({ queryKey: ["skill-versions", variables.id] })
-    },
   })
 }

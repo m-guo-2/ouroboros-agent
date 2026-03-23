@@ -32,11 +32,8 @@ func handleSkills(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rec := storage.SkillRecord{
-			Name:     name,
-			Type:     "knowledge",
-			Enabled:  true,
-			Triggers: []interface{}{},
-			Tools:    []interface{}{},
+			Name:    name,
+			Enabled: true,
 		}
 		if v, ok := body["id"].(string); ok {
 			rec.ID = v
@@ -44,27 +41,11 @@ func handleSkills(w http.ResponseWriter, r *http.Request) {
 		if v, ok := body["description"].(string); ok {
 			rec.Description = v
 		}
-		if v, ok := body["version"].(string); ok {
-			rec.Version = v
-		}
-		if v, ok := body["type"].(string); ok {
-			rec.Type = v
-		}
 		if v, ok := body["enabled"].(bool); ok {
 			rec.Enabled = v
 		}
 		if v, ok := body["readme"].(string); ok {
 			rec.Readme = v
-		}
-		if v, ok := body["triggers"]; ok {
-			if arr, ok := v.([]interface{}); ok {
-				rec.Triggers = arr
-			}
-		}
-		if v, ok := body["tools"]; ok {
-			if arr, ok := v.([]interface{}); ok {
-				rec.Tools = arr
-			}
 		}
 		created, err := storage.CreateSkill(rec)
 		if err != nil {
@@ -107,12 +88,12 @@ func handleSkillsWithID(w http.ResponseWriter, r *http.Request) {
 
 	// GET /api/skills/{agentId}/context — compile skill context for an agent
 	if sub == "context" && r.Method == http.MethodGet {
-		var agentSkills []storage.SkillBinding
+		var skillIDs []string
 		agentCfg, _ := storage.GetAgentConfig(id)
 		if agentCfg != nil {
-			agentSkills = agentCfg.Skills
+			skillIDs = agentCfg.Skills
 		}
-		ctx, err := storage.GetSkillsContext(id, agentSkills)
+		ctx, err := storage.GetSkillsContext(skillIDs)
 		if err != nil {
 			apiErr(w, http.StatusInternalServerError, err.Error())
 			return
