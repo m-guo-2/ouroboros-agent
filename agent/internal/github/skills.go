@@ -27,6 +27,7 @@ type SkillData struct {
 	Scripts     []string `json:"scripts,omitempty"`
 	References  []string `json:"references,omitempty"`
 	BasePath    string   `json:"-"` // local disk path, not serialized
+	SourceSHA   string   `json:"-"` // source SKILL.md sha for local sync metadata
 }
 
 
@@ -61,6 +62,14 @@ type Store struct {
 
 // DefaultStore is the package-level singleton, set by NewStore.
 var DefaultStore *Store
+
+var skillSnapshotWriter func([]SkillData) error
+
+// SetSkillSnapshotWriter installs a callback that persists the refreshed local
+// skill snapshot into the runtime store.
+func SetSkillSnapshotWriter(fn func([]SkillData) error) {
+	skillSnapshotWriter = fn
+}
 
 // NewStore creates the skill store and sets DefaultStore, but does NOT load
 // skills from GitHub. Call Store.LoadCache afterwards (typically in a goroutine)
@@ -114,6 +123,14 @@ func (s *Store) refresh() error {
 	entries, err := s.client.ListDir(s.basePath)
 	if err != nil {
 		if IsNotFound(err) {
+			if err := s.pruneLocalSkills(map[string]*cachedEntry{}); err != nil {
+				return err
+			}
+			if skillSnapshotWriter != nil {
+				if err := skillSnapshotWriter([]SkillData{}); err != nil {
+					return fmt.Errorf("persist empty local skill snapshot: %w", err)
+				}
+			}
 			s.mu.Lock()
 			s.cache = make(map[string]*cachedEntry)
 			s.mu.Unlock()
@@ -142,10 +159,25 @@ func (s *Store) refresh() error {
 		localSkillDir := filepath.Join(s.localDir, id)
 		if err := s.syncSkillToDisk(id, localSkillDir); err != nil {
 			log.Printf("⚠️  disk sync failed for skill %s: %s", id, err)
+			continue
 		}
 		entry.BasePath = localSkillDir
 
 		next[id] = entry
+	}
+
+	if err := s.pruneLocalSkills(next); err != nil {
+		return err
+	}
+
+	snapshot := make([]SkillData, 0, len(next))
+	for _, entry := range next {
+		snapshot = append(snapshot, entry.SkillData)
+	}
+	if skillSnapshotWriter != nil {
+		if err := skillSnapshotWriter(snapshot); err != nil {
+			return fmt.Errorf("persist local skill snapshot: %w", err)
+		}
 	}
 
 	s.mu.Lock()
@@ -160,45 +192,62 @@ func (s *Store) syncSkillToDisk(id, localDir string) error {
 		return err
 	}
 
-	if content, _, err := s.client.GetFileContent(s.skillMdPath(id)); err == nil {
-		if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte(content), 0o644); err != nil {
-			return fmt.Errorf("write SKILL.md: %w", err)
-		}
+	content, _, err := s.client.GetFileContent(s.skillMdPath(id))
+	if err != nil {
+		return fmt.Errorf("read SKILL.md: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write SKILL.md: %w", err)
 	}
 
 	// Sync scripts/
-	s.syncDirToDisk(s.scriptsDir(id), filepath.Join(localDir, "scripts"))
+	if err := s.syncDirToDisk(s.scriptsDir(id), filepath.Join(localDir, "scripts")); err != nil {
+		return fmt.Errorf("sync scripts: %w", err)
+	}
 
 	// Sync references/
-	s.syncDirToDisk(s.refsDir(id), filepath.Join(localDir, "references"))
+	if err := s.syncDirToDisk(s.refsDir(id), filepath.Join(localDir, "references")); err != nil {
+		return fmt.Errorf("sync references: %w", err)
+	}
 
 	return nil
 }
 
 // syncDirToDisk downloads all files from a remote directory to a local directory.
-func (s *Store) syncDirToDisk(remoteDir, localDir string) {
+func (s *Store) syncDirToDisk(remoteDir, localDir string) error {
 	entries, err := s.client.ListDir(remoteDir)
 	if err != nil {
-		return
+		if IsNotFound(err) {
+			if rmErr := os.RemoveAll(localDir); rmErr != nil {
+				return rmErr
+			}
+			return nil
+		}
+		return err
+	}
+	if err := os.RemoveAll(localDir); err != nil {
+		return err
 	}
 	if len(entries) == 0 {
-		return
+		return nil
 	}
-	_ = os.MkdirAll(localDir, 0o755)
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		return err
+	}
 	for _, e := range entries {
 		if e.Type != "file" {
 			continue
 		}
 		content, _, err := s.client.GetFileContent(remoteDir + "/" + e.Name)
 		if err != nil {
-			log.Printf("⚠️  skip file %s/%s: %s", remoteDir, e.Name, err)
-			continue
+			return fmt.Errorf("read %s/%s: %w", remoteDir, e.Name, err)
 		}
 		localPath := filepath.Join(localDir, e.Name)
 		if err := os.WriteFile(localPath, []byte(content), 0o755); err != nil {
-			log.Printf("⚠️  write %s: %s", localPath, err)
+			return fmt.Errorf("write %s: %w", localPath, err)
 		}
 	}
+	return nil
 }
 
 // loadSkillEntry loads a single skill from its SKILL.md (standard format).
@@ -231,8 +280,9 @@ func (s *Store) loadFromSkillMd(id string, entry *cachedEntry) error {
 	fm, body := splitFrontmatter(content)
 
 	entry.SkillData = SkillData{
-		ID:      id,
-		Enabled: true,
+		ID:        id,
+		Enabled:   true,
+		SourceSHA: sha,
 	}
 	entry.Readme = body
 
@@ -296,6 +346,28 @@ func (s *Store) GetReference(skillID, refName string) (string, error) {
 		return "", fmt.Errorf("reference %s/%s: %w", skillID, refName, err)
 	}
 	return content, nil
+}
+
+func (s *Store) pruneLocalSkills(next map[string]*cachedEntry) error {
+	entries, err := os.ReadDir(s.localDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, ok := next[entry.Name()]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.localDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // splitFrontmatter separates YAML frontmatter (between --- delimiters) from body.

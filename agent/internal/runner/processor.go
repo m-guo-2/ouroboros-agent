@@ -13,7 +13,6 @@ import (
 	"agent/internal/engine"
 	"agent/internal/engine/ostools"
 	"agent/internal/eventlog"
-	"agent/internal/github"
 	"agent/internal/logger"
 	"agent/internal/sandbox"
 	"agent/internal/sanitize"
@@ -140,6 +139,9 @@ func resolveSubagentSkillsSnippet(agentConfig *storage.AgentConfig, profile stri
 	ctx, err := storage.GetSkillsContext(skillIDs)
 	if err != nil || ctx == nil {
 		return ""
+	}
+	if len(ctx.Diagnostics) > 0 {
+		logger.Warn(context.Background(), "子 agent skill 上下文存在本地诊断", "profile", profile, "diagnostics", strings.Join(ctx.Diagnostics, "; "))
 	}
 	return ctx.SkillsSnippet
 }
@@ -864,6 +866,9 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 			LoadableSkillIDs: map[string]bool{},
 		}
 	}
+	if len(skillsCtx.Diagnostics) > 0 {
+		logger.Warn(ctx, "skill 上下文存在本地诊断", "diagnostics", strings.Join(skillsCtx.Diagnostics, "; "))
+	}
 
 	llmClient := buildLLMClient(provider, credentials)
 
@@ -874,7 +879,12 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	} else if isNew {
 		skillBasePaths := make(map[string]string)
 		for _, sid := range agentConfig.Skills {
-			if bp := github.DefaultStore.GetBasePath(sid); bp != "" {
+			meta, err := storage.GetSkillRuntimeMetadata(sid)
+			if err != nil {
+				logger.Warn(ctx, "sandbox skill 本地元数据缺失", "skillId", sid, "error", err.Error())
+				continue
+			}
+			if bp := meta.BasePath; bp != "" {
 				skillBasePaths[sid] = bp
 			}
 		}
@@ -1093,29 +1103,28 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				return nil, fmt.Errorf("skill %q has not been loaded yet; call load_skill first", skillID)
 			}
 
-			var basePath string
+			meta, err := storage.GetSkillRuntimeMetadata(skillID)
+			if err != nil {
+				return nil, err
+			}
+			basePath := meta.BasePath
 			if sb != nil {
-				basePath = sb.SkillBasePath(skillID)
-			} else {
-				basePath = github.DefaultStore.GetBasePath(skillID)
+				if sandboxPath := sb.SkillBasePath(skillID); sandboxPath != "" {
+					basePath = sandboxPath
+				}
 			}
 			if basePath == "" {
 				return nil, fmt.Errorf("skill %q has no local files", skillID)
 			}
-
-			d := github.DefaultStore.GetByID(skillID)
-			if d == nil {
-				return nil, fmt.Errorf("skill %q not found", skillID)
-			}
 			scriptAllowed := false
-			for _, s := range d.Scripts {
+			for _, s := range meta.Scripts {
 				if s == script {
 					scriptAllowed = true
 					break
 				}
 			}
 			if !scriptAllowed {
-				return nil, fmt.Errorf("script %q not in skill %s scripts list: %v", script, skillID, d.Scripts)
+				return nil, fmt.Errorf("script %q not in skill %s scripts list: %v", script, skillID, meta.Scripts)
 			}
 
 			req := skillexec.ScriptRequest{

@@ -39,8 +39,9 @@ type ProviderCredentials struct {
 // All skills use progressive loading: Level 1 metadata index in prompt,
 // Level 2 full content via load_skill, Level 3 references via load_skill_reference.
 type SkillContext struct {
-	SkillsSnippet    string          // Level 1 metadata index injected into system prompt
-	LoadableSkillIDs map[string]bool // skill IDs that load_skill can load
+	SkillsSnippet    string          `json:"skillsSnippet"`             // Level 1 metadata index injected into system prompt
+	LoadableSkillIDs map[string]bool `json:"loadableSkillIDs"`         // skill IDs that load_skill can load
+	Diagnostics      []string        `json:"diagnostics,omitempty"`    // runtime/local-store diagnostics
 }
 
 // SessionData represents a persisted agent session.

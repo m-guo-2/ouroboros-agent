@@ -1,32 +1,51 @@
 package storage
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"agent/internal/github"
+	"agent/internal/timeutil"
 )
+
+const skillSelectSQL = `SELECT id, name, COALESCE(description,''), enabled, COALESCE(metadata,'{}'), updated_at FROM skills`
+
+// SkillRuntimeMetadata stores the local runtime copy details for a skill.
+type SkillRuntimeMetadata struct {
+	BasePath   string   `json:"basePath,omitempty"`
+	Scripts    []string `json:"scripts,omitempty"`
+	References []string `json:"references,omitempty"`
+	SyncedAt   int64    `json:"syncedAt,omitempty"`
+	SourceSHA  string   `json:"sourceSha,omitempty"`
+}
 
 // SkillRecord mirrors the skill data shape expected by API handlers.
 type SkillRecord struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Enabled     bool     `json:"enabled"`
-	Readme      string   `json:"readme"`
-	Scripts     []string `json:"scripts,omitempty"`
-	References  []string `json:"references,omitempty"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	Enabled     bool                  `json:"enabled"`
+	Readme      string                `json:"readme"`
+	Scripts     []string              `json:"scripts,omitempty"`
+	References  []string              `json:"references,omitempty"`
+	Metadata    *SkillRuntimeMetadata `json:"metadata,omitempty"`
 }
 
-func fromGitHub(d *github.SkillData) *SkillRecord {
-	if d == nil {
-		return nil
-	}
-	return &SkillRecord{
-		ID: d.ID, Name: d.Name, Description: d.Description,
-		Enabled: d.Enabled, Readme: d.Readme,
-		Scripts: d.Scripts, References: d.References,
-	}
+type skillRow struct {
+	ID          string
+	Name        string
+	Description string
+	Enabled     bool
+	Metadata    SkillRuntimeMetadata
+	UpdatedAt   int64
+}
+
+func init() {
+	github.SetSkillSnapshotWriter(replaceSkillSnapshot)
 }
 
 func toGitHub(s *SkillRecord) github.SkillData {
@@ -46,24 +65,63 @@ func RefreshSkills() error {
 	return store().Refresh()
 }
 
-// GetAllSkills returns all skills ordered by name.
+// GetAllSkills returns all locally synchronized skills ordered by name.
 func GetAllSkills() ([]SkillRecord, error) {
-	all := store().GetAll()
-	out := make([]SkillRecord, len(all))
-	for i := range all {
-		out[i] = *fromGitHub(&all[i])
+	rows, err := DB.Query(skillSelectSQL + ` ORDER BY name COLLATE NOCASE ASC`)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	defer rows.Close()
+
+	var out []SkillRecord
+	for rows.Next() {
+		row, err := scanSkillRow(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, skillRecordFromRow(row, false))
+	}
+	if out == nil {
+		out = []SkillRecord{}
+	}
+	return out, rows.Err()
 }
 
 // GetSkillByID returns one skill by ID, or (nil, nil) if not found.
 func GetSkillByID(skillID string) (*SkillRecord, error) {
-	return fromGitHub(store().GetByID(skillID)), nil
+	row, err := getSkillRowByID(skillID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	record := skillRecordFromRow(*row, false)
+	readme, err := readLocalSkillBody(*row)
+	if err != nil {
+		return nil, err
+	}
+	record.Readme = readme
+	return &record, nil
 }
 
 // GetSkillByName returns the first skill with the given name.
 func GetSkillByName(name string) (*SkillRecord, error) {
-	return fromGitHub(store().GetByName(name)), nil
+	row := DB.QueryRow(skillSelectSQL+` WHERE name = ? COLLATE NOCASE LIMIT 1`, name)
+	parsed, err := scanSkillRow(row.Scan)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	record := skillRecordFromRow(parsed, false)
+	readme, err := readLocalSkillBody(parsed)
+	if err != nil {
+		return nil, err
+	}
+	record.Readme = readme
+	return &record, nil
 }
 
 // CreateSkill inserts a new skill.
@@ -72,22 +130,23 @@ func CreateSkill(s SkillRecord) (*SkillRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	return fromGitHub(result), nil
+	return GetSkillByID(result.ID)
 }
 
 // UpdateSkill applies partial updates to a skill.
 func UpdateSkill(skillID string, updates map[string]interface{}) (*SkillRecord, error) {
-	result, err := store().Update(skillID, updates)
-	if err != nil {
+	if _, err := store().Update(skillID, updates); err != nil {
 		return nil, err
 	}
-	return fromGitHub(result), nil
+	return GetSkillByID(skillID)
 }
 
 // DeleteSkill removes a skill by ID. Returns true if deleted.
 func DeleteSkill(skillID string) (bool, error) {
-	if store().GetByID(skillID) == nil {
+	if _, err := getSkillRowByID(skillID); err == sql.ErrNoRows {
 		return false, nil
+	} else if err != nil {
+		return false, err
 	}
 	if err := store().Delete(skillID); err != nil {
 		return false, err
@@ -98,27 +157,32 @@ func DeleteSkill(skillID string) (bool, error) {
 // GetSkillsContext compiles a Level 1 metadata index for the given skill IDs.
 // All skills use progressive loading — no always/on_demand distinction.
 func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
-	all := store().GetAll()
-
-	enabledMap := make(map[string]github.SkillData)
-	for _, s := range all {
-		if s.Enabled {
-			enabledMap[s.ID] = s
-		}
-	}
-
 	ctx := &SkillContext{
 		LoadableSkillIDs: make(map[string]bool),
+	}
+	if len(skillIDs) == 0 {
+		return ctx, nil
 	}
 
 	var lines []string
 	for _, id := range skillIDs {
-		s, ok := enabledMap[id]
-		if !ok {
+		row, err := getSkillRowByID(id)
+		if err == sql.ErrNoRows {
+			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q missing from local store", id))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("- **%s**（id: `%s`）: %s", s.Name, s.ID, s.Description))
-		ctx.LoadableSkillIDs[s.ID] = true
+		if err != nil {
+			return nil, err
+		}
+		if !row.Enabled {
+			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q disabled in local store", id))
+			continue
+		}
+		if strings.TrimSpace(row.Metadata.BasePath) == "" {
+			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q missing local base path metadata", id))
+		}
+		lines = append(lines, fmt.Sprintf("- **%s**（id: `%s`）: %s", row.Name, row.ID, row.Description))
+		ctx.LoadableSkillIDs[row.ID] = true
 	}
 
 	if len(lines) > 0 {
@@ -127,57 +191,228 @@ func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
 			strings.Join(lines, "\n"),
 		)
 	}
-
 	return ctx, nil
 }
 
 // GetSkillDetail returns a skill's content, scripts list, and reference index for load_skill.
 func GetSkillDetail(skillID string) (map[string]interface{}, error) {
-	d := store().GetByID(skillID)
-	if d == nil || !d.Enabled {
-		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	row, err := requireEnabledSkill(skillID)
+	if err != nil {
+		return nil, err
+	}
+	content, err := readLocalSkillBody(*row)
+	if err != nil {
+		return nil, err
 	}
 
 	result := map[string]interface{}{
-		"skill_id": d.ID,
-		"name":     d.Name,
-		"content":  d.Readme,
+		"skill_id": row.ID,
+		"name":     row.Name,
+		"content":  content,
 	}
-	if len(d.Scripts) > 0 {
-		result["scripts"] = d.Scripts
+	if len(row.Metadata.Scripts) > 0 {
+		result["scripts"] = append([]string(nil), row.Metadata.Scripts...)
 	}
-	if len(d.References) > 0 {
-		result["references"] = d.References
+	if len(row.Metadata.References) > 0 {
+		result["references"] = append([]string(nil), row.Metadata.References...)
 	}
 	return result, nil
 }
 
 // GetSkillReference fetches a specific reference file for a skill on demand.
 func GetSkillReference(skillID, refName string) (map[string]interface{}, error) {
-	d := store().GetByID(skillID)
-	if d == nil || !d.Enabled {
-		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	row, err := requireEnabledSkill(skillID)
+	if err != nil {
+		return nil, err
 	}
-
 	found := false
-	for _, r := range d.References {
+	for _, r := range row.Metadata.References {
 		if r == refName {
 			found = true
 			break
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("reference %q not found in skill %s; available: %v", refName, skillID, d.References)
+		return nil, fmt.Errorf("reference %q not found in local metadata for skill %s; available: %v", refName, skillID, row.Metadata.References)
 	}
-
-	content, err := store().GetReference(skillID, refName)
+	path := filepath.Join(row.Metadata.BasePath, "references", refName)
+	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("skill %q local reference %q missing: %w", skillID, refName, err)
 	}
-
 	return map[string]interface{}{
 		"skill_id":  skillID,
 		"reference": refName,
-		"content":   content,
+		"content":   string(content),
 	}, nil
+}
+
+// GetSkillRuntimeMetadata returns the synchronized local runtime metadata.
+func GetSkillRuntimeMetadata(skillID string) (*SkillRuntimeMetadata, error) {
+	row, err := requireEnabledSkill(skillID)
+	if err != nil {
+		return nil, err
+	}
+	meta := row.Metadata
+	return &meta, nil
+}
+
+func scanSkillRow(scan func(...interface{}) error) (skillRow, error) {
+	var row skillRow
+	var enabled int
+	var metadataJSON string
+	if err := scan(&row.ID, &row.Name, &row.Description, &enabled, &metadataJSON, &row.UpdatedAt); err != nil {
+		return row, err
+	}
+	row.Enabled = enabled == 1
+	if strings.TrimSpace(metadataJSON) != "" {
+		_ = json.Unmarshal([]byte(metadataJSON), &row.Metadata)
+	}
+	if row.Metadata.Scripts == nil {
+		row.Metadata.Scripts = []string{}
+	}
+	if row.Metadata.References == nil {
+		row.Metadata.References = []string{}
+	}
+	return row, nil
+}
+
+func skillRecordFromRow(row skillRow, includeReadme bool) SkillRecord {
+	record := SkillRecord{
+		ID:          row.ID,
+		Name:        row.Name,
+		Description: row.Description,
+		Enabled:     row.Enabled,
+		Scripts:     append([]string(nil), row.Metadata.Scripts...),
+		References:  append([]string(nil), row.Metadata.References...),
+		Metadata:    &row.Metadata,
+	}
+	if !includeReadme {
+		record.Readme = ""
+	}
+	return record
+}
+
+func getSkillRowByID(skillID string) (*skillRow, error) {
+	row := DB.QueryRow(skillSelectSQL+` WHERE id = ?`, skillID)
+	parsed, err := scanSkillRow(row.Scan)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func requireEnabledSkill(skillID string) (*skillRow, error) {
+	row, err := getSkillRowByID(skillID)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("skill %q missing from local store", skillID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !row.Enabled {
+		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
+	}
+	if strings.TrimSpace(row.Metadata.BasePath) == "" {
+		return nil, fmt.Errorf("skill %q missing local base path metadata", skillID)
+	}
+	return row, nil
+}
+
+func readLocalSkillBody(row skillRow) (string, error) {
+	if strings.TrimSpace(row.Metadata.BasePath) == "" {
+		return "", fmt.Errorf("skill %q missing local base path metadata", row.ID)
+	}
+	path := filepath.Join(row.Metadata.BasePath, "SKILL.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("skill %q local SKILL.md missing: %w", row.ID, err)
+	}
+	_, body := splitFrontmatter(string(content))
+	return body, nil
+}
+
+func replaceSkillSnapshot(skills []github.SkillData) error {
+	if DB == nil {
+		return fmt.Errorf("local skill snapshot writer: db not initialized")
+	}
+
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := timeutil.NowMs()
+	seen := make(map[string]struct{}, len(skills))
+	for _, skill := range skills {
+		seen[skill.ID] = struct{}{}
+		metaBytes, err := json.Marshal(SkillRuntimeMetadata{
+			BasePath:   skill.BasePath,
+			Scripts:    append([]string(nil), skill.Scripts...),
+			References: append([]string(nil), skill.References...),
+			SyncedAt:   now,
+			SourceSHA:  skill.SourceSHA,
+		})
+		if err != nil {
+			return err
+		}
+		enabled := 0
+		if skill.Enabled {
+			enabled = 1
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO skills (id, name, description, enabled, metadata, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				name = excluded.name,
+				description = excluded.description,
+				enabled = excluded.enabled,
+				metadata = excluded.metadata,
+				updated_at = excluded.updated_at
+		`, skill.ID, skill.Name, skill.Description, enabled, string(metaBytes), now, now); err != nil {
+			return err
+		}
+	}
+
+	rows, err := tx.Query(`SELECT id FROM skills`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var staleIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		if _, ok := seen[id]; !ok {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range staleIDs {
+		if _, err := tx.Exec(`DELETE FROM skills WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func splitFrontmatter(content string) (frontmatter, body string) {
+	const delim = "---"
+	if !strings.HasPrefix(strings.TrimSpace(content), delim) {
+		return "", strings.TrimSpace(content)
+	}
+	trimmed := strings.TrimSpace(content)
+	rest := trimmed[len(delim):]
+	idx := strings.Index(rest, delim)
+	if idx < 0 {
+		return "", strings.TrimSpace(content)
+	}
+	return strings.TrimSpace(rest[:idx]), strings.TrimSpace(rest[idx+len(delim):])
 }
