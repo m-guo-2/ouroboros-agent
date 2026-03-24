@@ -201,7 +201,8 @@ func RegisterOSTools(registry *engine.ToolRegistry, session *ShellSession) {
 func registerShell(registry *engine.ToolRegistry, session *ShellSession) {
 	registry.RegisterBuiltin(
 		"shell",
-		"在 shell 中执行命令。工作目录在会话内持续保持（cd 会生效）。"+
+		"在宿主机 shell 中执行命令（非沙箱环境，可访问完整文件系统和网络）。"+
+			"工作目录在会话内持续保持（cd 会生效）。"+
 			"返回 stdout、stderr、exit_code 以及执行后的当前目录 cwd。",
 		types.JSONSchema{
 			Type: "object",
@@ -240,7 +241,7 @@ func registerShell(registry *engine.ToolRegistry, session *ShellSession) {
 func registerReadFile(registry *engine.ToolRegistry, session *ShellSession) {
 	registry.RegisterBuiltin(
 		"read_file",
-		"读取文件内容。支持 start_line / end_line 指定行范围，适合避免一次加载超大文件。",
+		"读取宿主机文件系统中的文件内容。支持 start_line / end_line 指定行范围，适合避免一次加载超大文件。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -319,7 +320,7 @@ func registerReadFile(registry *engine.ToolRegistry, session *ShellSession) {
 func registerWriteFile(registry *engine.ToolRegistry, session *ShellSession) {
 	registry.RegisterBuiltin(
 		"write_file",
-		"写入内容到文件。默认覆盖整个文件；append=true 时追加到末尾。自动创建父目录。",
+		"写入内容到宿主机文件系统。默认覆盖整个文件；append=true 时追加到末尾。自动创建父目录。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -382,7 +383,7 @@ func registerWriteFile(registry *engine.ToolRegistry, session *ShellSession) {
 func registerListDir(registry *engine.ToolRegistry, session *ShellSession) {
 	registry.RegisterBuiltin(
 		"list_dir",
-		"列出目录内容，包含每个条目的类型（file/dir/symlink）、大小和修改时间。",
+		"列出宿主机文件系统中目录内容，包含每个条目的类型（file/dir/symlink）、大小和修改时间。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -527,7 +528,7 @@ func grepFile(path string, re *regexp.Regexp, contextLines, maxMatches int, resu
 func registerGrep(registry *engine.ToolRegistry, session *ShellSession) {
 	registry.RegisterBuiltin(
 		"grep",
-		"在文件或目录中搜索匹配模式的行，返回结构化结果（文件路径、行号、匹配内容及上下文）。"+
+		"在宿主机文件系统中搜索匹配模式的行，返回结构化结果（文件路径、行号、匹配内容及上下文）。"+
 			"适合在大文件中定位关键内容，比 read_file 更高效。",
 		types.JSONSchema{
 			Type: "object",
