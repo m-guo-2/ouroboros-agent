@@ -103,6 +103,7 @@ func main() {
 		logger.Boundary(ctx, "Agent 启动中", "port", cfg.Port, "appId", cfg.ID, "version", cfg.Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error(ctx, "服务启动失败", "error", err.Error())
+			logger.Flush()
 			os.Exit(1)
 		}
 	}()
