@@ -32,7 +32,7 @@ help:
 	@echo "    make clean        清理全部产物"
 	@echo ""
 	@echo "  部署 (supervisor)："
-	@echo "    make deploy       编译 + 安装 + 重启"
+	@echo "    make deploy       停止 + 编译 + 安装 + 重启"
 	@echo "    make install      安装产物到 $(INSTALL_DIR)/"
 	@echo "    make restart      重启服务组"
 	@echo "    make stop         停止服务组"
@@ -111,7 +111,7 @@ clean:
 # ─── 部署（supervisor） ───────────────────────────────────────────────────
 .PHONY: deploy install install-bins install-admin restart stop status
 
-deploy: build install restart status
+deploy: stop build install restart status
 	@echo ""
 	@echo "=> 部署完成 ✓"
 
