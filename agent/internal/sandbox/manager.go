@@ -48,6 +48,7 @@ func (m *Manager) GetOrCreate(sessionID string) (*Sandbox, bool, error) {
 	sb := &Sandbox{
 		SessionID: sessionID,
 		RootDir:   rootDir,
+		env:       os.Environ(),
 		createdAt: time.Now(),
 		lastUsed:  time.Now(),
 	}

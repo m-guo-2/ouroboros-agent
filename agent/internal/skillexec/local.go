@@ -33,10 +33,11 @@ func (e *LocalExecutor) Execute(ctx context.Context, req ScriptRequest) (*Script
 	cmd.Dir = req.BasePath
 
 	if len(req.Env) > 0 {
-		cmd.Env = cmd.Environ()
+		env := make([]string, 0, len(req.Env))
 		for k, v := range req.Env {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+			env = append(env, k+"="+v)
 		}
+		cmd.Env = env
 	}
 
 	out, err := cmd.CombinedOutput()

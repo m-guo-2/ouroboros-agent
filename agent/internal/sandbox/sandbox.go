@@ -24,6 +24,7 @@ type Sandbox struct {
 	SessionID string
 	RootDir   string
 
+	env       []string // host environment snapshot, captured at creation
 	createdAt time.Time
 	lastUsed  time.Time
 	mu        sync.Mutex
@@ -33,6 +34,18 @@ type Sandbox struct {
 // This is used as BasePath in skillexec.ScriptRequest.
 func (s *Sandbox) SkillBasePath(skillID string) string {
 	return filepath.Join(s.RootDir, skillsDirName, skillID)
+}
+
+// Environ returns the sandbox environment as a key-value map.
+// Used to populate ScriptRequest.Env for skill script execution.
+func (s *Sandbox) Environ() map[string]string {
+	m := make(map[string]string, len(s.env))
+	for _, entry := range s.env {
+		if k, v, ok := strings.Cut(entry, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
 }
 
 // Exec runs a shell command inside the sandbox workspace.
@@ -49,6 +62,9 @@ func (s *Sandbox) Exec(ctx context.Context, command string, timeout time.Duratio
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = s.RootDir
+	if len(s.env) > 0 {
+		cmd.Env = s.env
+	}
 
 	out, err := cmd.CombinedOutput()
 	output := truncateOutput(string(out))

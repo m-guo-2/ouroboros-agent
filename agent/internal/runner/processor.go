@@ -1127,10 +1127,15 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				return nil, fmt.Errorf("script %q not in skill %s scripts list: %v", script, skillID, meta.Scripts)
 			}
 
+			var envMap map[string]string
+			if sb != nil {
+				envMap = sb.Environ()
+			}
 			req := skillexec.ScriptRequest{
 				BasePath: basePath,
 				Script:   script,
 				Args:     args,
+				Env:      envMap,
 			}
 
 			if !asyncMode {

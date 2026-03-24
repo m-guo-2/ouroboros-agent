@@ -14,7 +14,7 @@ type ScriptRequest struct {
 	BasePath string            // local disk path to the skill directory
 	Script   string            // script filename within scripts/ subdirectory
 	Args     string            // command-line arguments string
-	Env      map[string]string // reserved for future per-skill env injection; currently empty
+	Env      map[string]string // environment variables for the script process; when set, replaces the default inherited env
 }
 
 // ScriptResult holds the output of a script execution.

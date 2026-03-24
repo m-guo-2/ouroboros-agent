@@ -14,7 +14,7 @@ import (
 // The tools operate on the sandbox for the current session.
 func RegisterTools(registry *engine.ToolRegistry, sb *Sandbox) {
 	registry.RegisterBuiltin("execute_command",
-		"在沙箱工作区中执行 shell 命令。可用于运行脚本、安装依赖、数据处理等。工作目录为沙箱根目录。",
+		"在沙箱工作区中执行 shell 命令。可用于运行脚本、安装依赖、数据处理等。工作目录为沙箱根目录。命令可以访问系统环境变量（如通过 printenv、echo $VAR 等方式读取）。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -73,7 +73,7 @@ func RegisterTools(registry *engine.ToolRegistry, sb *Sandbox) {
 	)
 
 	registry.RegisterBuiltin("read_file",
-		"读取沙箱工作区中的文件内容。路径相对于沙箱根目录。",
+		"读取沙箱工作区中的文件内容。路径相对于沙箱根目录，只能访问沙箱内部文件，无法读取宿主系统文件（如 /etc/environment）。如需查看系统环境变量，请使用 execute_command。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -98,7 +98,7 @@ func RegisterTools(registry *engine.ToolRegistry, sb *Sandbox) {
 	)
 
 	registry.RegisterBuiltin("list_files",
-		"列出沙箱工作区中指定目录的内容。路径相对于沙箱根目录，默认列出根目录。",
+		"列出沙箱工作区中指定目录的内容。路径相对于沙箱根目录，默认列出根目录。只能列出沙箱内部目录，无法浏览宿主文件系统。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
