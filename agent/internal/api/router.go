@@ -41,6 +41,9 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	mux.HandleFunc("/api/users", handleUsers)
 	mux.HandleFunc("/api/users/", handleUsersWithID)
 
+	// Subagent jobs
+	mux.HandleFunc("/api/subagent-jobs/", handleSubagentJobs)
+
 	// Traces (SQLite reader)
 	th := &tracesHandler{reader: logReader}
 	mux.Handle("/api/traces", th)

@@ -141,7 +141,7 @@ export interface ExecutionStep {
   /** ReAct 迭代轮次（从 1 开始；system 步骤可能为 0） */
   iteration: number
   timestamp: number
-  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call" | "absorb" | "compact"
+  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call" | "absorb" | "compact" | "subagent_reentry"
   thinking?: string
   /** 来源：model = 模型推理, system = 系统状态日志（加载配置/Skills 等） */
   source?: "model" | "system"
@@ -172,6 +172,8 @@ export interface ExecutionStep {
   tokensAfter?: number
   /** compact 事件：归档消息数 */
   archivedCount?: number
+  /** tool_result (run_subagent_async)：关联的 subagent trace ID */
+  subTraceId?: string
 }
 
 export interface ExecutionTrace {
@@ -233,4 +235,43 @@ export interface CompactionData {
   tokenCountAfter: number
   compactModel: string
   createdAt: number
+}
+
+// ===== Subagent Jobs =====
+
+export interface SubagentJobSummary {
+  id: string
+  name: string
+  profile: string
+  status: "queued" | "running" | "completed" | "failed" | "canceled"
+  subTraceId: string
+  parentTraceId: string
+  createdAt: number
+  updatedAt: number
+  impactCount: number
+  task: string
+}
+
+export interface SubagentImpact {
+  timestamp: number
+  tool: string
+  summary: string
+  detail?: Record<string, unknown>
+}
+
+export interface SubagentJobDetail {
+  id: string
+  name: string
+  profile: string
+  task: string
+  status: "queued" | "running" | "completed" | "failed" | "canceled"
+  subTraceId: string
+  parentTraceId: string
+  sessionId: string
+  createdAt: number
+  updatedAt: number
+  result?: string
+  error?: string
+  impacts?: SubagentImpact[]
+  events: Array<Record<string, unknown>>
 }

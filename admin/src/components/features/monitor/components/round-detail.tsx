@@ -1,13 +1,14 @@
 import { useState, useMemo } from "react"
 import {
   Brain, Wrench, CheckCircle2, XCircle, Clock, ChevronDown, ChevronRight,
-  Zap, FileText, ExternalLink, AlertTriangle,
+  Zap, FileText, ExternalLink, AlertTriangle, RotateCw,
 } from "lucide-react"
 import { cn, formatDuration, formatCost, truncate } from "@/lib/utils"
 import type { ExecutionStep } from "@/api/types"
 import type { FlatEvent } from "../lib/types"
 import { flattenSteps } from "../lib/build-timeline"
 import { LLMIOViewer } from "./llm-io-viewer"
+import { SubagentStepCard } from "./subagent-step-card"
 
 function safePretty(value: unknown): string {
   if (value == null) return ""
@@ -262,23 +263,53 @@ function ErrorRow({ step }: { step: ExecutionStep }) {
   )
 }
 
+// --- Subagent Reentry Row ---
+function SubagentReentryRow({ step }: { step: ExecutionStep }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-indigo-50 border border-indigo-200/60 text-[11px] text-indigo-700">
+      <RotateCw className="h-3.5 w-3.5 shrink-0" />
+      <span>{step.content || "Subagent Re-entry"}</span>
+    </div>
+  )
+}
+
 // --- Flat Event Row (dispatcher) ---
-function FlatEventRow({ event, traceId }: { event: FlatEvent; traceId?: string }) {
+function FlatEventRow({ event, traceId, allEvents, onViewSubagentTrace }: {
+  event: FlatEvent; traceId?: string; allEvents?: FlatEvent[];
+  onViewSubagentTrace?: (subTraceId: string, name: string) => void
+}) {
   switch (event.type) {
     case "model-output":
       return <ModelOutputRow event={event} traceId={traceId} />
     case "tool-call":
+      if (event.step.toolName === "run_subagent_async" && allEvents) {
+        const resultEvent = allEvents.find(
+          (e): e is Extract<FlatEvent, { type: "tool-result" }> =>
+            e.type === "tool-result" && e.step.toolCallId === event.step.toolCallId
+        )
+        return (
+          <SubagentStepCard
+            callStep={event.step}
+            resultStep={resultEvent?.step}
+            onViewTrace={onViewSubagentTrace}
+          />
+        )
+      }
       return <ToolCallRow step={event.step} />
     case "tool-result":
+      if (event.step.toolName === "run_subagent_async") return null
       return <ToolResultRow step={event.step} callStep={event.callStep} />
     case "error":
       return <ErrorRow step={event.step} />
+    case "subagent-reentry":
+      return <SubagentReentryRow step={event.step} />
   }
 }
 
 // --- Main Component ---
-export function RoundDetail({ steps, traceId, isRunning }: {
-  steps: ExecutionStep[]; traceId?: string; isRunning?: boolean
+export function RoundDetail({ steps, traceId, isRunning, onViewSubagentTrace }: {
+  steps: ExecutionStep[]; traceId?: string; isRunning?: boolean;
+  onViewSubagentTrace?: (subTraceId: string, name: string) => void
 }) {
   const flatEvents = useMemo(() => flattenSteps(steps), [steps])
 
@@ -289,7 +320,7 @@ export function RoundDetail({ steps, traceId, isRunning }: {
   return (
     <div className="space-y-0.5">
       {flatEvents.map((event, i) => (
-        <FlatEventRow key={i} event={event} traceId={traceId} />
+        <FlatEventRow key={i} event={event} traceId={traceId} allEvents={flatEvents} onViewSubagentTrace={onViewSubagentTrace} />
       ))}
       {isRunning && (
         <div className="flex items-center gap-2 py-2 px-2 text-xs text-slate-400">

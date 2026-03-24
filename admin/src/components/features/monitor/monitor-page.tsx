@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react"
-import { Activity, MessageSquare, Brain, Clock, PanelRight, RefreshCw } from "lucide-react"
+import { Activity, MessageSquare, Brain, Clock, GitBranch, PanelRight, RefreshCw } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
@@ -13,13 +13,15 @@ import { ConversationTimeline } from "./components/conversation-timeline"
 import { DecisionInspector } from "./components/decision-inspector"
 import { SessionMemoryPanel } from "./components/session-memory-panel"
 import { SessionDelayedTasksPanel } from "./components/session-delayed-tasks-panel"
+import { SubagentJobsPanel } from "./components/subagent-jobs-panel"
 
-type MonitorTab = "conversation" | "memory" | "tasks"
+type MonitorTab = "conversation" | "memory" | "tasks" | "subagent"
 
 const TABS: { id: MonitorTab; label: string; icon: typeof MessageSquare }[] = [
   { id: "conversation", label: "对话", icon: MessageSquare },
   { id: "memory", label: "记忆", icon: Brain },
   { id: "tasks", label: "定时任务", icon: Clock },
+  { id: "subagent", label: "Subagent", icon: GitBranch },
 ]
 
 export function MonitorPage() {
@@ -255,6 +257,9 @@ export function MonitorPage() {
             )}
             {activeTab === "tasks" && (
               <SessionDelayedTasksPanel sessionId={effectiveSessionId} enabled={activeTab === "tasks"} />
+            )}
+            {activeTab === "subagent" && (
+              <SubagentJobsPanel sessionId={effectiveSessionId} enabled={activeTab === "subagent"} />
             )}
           </>
         ) : (

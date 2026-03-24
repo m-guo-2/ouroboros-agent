@@ -51,6 +51,10 @@ func handleSessionsWithID(w http.ResponseWriter, r *http.Request) {
 		getSessionDelayedTasks(w, r, id)
 		return
 	}
+	if sub == "subagent-jobs" {
+		getSessionSubagentJobs(w, r, id)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:

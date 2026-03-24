@@ -2,11 +2,13 @@ package subagent
 
 import (
 	"context"
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -159,6 +161,51 @@ func (m *Manager) Get(jobID string) (*Job, bool) {
 		return nil, false
 	}
 	return cloneJob(job), true
+}
+
+func (m *Manager) ListBySession(sessionID string) []*Job {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []*Job
+	for _, job := range m.jobs {
+		if job.SessionID == sessionID {
+			result = append(result, cloneJob(job))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt > result[j].CreatedAt
+	})
+	return result
+}
+
+func (m *Manager) ReadEvents(jobID string) ([]map[string]interface{}, error) {
+	dir := m.jobDetailDir(jobID)
+	path := filepath.Join(dir, "events.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []map[string]interface{}{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var events []map[string]interface{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev map[string]interface{}
+		if json.Unmarshal(line, &ev) == nil {
+			events = append(events, ev)
+		}
+	}
+	if events == nil {
+		events = []map[string]interface{}{}
+	}
+	return events, nil
 }
 
 func (m *Manager) Cancel(jobID string, reason string) (*Job, error) {

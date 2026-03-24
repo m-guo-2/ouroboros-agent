@@ -237,6 +237,8 @@ export function flattenSteps(steps: ExecutionStep[]): FlatEvent[] {
       events.push({ type: "tool-result", step, callStep })
     } else if (step.type === "error") {
       events.push({ type: "error", step })
+    } else if (step.type === "subagent_reentry") {
+      events.push({ type: "subagent-reentry", step })
     }
   }
 

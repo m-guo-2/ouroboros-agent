@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -82,12 +83,13 @@ type executionStep struct {
 	DurationMs   interface{} `json:"durationMs,omitempty"`
 	StopReason   string      `json:"stopReason,omitempty"`
 	CostUsd      interface{} `json:"costUsd,omitempty"`
-	LLMIORef     string      `json:"llmIORef,omitempty"`
-	AbsorbRound   int `json:"absorbRound,omitempty"`
-	AbsorbedCount int `json:"absorbedCount,omitempty"`
-	TokensBefore  int `json:"tokensBefore,omitempty"`
-	TokensAfter   int `json:"tokensAfter,omitempty"`
-	ArchivedCount int `json:"archivedCount,omitempty"`
+	LLMIORef      string `json:"llmIORef,omitempty"`
+	SubTraceID    string `json:"subTraceId,omitempty"`
+	AbsorbRound   int    `json:"absorbRound,omitempty"`
+	AbsorbedCount int    `json:"absorbedCount,omitempty"`
+	TokensBefore  int    `json:"tokensBefore,omitempty"`
+	TokensAfter   int    `json:"tokensAfter,omitempty"`
+	ArchivedCount int    `json:"archivedCount,omitempty"`
 }
 
 type executionTrace struct {
@@ -198,12 +200,23 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 				ToolName: strField(row, "tool"), ToolInput: row["toolInput"],
 			})
 		case "tool_result":
-			steps = append(steps, executionStep{
+			step := executionStep{
 				Index: len(steps), Iteration: iter, Timestamp: ts,
 				Type: "tool_result", ToolCallID: strField(row, "toolCallId"),
 				ToolName: strField(row, "tool"), ToolResult: row["toolResult"],
 				ToolDuration: row["toolDuration"], ToolSuccess: row["toolSuccess"],
-			})
+			}
+			if strField(row, "tool") == "run_subagent_async" {
+				if resultMap, ok := row["toolResult"].(map[string]interface{}); ok {
+					step.SubTraceID, _ = resultMap["subTraceId"].(string)
+				} else if resultStr, ok := row["toolResult"].(string); ok {
+					var parsed map[string]interface{}
+					if json.Unmarshal([]byte(resultStr), &parsed) == nil {
+						step.SubTraceID, _ = parsed["subTraceId"].(string)
+					}
+				}
+			}
+			steps = append(steps, step)
 		case "llm_call":
 			steps = append(steps, executionStep{
 				Index: len(steps), Iteration: iter, Timestamp: ts,
@@ -257,6 +270,17 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 			steps = append(steps, executionStep{
 				Index: len(steps), Iteration: iter, Timestamp: ts,
 				Type: "attachment_guard",
+			})
+		case "subagent_reentry":
+			jobID := strField(row, "jobId")
+			reentry := 0
+			if v, ok := row["reentry"].(float64); ok {
+				reentry = int(v)
+			}
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type:    "subagent_reentry",
+				Content: fmt.Sprintf("Re-entry 第 %d 轮 (job: %s)", reentry, jobID),
 			})
 		}
 	}
