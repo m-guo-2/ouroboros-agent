@@ -10,6 +10,7 @@ import (
 var (
 	globalRenderer *Renderer
 	globalStorage  oss.Storage
+	globalOSSCfg   oss.Config
 	initOnce       sync.Once
 	initErr        error
 )
@@ -28,6 +29,8 @@ func Init() error {
 			initErr = fmt.Errorf("cardrender: failed to create OSS storage: %w", err)
 			return
 		}
+		normalizedCfg, _ := cfg.Normalized()
+		globalOSSCfg = normalizedCfg
 		globalStorage = storage
 		globalRenderer = NewRenderer(storage)
 	})
@@ -44,6 +47,12 @@ func OSSStorage() oss.Storage {
 // Returns nil if Init() has not been called or failed.
 func DefaultRenderer() *Renderer {
 	return globalRenderer
+}
+
+// OSSEndpoint returns the normalized OSS endpoint (host:port, no scheme).
+// Returns "" if Init() has not been called or failed.
+func OSSEndpoint() string {
+	return globalOSSCfg.Endpoint
 }
 
 // Available reports whether the cardrender system is initialized and ready.

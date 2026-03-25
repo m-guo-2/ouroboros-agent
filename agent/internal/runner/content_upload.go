@@ -1,9 +1,13 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +24,14 @@ const (
 	uploadURLExpiry = 7 * 24 * time.Hour
 )
 
-// resolveMediaContent ensures content is a publicly accessible HTTP(S) URL
-// for media message types (file, image, voice).
-//   - http(s):// → pass through
+var mediaDownloadClient = &http.Client{Timeout: 30 * time.Second}
+
+// resolveMediaContent ensures content is an OSS-backed presigned URL
+// for media message types (file, image, voice). All media goes through OSS
+// so that downstream channel adapters can reliably access the content.
+//
+//   - OSS presigned URL → pass through
+//   - http(s):// (non-OSS) → download → upload to OSS → presigned URL
 //   - oss://bucket/key → presigned URL
 //   - local file path → upload to OSS → presigned URL
 func resolveMediaContent(ctx context.Context, messageType, content string) (string, error) {
@@ -33,7 +42,8 @@ func resolveMediaContent(ctx context.Context, messageType, content string) (stri
 	if content == "" {
 		return content, nil
 	}
-	if isHTTPURL(content) {
+
+	if isHTTPURL(content) && isOwnOSSURL(content) {
 		return content, nil
 	}
 
@@ -44,7 +54,11 @@ func resolveMediaContent(ctx context.Context, messageType, content string) (stri
 		}
 	}
 	if storage == nil {
-		return "", fmt.Errorf("文件发送需要 OSS 存储配置，当前不可用。content 必须是 http(s):// 开头的可公开访问 URL")
+		return "", fmt.Errorf("媒体发送需要 OSS 存储配置，当前不可用")
+	}
+
+	if isHTTPURL(content) {
+		return reuploadHTTPMedia(ctx, storage, content)
 	}
 
 	if strings.HasPrefix(content, "oss://") {
@@ -160,6 +174,82 @@ func inferMessageTypeFromFile(filePath string) string {
 		return "image"
 	}
 	return "file"
+}
+
+func isOwnOSSURL(rawURL string) bool {
+	return isOSSURLForEndpoint(cardrender.OSSEndpoint(), rawURL)
+}
+
+func isOSSURLForEndpoint(endpoint, rawURL string) bool {
+	if endpoint == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Host == endpoint
+}
+
+func reuploadHTTPMedia(ctx context.Context, storage oss.Storage, sourceURL string) (string, error) {
+	resp, err := mediaDownloadClient.Get(sourceURL)
+	if err != nil {
+		return "", fmt.Errorf("下载媒体文件失败 %s: %w", sourceURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("下载媒体文件失败 %s: HTTP %d", sourceURL, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取媒体文件失败 %s: %w", sourceURL, err)
+	}
+
+	parsed, _ := url.Parse(sourceURL)
+	fileName := filepath.Base(parsed.Path)
+	if fileName == "" || fileName == "." || fileName == "/" {
+		fileName = "media"
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(fileName)))
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	key, err := oss.GenerateObjectKey(uploadKeyPrefix, fileName)
+	if err != nil {
+		return "", fmt.Errorf("生成 OSS key 失败: %w", err)
+	}
+
+	_, err = storage.PutObject(ctx, oss.PutObjectInput{
+		Key:         key,
+		FileName:    fileName,
+		ContentType: contentType,
+		Size:        int64(len(body)),
+		Body:        bytes.NewReader(body),
+	})
+	if err != nil {
+		return "", fmt.Errorf("媒体文件上传 OSS 失败: %w", err)
+	}
+
+	presignedURL, err := storage.PresignGetURL(ctx, key, uploadURLExpiry)
+	if err != nil {
+		return "", fmt.Errorf("生成预签名 URL 失败: %w", err)
+	}
+
+	logger.Business(ctx, "HTTP 媒体已中转上传 OSS",
+		"sourceURL", sourceURL,
+		"ossKey", key,
+		"fileName", fileName,
+		"size", len(body),
+	)
+
+	return presignedURL, nil
 }
 
 func resolveOSSURI(ctx context.Context, storage oss.Storage, ossURI string) (string, error) {
