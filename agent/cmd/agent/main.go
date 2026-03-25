@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"agent/internal/api"
+	"agent/internal/cardrender"
 	"agent/internal/channels"
 	"agent/internal/config"
 	"agent/internal/dispatcher"
@@ -70,6 +71,14 @@ func main() {
 
 	if cfg.ConfigPath != "" {
 		logger.Boundary(ctx, "已加载配置文件", "path", cfg.ConfigPath)
+	}
+
+	if ossCfg := cfg.OSS.ToSharedConfig(); ossCfg.Endpoint != "" {
+		if err := cardrender.InitWith(ossCfg); err != nil {
+			logger.Warn(ctx, "OSS/cardrender 初始化失败（媒体中转将不可用）", "error", err.Error())
+		} else {
+			logger.Boundary(ctx, "OSS/cardrender 初始化完成", "endpoint", ossCfg.Endpoint, "bucket", ossCfg.Bucket)
+		}
 	}
 
 	stepAt := time.Now()

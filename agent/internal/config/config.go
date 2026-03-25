@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/m-guo-2/ouroboros-agent/shared/oss"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,11 +21,35 @@ type Config struct {
 	AdminDist  string `yaml:"admin_dist"`
 	Qiwei      Qiwei  `yaml:"qiwei"`
 	GitHub     GitHub `yaml:"github"`
+	OSS        OSS    `yaml:"oss"`
 	ConfigPath string `yaml:"-"`
 }
 
 type Qiwei struct {
 	BaseURL string `yaml:"base_url"`
+}
+
+type OSS struct {
+	Endpoint  string `yaml:"endpoint"`
+	Bucket    string `yaml:"bucket"`
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
+	Region    string `yaml:"region"`
+	Prefix    string `yaml:"prefix"`
+	UseSSL    bool   `yaml:"use_ssl"`
+}
+
+// ToSharedConfig converts to the shared oss.Config used by storage clients.
+func (o OSS) ToSharedConfig() oss.Config {
+	return oss.Config{
+		Endpoint:  o.Endpoint,
+		Bucket:    o.Bucket,
+		AccessKey: o.AccessKey,
+		SecretKey: o.SecretKey,
+		Region:    o.Region,
+		Prefix:    o.Prefix,
+		UseSSL:    o.UseSSL,
+	}
 }
 
 type GitHub struct {
@@ -149,4 +174,17 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("GITHUB_SKILLS_PATH", &cfg.GitHub.SkillsPath)
 	envStr("GITHUB_SKILLS_LOCAL_DIR", &cfg.GitHub.SkillsLocalDir)
 	envStr("GITHUB_SYNC_INTERVAL", &cfg.GitHub.SyncInterval)
+
+	envStr("OSS_ENDPOINT", &cfg.OSS.Endpoint)
+	envStr("OSS_BUCKET", &cfg.OSS.Bucket)
+	envStr("OSS_ACCESS_KEY", &cfg.OSS.AccessKey)
+	envStr("OSS_SECRET_KEY", &cfg.OSS.SecretKey)
+	envStr("OSS_REGION", &cfg.OSS.Region)
+	envStr("OSS_PREFIX", &cfg.OSS.Prefix)
+	envBool := func(key string, dst *bool) {
+		if v := os.Getenv(key); v != "" {
+			*dst = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+		}
+	}
+	envBool("OSS_USE_SSL", &cfg.OSS.UseSSL)
 }

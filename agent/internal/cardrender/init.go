@@ -15,26 +15,38 @@ var (
 	initErr        error
 )
 
-// Init lazily initializes the global renderer with OSS storage from environment
-// config. Safe to call multiple times; only the first call takes effect.
-func Init() error {
+// InitWith initializes the global renderer with an externally provided OSS config.
+// This is the preferred entry point — call it from main() after loading YAML config.
+// Safe to call multiple times; only the first call takes effect.
+func InitWith(cfg oss.Config) error {
 	initOnce.Do(func() {
-		cfg := oss.LoadConfigFromEnv()
-		if err := cfg.Validate(); err != nil {
-			initErr = fmt.Errorf("cardrender: OSS config invalid: %w", err)
-			return
-		}
-		storage, err := oss.NewMinIOStorage(cfg)
-		if err != nil {
-			initErr = fmt.Errorf("cardrender: failed to create OSS storage: %w", err)
-			return
-		}
-		normalizedCfg, _ := cfg.Normalized()
-		globalOSSCfg = normalizedCfg
-		globalStorage = storage
-		globalRenderer = NewRenderer(storage)
+		initErr = doInit(cfg)
 	})
 	return initErr
+}
+
+// Init lazily initializes the global renderer with OSS storage from environment
+// variables. Kept as fallback for backward compatibility; prefer InitWith.
+func Init() error {
+	initOnce.Do(func() {
+		initErr = doInit(oss.LoadConfigFromEnv())
+	})
+	return initErr
+}
+
+func doInit(cfg oss.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("cardrender: OSS config invalid: %w", err)
+	}
+	storage, err := oss.NewMinIOStorage(cfg)
+	if err != nil {
+		return fmt.Errorf("cardrender: failed to create OSS storage: %w", err)
+	}
+	normalizedCfg, _ := cfg.Normalized()
+	globalOSSCfg = normalizedCfg
+	globalStorage = storage
+	globalRenderer = NewRenderer(storage)
+	return nil
 }
 
 // OSSStorage returns the shared OSS storage instance initialized by Init().
