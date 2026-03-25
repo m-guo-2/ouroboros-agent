@@ -933,6 +933,12 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 
 		messageType, _ := input["messageType"].(string)
 
+		if !isMediaMessageType(messageType) && looksLikeFilePath(strings.TrimSpace(content)) {
+			if inferred := inferMessageTypeFromFile(strings.TrimSpace(content)); inferred != "" {
+				messageType = inferred
+			}
+		}
+
 		resolved, err := resolveMediaContent(c, messageType, content)
 		if err != nil {
 			return nil, err

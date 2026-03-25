@@ -116,6 +116,52 @@ func uploadLocalFile(ctx context.Context, storage oss.Storage, localPath string)
 	return url, nil
 }
 
+var imageExtensions = map[string]bool{
+	".png":  true,
+	".jpg":  true,
+	".jpeg": true,
+	".gif":  true,
+	".webp": true,
+	".bmp":  true,
+}
+
+// looksLikeFilePath returns true when content looks like a filesystem path
+// rather than a natural-language message. Used to gate an os.Stat check so
+// we don't stat every outgoing text message.
+func looksLikeFilePath(content string) bool {
+	if content == "" {
+		return false
+	}
+	if strings.Contains(content, "://") {
+		return false
+	}
+	if strings.Contains(content, "\n") {
+		return false
+	}
+	if strings.Count(content, " ") > 1 {
+		return false
+	}
+	if strings.HasPrefix(content, "/") {
+		return true
+	}
+	return strings.Contains(content, "/")
+}
+
+// inferMessageTypeFromFile stats the path and returns "image" or "file"
+// based on its extension. Returns "" if the file does not exist or is a
+// directory.
+func inferMessageTypeFromFile(filePath string) string {
+	info, err := os.Stat(filePath)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if imageExtensions[ext] {
+		return "image"
+	}
+	return "file"
+}
+
 func resolveOSSURI(ctx context.Context, storage oss.Storage, ossURI string) (string, error) {
 	trimmed := strings.TrimPrefix(ossURI, "oss://")
 	parts := strings.SplitN(trimmed, "/", 2)
