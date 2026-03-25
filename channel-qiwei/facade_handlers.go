@@ -313,7 +313,20 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	method, params, err := toFacadeQiweiMessageRequest(req, toID)
+	messageType := strings.TrimSpace(req.MessageType)
+	if messageType == "" {
+		messageType = "text"
+	}
+
+	var method string
+	var params map[string]any
+	var err error
+
+	if isMediaMessageType(messageType) {
+		method, params, err = a.resolveMediaSendParams(r.Context(), messageType, toID, req.Content, req.ChannelMeta)
+	} else {
+		method, params, err = toFacadeQiweiMessageRequest(req, toID)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: err.Error()})
 		return
@@ -322,7 +335,7 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 	logger.Business(r.Context(), "facade 发送开始",
 		"method", method,
 		"toId", toID,
-		"messageType", firstNonEmpty(req.MessageType, "text"),
+		"messageType", messageType,
 		"content", req.Content,
 	)
 
@@ -533,26 +546,6 @@ func toFacadeQiweiMessageRequest(msg facadeSendMessageRequest, toID string) (str
 			params["reply"] = reply
 		}
 		return "/msg/sendHyperText", params, nil
-	case "image":
-		return "/msg/sendImage", map[string]any{
-			"toId":   toID,
-			"imgUrl": msg.Content,
-		}, nil
-	case "file":
-		fileName := "file"
-		if v, ok := meta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
-			fileName = v
-		}
-		return "/msg/sendFile", map[string]any{
-			"toId":     toID,
-			"fileUrl":  msg.Content,
-			"fileName": fileName,
-		}, nil
-	case "voice":
-		return "/msg/sendVoice", map[string]any{
-			"toId":     toID,
-			"voiceUrl": msg.Content,
-		}, nil
 	case "link":
 		return "/msg/sendLink", map[string]any{
 			"toId":    toID,

@@ -31,7 +31,15 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	method, params, err := toQiweiMessageRequest(msg, toID)
+	var method string
+	var params map[string]any
+	var err error
+
+	if isMediaMessageType(msg.MessageType) {
+		method, params, err = a.resolveMediaSendParams(r.Context(), msg.MessageType, toID, msg.Content, msg.ChannelMeta)
+	} else {
+		method, params, err = toQiweiMessageRequest(msg, toID)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: err.Error()})
 		return
@@ -74,21 +82,6 @@ func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string
 			params["reply"] = replyObj
 		}
 		return "/msg/sendHyperText", params, nil
-	case "image":
-		return "/msg/sendImage", map[string]any{
-			"toId":   toID,
-			"imgUrl": msg.Content,
-		}, nil
-	case "file":
-		fileName := "file"
-		if v, ok := meta["fileName"].(string); ok && strings.TrimSpace(v) != "" {
-			fileName = v
-		}
-		return "/msg/sendFile", map[string]any{
-			"toId":     toID,
-			"fileUrl":  msg.Content,
-			"fileName": fileName,
-		}, nil
 	case "link":
 		return "/msg/sendLink", map[string]any{
 			"toId":    toID,
