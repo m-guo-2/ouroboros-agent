@@ -291,6 +291,17 @@ func runSchema(db *sql.DB) error {
 
 		// Skill system redesign: add subagent_skills column
 		`ALTER TABLE agent_configs ADD COLUMN subagent_skills TEXT DEFAULT '{}'`,
+
+		// Context compaction archives for audit/rollback
+		`CREATE TABLE IF NOT EXISTS context_compaction_archives (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			compaction_id INTEGER NOT NULL,
+			archived_messages TEXT NOT NULL,
+			message_count INTEGER NOT NULL,
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_compaction_archives_session ON context_compaction_archives(session_id)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors

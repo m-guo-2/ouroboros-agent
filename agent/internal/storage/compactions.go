@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"agent/internal/timeutil"
+	"agent/internal/types"
 )
 
 type CompactionData struct {
@@ -18,9 +20,9 @@ type CompactionData struct {
 	CreatedAt            int64  `json:"createdAt"`
 }
 
-func SaveCompaction(data CompactionData) error {
+func SaveCompaction(data CompactionData) (int64, error) {
 	now := timeutil.NowMs()
-	_, err := DB.Exec(
+	result, err := DB.Exec(
 		`INSERT INTO context_compactions
 		 (session_id, summary, archived_before_time, archived_message_count,
 		  token_count_before, token_count_after, compact_model, created_at)
@@ -28,7 +30,10 @@ func SaveCompaction(data CompactionData) error {
 		data.SessionID, data.Summary, data.ArchivedBeforeTime,
 		data.ArchivedMessageCount, data.TokenCountBefore, data.TokenCountAfter, data.CompactModel, now,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 func GetLatestCompaction(sessionID string) (*CompactionData, error) {
@@ -39,7 +44,7 @@ func GetLatestCompaction(sessionID string) (*CompactionData, error) {
 		        created_at
 		 FROM context_compactions
 		 WHERE session_id = ?
-		 ORDER BY created_at DESC LIMIT 1`, sessionID,
+		 ORDER BY id DESC LIMIT 1`, sessionID,
 	).Scan(&c.ID, &c.SessionID, &c.Summary, &c.ArchivedBeforeTime,
 		&c.ArchivedMessageCount, &c.TokenCountBefore, &c.TokenCountAfter,
 		&c.CompactModel, &c.CreatedAt)
@@ -74,4 +79,18 @@ func ListCompactions(sessionID string) ([]CompactionData, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func SaveCompactionArchive(compactionID int64, sessionID string, messages []types.AgentMessage) error {
+	data, err := json.Marshal(messages)
+	if err != nil {
+		return fmt.Errorf("marshal archived messages: %w", err)
+	}
+	_, err = DB.Exec(
+		`INSERT INTO context_compaction_archives
+		 (session_id, compaction_id, archived_messages, message_count, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		sessionID, compactionID, string(data), len(messages), timeutil.NowMs(),
+	)
+	return err
 }
