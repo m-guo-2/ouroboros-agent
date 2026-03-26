@@ -57,6 +57,11 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "ok"})
 		return
 	}
+	logger.Detail(ctx, "callback 原始负载",
+		"tag", tagCallback,
+		"bytes", len(rawBody),
+		"body", string(rawBody),
+	)
 	messages, err := parseCallbackMessages(rawBody)
 	if err != nil {
 		logger.Warn(ctx, "callback 解析失败", "tag", tagCallback, "error", err.Error(), "body", string(rawBody))
