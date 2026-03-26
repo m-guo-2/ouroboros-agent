@@ -51,6 +51,7 @@ export function MonitorPage() {
     hasNextPage: hasMoreSessions,
     fetchNextPage: fetchMoreSessions,
     isFetchingNextPage: isFetchingMoreSessions,
+    error: sessionsError,
   } = useMonitorSessions(sessionFilters)
   const deleteSession = useDeleteSession()
 
@@ -214,6 +215,7 @@ export function MonitorPage() {
         isLoadingMore={isFetchingMoreSessions}
         onSearchChange={setSearchQuery}
         onStatusChange={setStatusFilter}
+        error={sessionsError}
       />
 
       <div className="flex-1 bg-slate-50 flex flex-col min-w-0">

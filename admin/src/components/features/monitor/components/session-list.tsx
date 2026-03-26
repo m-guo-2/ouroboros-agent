@@ -30,13 +30,14 @@ interface Props {
   isLoadingMore?: boolean
   onSearchChange?: (search: string) => void
   onStatusChange?: (status: string) => void
+  error?: Error | null
 }
 
 export function SessionList({
   sessions, isLoading,
   selectedSessionId, onSelectSession, onDeleteSession,
   onRefresh, isRefreshing, hasMore, onLoadMore, isLoadingMore,
-  onSearchChange, onStatusChange,
+  onSearchChange, onStatusChange, error,
 }: Props) {
   const filteredSessions = sessions ?? []
   const timeAgoTick = useTimeAgoTick()
@@ -109,7 +110,14 @@ export function SessionList({
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
+        {error ? (
+          <div className="p-3">
+            <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-600">
+              <p className="font-medium mb-1">加载失败</p>
+              <p className="font-mono text-[11px] break-all">{error.message}</p>
+            </div>
+          </div>
+        ) : isLoading ? (
           <div className="p-3 space-y-2">
             {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-14 rounded-md" />)}
           </div>
