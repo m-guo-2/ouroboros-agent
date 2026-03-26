@@ -306,6 +306,35 @@ func runSchema(db *sql.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_groups_agent_channel_group
 			ON channel_groups(agent_id, channel, channel_group_id)`,
 
+		// Personas: named behavior profiles assigned to groups
+		`CREATE TABLE IF NOT EXISTS agent_personas (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			system_prompt TEXT,
+			provider TEXT,
+			model TEXT,
+			skills TEXT,
+			subagent_models TEXT,
+			subagent_skills TEXT,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_personas_agent ON agent_personas(agent_id)`,
+
+		// Group-to-persona assignments
+		`CREATE TABLE IF NOT EXISTS group_persona_assignments (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			group_name TEXT NOT NULL DEFAULT '',
+			persona_id TEXT,
+			created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_group_assignments_agent_key
+			ON group_persona_assignments(agent_id, session_key)`,
+
 		// Context compaction archives for audit/rollback
 		`CREATE TABLE IF NOT EXISTS context_compaction_archives (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

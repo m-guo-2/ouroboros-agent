@@ -98,6 +98,26 @@ func buildLLMClient(provider string, creds *storage.ProviderCredentials) engine.
 	})
 }
 
+// applyPersonaOverride replaces fields in agentConfig with non-nil persona values.
+func applyPersonaOverride(agent *storage.AgentConfig, persona *storage.Persona) {
+	if persona.SystemPrompt != nil {
+		agent.SystemPrompt = *persona.SystemPrompt
+	}
+	if persona.Provider != nil && persona.Model != nil {
+		agent.Provider = *persona.Provider
+		agent.Model = *persona.Model
+	}
+	if persona.Skills != nil {
+		agent.Skills = *persona.Skills
+	}
+	if persona.SubagentModels != nil {
+		agent.SubagentModels = persona.SubagentModels
+	}
+	if persona.SubagentSkills != nil {
+		agent.SubagentSkills = persona.SubagentSkills
+	}
+}
+
 // resolveSubagentLLM returns the LLM client and model name for a subagent profile.
 // If the agent has a per-profile override with valid credentials, a dedicated client is built.
 // Otherwise the main agent's client and model are returned.
@@ -843,6 +863,24 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		logger.Error(ctx, "Agent 配置未找到",
 			"agentId", agentID, "error", fmt.Sprint(err))
 		return fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	// Group persona override: session_key → assignment → persona → replace fields
+	if sessionData.SessionKey != "" {
+		assignment, err := storage.GetGroupAssignment(agentID, sessionData.SessionKey)
+		if err != nil {
+			logger.Warn(ctx, "群分配查询失败，使用默认配置", "sessionKey", sessionData.SessionKey, "error", err)
+		}
+		if assignment != nil && assignment.PersonaID != nil && *assignment.PersonaID != "" {
+			persona, err := storage.GetPersona(*assignment.PersonaID)
+			if err != nil {
+				logger.Warn(ctx, "Persona 查询失败，使用默认配置", "personaId", *assignment.PersonaID, "error", err)
+			}
+			if persona != nil {
+				applyPersonaOverride(agentConfig, persona)
+				logger.Detail(ctx, "已应用群 Persona 覆盖", "personaId", persona.ID, "personaName", persona.DisplayName)
+			}
+		}
 	}
 
 	provider := agentConfig.Provider

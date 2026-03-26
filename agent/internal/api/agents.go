@@ -156,10 +156,25 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle sub-resource paths like /api/agents/{id}/full-prompt
 	subPath := ""
 	if len(parts) > 1 {
 		subPath = parts[1]
+	}
+
+	// Dispatch sub-resources
+	if strings.HasPrefix(subPath, "personas/") {
+		handlePersonaWithID(w, r, id, strings.TrimPrefix(subPath, "personas/"))
+		return
+	}
+	if subPath == "personas" {
+		handlePersonas(w, r, id)
+		return
+	}
+	if subPath == "groups" || subPath == "groups/discover" || strings.HasPrefix(subPath, "groups/") {
+		groupSub := strings.TrimPrefix(subPath, "groups")
+		groupSub = strings.TrimPrefix(groupSub, "/")
+		handleGroupAssignments(w, r, id, groupSub)
+		return
 	}
 
 	if subPath == "full-prompt" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {

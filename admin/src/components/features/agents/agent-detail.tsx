@@ -11,6 +11,9 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
+import { useUnconfiguredGroups } from "@/hooks/use-personas"
+import { PersonaList } from "@/components/features/agents/persona-list"
+import { GroupAssignments } from "@/components/features/agents/group-assignments"
 import { useSkills } from "@/hooks/use-skills"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
@@ -36,6 +39,8 @@ export function AgentDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { data: agent, isLoading } = useAgent(id)
+  const { data: unconfiguredGroups } = useUnconfiguredGroups(id)
+  const unconfiguredCount = unconfiguredGroups?.length ?? 0
   const { data: skills } = useSkills()
   const updateMutation = useUpdateAgent()
   const deleteMutation = useDeleteAgent()
@@ -229,6 +234,15 @@ export function AgentDetail() {
           <TabsTrigger value="config">配置</TabsTrigger>
           <TabsTrigger value="skills">技能</TabsTrigger>
           <TabsTrigger value="channels">渠道</TabsTrigger>
+          <TabsTrigger value="personas">Personas</TabsTrigger>
+          <TabsTrigger value="groups" className="inline-flex items-center gap-1.5">
+            群分配
+            {unconfiguredCount > 0 && (
+              <Badge variant="danger" className="h-5 min-w-5 justify-center px-1.5 py-0 text-[10px]">
+                {unconfiguredCount}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="config">
@@ -517,6 +531,14 @@ export function AgentDetail() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="personas">
+          <PersonaList agentId={agent.id} agent={agent} />
+        </TabsContent>
+
+        <TabsContent value="groups">
+          <GroupAssignments agentId={agent.id} />
         </TabsContent>
       </Tabs>
     </div>

@@ -44,6 +44,43 @@ type SkillContext struct {
 	Diagnostics      []string        `json:"diagnostics,omitempty"`    // runtime/local-store diagnostics
 }
 
+// Persona is a named behavior profile that can be assigned to groups.
+// Pointer fields distinguish "not set" (nil/NULL) from "set to empty".
+type Persona struct {
+	ID             string                        `json:"id"`
+	AgentID        string                        `json:"agentId"`
+	DisplayName    string                        `json:"displayName"`
+	SystemPrompt   *string                       `json:"systemPrompt"`
+	Provider       *string                       `json:"provider"`
+	Model          *string                       `json:"model"`
+	Skills         *[]string                     `json:"skills"`
+	SubagentModels map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
+	SubagentSkills map[string][]string           `json:"subagentSkills,omitempty"`
+	GroupCount     int                           `json:"groupCount"`
+	CreatedAt      string                        `json:"createdAt"`
+	UpdatedAt      string                        `json:"updatedAt"`
+}
+
+// GroupAssignment maps a group (by session_key) to a Persona.
+type GroupAssignment struct {
+	ID         string  `json:"id"`
+	AgentID    string  `json:"agentId"`
+	SessionKey string  `json:"sessionKey"`
+	GroupName  string  `json:"groupName"`
+	PersonaID  *string `json:"personaId"`
+	CreatedAt  string  `json:"createdAt"`
+	UpdatedAt  string  `json:"updatedAt"`
+}
+
+// UnconfiguredGroup represents a group chat discovered from sessions
+// that has no persona assignment yet.
+type UnconfiguredGroup struct {
+	SessionKey    string `json:"sessionKey"`
+	ChannelName   string `json:"channelName"`
+	SourceChannel string `json:"sourceChannel"`
+	LastActive    int64  `json:"lastActive"`
+}
+
 // SessionData represents a persisted agent session.
 type SessionData struct {
 	ID                    string `json:"id"`

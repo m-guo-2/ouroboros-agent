@@ -275,3 +275,37 @@ export interface SubagentJobDetail {
   impacts?: SubagentImpact[]
   events: Array<Record<string, unknown>>
 }
+
+// ===== Personas & group assignments =====
+
+export interface Persona {
+  id: string
+  agentId: string
+  displayName: string
+  systemPrompt?: string | null
+  provider?: string | null
+  model?: string | null
+  skills?: string[] | null
+  subagentModels?: Record<string, SubagentModelConfig> | null
+  subagentSkills?: Record<string, string[]> | null
+  groupCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GroupAssignment {
+  id: string
+  agentId: string
+  sessionKey: string
+  groupName: string
+  personaId?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface UnconfiguredGroup {
+  sessionKey: string
+  channelName: string
+  sourceChannel: string
+  lastActive: number
+}
