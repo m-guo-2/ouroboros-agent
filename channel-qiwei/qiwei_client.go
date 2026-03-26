@@ -58,6 +58,7 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 		logger.Business(ctx, "企微 API 请求",
 			"method", reqBody.Method,
 			"attempt", attempt+1,
+			"requestBody", string(raw),
 		)
 
 		resp, err := c.httpClient.Do(req)
@@ -83,6 +84,12 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 
 		if resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("qiwei server error: %d body=%s", resp.StatusCode, string(body))
+			logger.Warn(ctx, "企微 API 服务端错误",
+				"method", reqBody.Method,
+				"attempt", attempt+1,
+				"status", resp.StatusCode,
+				"responseBody", string(body),
+			)
 			if attempt < 2 {
 				sleepRetry(ctx, attempt)
 				continue
@@ -90,6 +97,11 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 			return qiweiDoAPIResponse{}, lastErr
 		}
 		if resp.StatusCode >= 400 {
+			logger.Warn(ctx, "企微 API 客户端错误",
+				"method", reqBody.Method,
+				"status", resp.StatusCode,
+				"responseBody", string(body),
+			)
 			return qiweiDoAPIResponse{}, fmt.Errorf("qiwei api error: %d body=%s", resp.StatusCode, string(body))
 		}
 
@@ -98,8 +110,21 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 			return qiweiDoAPIResponse{}, err
 		}
 		if out.Code != 0 && out.Code != 200 {
+			logger.Warn(ctx, "企微 API 业务错误",
+				"method", reqBody.Method,
+				"code", out.Code,
+				"msg", out.Msg,
+				"responseBody", string(body),
+			)
 			return out, fmt.Errorf("qiwei business error: code=%d msg=%s", out.Code, out.Msg)
 		}
+
+		logger.Business(ctx, "企微 API 响应",
+			"method", reqBody.Method,
+			"attempt", attempt+1,
+			"code", out.Code,
+			"responseBody", string(body),
+		)
 		return out, nil
 	}
 
