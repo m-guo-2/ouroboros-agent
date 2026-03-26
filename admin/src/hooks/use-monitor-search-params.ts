@@ -52,6 +52,20 @@ export function useMonitorSearchParams() {
     }, { replace: true })
   }, [setSearchParams])
 
+  const selectSession = useCallback((id: string | null) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (id) {
+        next.set("session", id)
+      } else {
+        next.delete("session")
+      }
+      next.delete("tab")
+      next.delete("exchange")
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
   const clearInvalidSession = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
@@ -68,6 +82,7 @@ export function useMonitorSearchParams() {
     setSessionId,
     setTab,
     setExchangeIndex,
+    selectSession,
     clearInvalidSession,
   }
 }

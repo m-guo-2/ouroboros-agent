@@ -206,7 +206,7 @@ export function MonitorPage() {
         sessions={sessions}
         isLoading={isLoading}
         selectedSessionId={effectiveSessionId}
-        onSelectSession={(id) => { urlState.setSessionId(id); urlState.setTab("conversation") }}
+        onSelectSession={(id) => urlState.selectSession(id)}
         onDeleteSession={handleDeleteSession}
         onRefresh={handleRefreshSessions}
         isRefreshing={isRefreshingSessions}
