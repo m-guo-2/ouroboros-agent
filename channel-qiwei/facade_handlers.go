@@ -980,7 +980,7 @@ func (r *volcengineRecognizer) QueryAudioTranscription(ctx context.Context, task
 	}
 
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := unmarshalSafe(body, &payload); err != nil {
 		return parsedAttachment{}, false, err
 	}
 	result := mapValue(payload["result"])
@@ -1015,7 +1015,7 @@ func (r *volcengineRecognizer) doArkChatCompletion(ctx context.Context, body map
 		return "", fmt.Errorf("volc ark request failed: HTTP %d %s", resp.StatusCode, string(bodyBytes))
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+	if err := unmarshalSafe(bodyBytes, &payload); err != nil {
 		return "", err
 	}
 	if rawChoices, ok := payload["choices"].([]any); ok {

@@ -792,7 +792,7 @@ func (a *app) loadExternalContacts(ctx context.Context) {
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
 		return
 	}
 	for _, c := range wrapper.ContactList {
@@ -819,7 +819,7 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 	var wrapper struct {
 		ContactList []map[string]any `json:"contactList"`
 	}
-	if err := json.Unmarshal(res.Data, &wrapper); err != nil {
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
 		return
 	}
 	cached := 0
@@ -876,7 +876,7 @@ func parseCallbackMessages(raw []byte) ([]qiweiCallbackMessage, error) {
 	}
 
 	var payload any
-	if err := json.Unmarshal(trimmed, &payload); err != nil {
+	if err := unmarshalSafe(trimmed, &payload); err != nil {
 		return nil, err
 	}
 
