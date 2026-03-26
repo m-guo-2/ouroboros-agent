@@ -308,7 +308,6 @@ export function MonitorPage() {
               <SubagentJobsPanel
                 sessionId={effectiveSessionId}
                 enabled={urlState.tab === "subagent"}
-                onViewTrace={() => urlState.setTab("conversation")}
               />
             )}
           </>

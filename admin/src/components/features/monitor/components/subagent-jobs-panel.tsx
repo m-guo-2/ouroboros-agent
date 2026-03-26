@@ -1,8 +1,10 @@
 import { useState } from "react"
-import { GitBranch, RefreshCw, ChevronDown, ExternalLink, AlertCircle, Wrench } from "lucide-react"
+import { GitBranch, RefreshCw, ChevronDown, AlertCircle } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { useSessionSubagentJobs } from "../hooks/use-session-subagent-jobs"
-import { useSubagentJobDetail } from "../hooks/use-subagent-job-detail"
-import { MarkdownContent } from "@/components/shared/markdown-content"
+import { tracesApi } from "@/api/traces"
+import type { ExecutionTrace } from "@/api/types"
+import { TraceContent } from "./decision-inspector"
 import { timeAgo, cn } from "@/lib/utils"
 
 interface Props {
@@ -36,8 +38,7 @@ function formatTime(ms: number): string {
   })
 }
 
-function JobCard({ jobId, name, profile, status, task, subTraceId, createdAt, updatedAt, impactCount, onViewTrace }: {
-  jobId: string
+function JobCard({ name, profile, status, task, subTraceId, createdAt, updatedAt, impactCount }: {
   name: string
   profile: string
   status: string
@@ -46,10 +47,23 @@ function JobCard({ jobId, name, profile, status, task, subTraceId, createdAt, up
   createdAt: number
   updatedAt: number
   impactCount: number
-  onViewTrace?: (subTraceId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const { data: detail, isLoading: isLoadingDetail } = useSubagentJobDetail(expanded ? jobId : null)
+
+  const {
+    data: trace = null,
+    isLoading: isLoadingTrace,
+    error: traceError,
+  } = useQuery<ExecutionTrace | null>({
+    queryKey: ["traces", subTraceId],
+    queryFn: async () => {
+      if (!subTraceId) return null
+      const res = await tracesApi.getById(subTraceId)
+      return res.data ?? null
+    },
+    enabled: expanded && !!subTraceId,
+    staleTime: 30_000,
+  })
 
   const badge = STATUS_BADGE[status] ?? STATUS_BADGE.queued
   const profileLabel = PROFILE_LABEL[profile] ?? profile
@@ -85,54 +99,20 @@ function JobCard({ jobId, name, profile, status, task, subTraceId, createdAt, up
       </button>
 
       {expanded && (
-        <div className="px-3 pb-3 pt-1 border-t border-slate-100 space-y-2.5">
-          {isLoadingDetail ? (
-            <div className="text-xs text-slate-400 py-2">加载详情...</div>
-          ) : detail ? (
-            <>
-              {detail.status === "completed" && detail.result && (
-                <div className="rounded-md bg-white border border-slate-200 p-3">
-                  <div className="text-[11px] font-medium text-slate-500 mb-1.5">执行结果</div>
-                  <MarkdownContent content={detail.result} className="text-sm text-slate-700 prose-sm max-w-none" />
-                </div>
-              )}
-
-              {detail.status === "failed" && detail.error && (
-                <div className="rounded-md bg-red-50 border border-red-200/60 p-3">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-red-600 mb-1">
-                    <AlertCircle className="h-3.5 w-3.5" />
-                    错误
-                  </div>
-                  <p className="text-xs text-red-600 whitespace-pre-wrap">{detail.error}</p>
-                </div>
-              )}
-
-              {detail.impacts && detail.impacts.length > 0 && (
-                <div className="space-y-1">
-                  <div className="text-[11px] font-medium text-slate-500">工具调用 ({detail.impacts.length})</div>
-                  {detail.impacts.map((impact, idx) => (
-                    <div key={idx} className="flex items-start gap-2 text-xs text-slate-600 py-1 px-2 rounded bg-white border border-slate-100">
-                      <Wrench className="h-3 w-3 text-slate-400 mt-0.5 shrink-0" />
-                      <div className="min-w-0">
-                        <span className="font-medium text-slate-700">{impact.tool}</span>
-                        {impact.summary && <span className="ml-1.5 text-slate-500">{impact.summary}</span>}
-                        <div className="text-[10px] text-slate-400 mt-0.5">{formatTime(impact.timestamp)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : null}
-
-          {subTraceId && onViewTrace && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onViewTrace(subTraceId) }}
-              className="flex items-center gap-1.5 text-xs text-brand-600 hover:text-brand-800 font-medium mt-1"
-            >
-              <ExternalLink className="h-3 w-3" />
-              查看执行过程
-            </button>
+        <div className="border-t border-slate-100">
+          {!subTraceId ? (
+            <div className="px-3 py-4 text-xs text-slate-400 text-center">无执行记录</div>
+          ) : isLoadingTrace ? (
+            <div className="px-3 py-4 text-xs text-slate-400 text-center">加载执行过程...</div>
+          ) : traceError || !trace ? (
+            <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-red-600">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              无法加载执行记录
+            </div>
+          ) : (
+            <div className="p-3 space-y-3">
+              <TraceContent trace={trace} isRunning={isRunning} />
+            </div>
           )}
         </div>
       )}
@@ -140,7 +120,7 @@ function JobCard({ jobId, name, profile, status, task, subTraceId, createdAt, up
   )
 }
 
-export function SubagentJobsPanel({ sessionId, enabled, onViewTrace }: Props) {
+export function SubagentJobsPanel({ sessionId, enabled }: Props) {
   const { data: jobs = [], isLoading, isFetching, refetch } = useSessionSubagentJobs(sessionId, enabled)
 
   if (isLoading) {
@@ -176,7 +156,6 @@ export function SubagentJobsPanel({ sessionId, enabled, onViewTrace }: Props) {
             {jobs.map((job) => (
               <JobCard
                 key={job.id}
-                jobId={job.id}
                 name={job.name}
                 profile={job.profile}
                 status={job.status}
@@ -185,7 +164,6 @@ export function SubagentJobsPanel({ sessionId, enabled, onViewTrace }: Props) {
                 createdAt={job.createdAt}
                 updatedAt={job.updatedAt}
                 impactCount={job.impactCount}
-                onViewTrace={onViewTrace}
               />
             ))}
           </div>

@@ -8,7 +8,7 @@ import { splitIntoRounds } from "../lib/build-timeline"
 import { TraceStatsBar } from "./trace-stats-bar"
 import { RoundDetail } from "./round-detail"
 
-function TraceContent({ trace, isRunning, onViewSubagentTrace, defaultExpanded, expandKey }: {
+export function TraceContent({ trace, isRunning, onViewSubagentTrace, defaultExpanded, expandKey }: {
   trace: ExecutionTrace; isRunning: boolean
   onViewSubagentTrace?: (subTraceId: string, name: string) => void
   defaultExpanded?: boolean; expandKey?: number
