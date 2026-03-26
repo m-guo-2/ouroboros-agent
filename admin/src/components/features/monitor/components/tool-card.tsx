@@ -2,7 +2,7 @@ import { useState, useMemo } from "react"
 import { Wrench, CheckCircle2, XCircle, Clock, ChevronDown, ChevronRight, ExternalLink } from "lucide-react"
 import { cn, formatDuration } from "@/lib/utils"
 import type { ToolPair } from "../lib/types"
-import { safePretty, escapeHtml, openJsonInNewTab } from "../lib/json-utils"
+import { safePretty, openJsonInNewTab } from "../lib/json-utils"
 
 export function ToolCard({ pair }: { pair: ToolPair }) {
   const [expanded, setExpanded] = useState(false)
@@ -17,7 +17,7 @@ export function ToolCard({ pair }: { pair: ToolPair }) {
     <div className="flex gap-2.5 group/tool">
       <div className="flex flex-col items-center pt-0.5">
         <div className={cn(
-          "flex h-5 w-5 items-center justify-center rounded-full flex-shrink-0",
+          "flex h-5 w-5 items-center justify-center rounded-full shrink-0",
           success === false ? "bg-red-50" : success === true ? "bg-green-50" : "bg-brand-50"
         )}>
           {success === false

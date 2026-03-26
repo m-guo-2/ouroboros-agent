@@ -43,14 +43,20 @@ export function SessionList({
 
   const [searchInput, setSearchInput] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("")
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    clearTimeout(debounceRef.current)
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current)
+    }
     debounceRef.current = setTimeout(() => {
       onSearchChange?.(searchInput)
     }, 300)
-    return () => clearTimeout(debounceRef.current)
+    return () => {
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current)
+      }
+    }
   }, [searchInput, onSearchChange])
 
   const handleStatusChange = (status: StatusFilter) => {

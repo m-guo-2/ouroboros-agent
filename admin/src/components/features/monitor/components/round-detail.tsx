@@ -9,7 +9,7 @@ import type { FlatEvent } from "../lib/types"
 import { flattenSteps } from "../lib/build-timeline"
 import { LLMIOViewer } from "./llm-io-viewer"
 import { SubagentStepCard } from "./subagent-step-card"
-import { safePretty, escapeHtml, openJsonInNewTab } from "../lib/json-utils"
+import { safePretty, openJsonInNewTab } from "../lib/json-utils"
 
 // --- Model Output Row ---
 function ModelOutputRow({ event, traceId, defaultExpanded }: {
