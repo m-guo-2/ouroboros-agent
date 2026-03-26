@@ -73,10 +73,12 @@ func listSessions(w http.ResponseWriter, r *http.Request) {
 	agentID := q.Get("agentId")
 	userID := q.Get("userId")
 	channel := q.Get("channel")
+	status := q.Get("status")
+	search := q.Get("search")
 	limit := parseLimit(q.Get("limit"), 50, 200)
 	before := parseInt64(q.Get("before"), 0)
 
-	sessions, err := storage.ListSessions(agentID, userID, channel, limit, before)
+	sessions, err := storage.ListSessions(agentID, userID, channel, status, search, limit, before)
 	if err != nil {
 		apiErr(w, http.StatusInternalServerError, err.Error())
 		return

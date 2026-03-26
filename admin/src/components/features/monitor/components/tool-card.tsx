@@ -2,35 +2,7 @@ import { useState, useMemo } from "react"
 import { Wrench, CheckCircle2, XCircle, Clock, ChevronDown, ChevronRight, ExternalLink } from "lucide-react"
 import { cn, formatDuration } from "@/lib/utils"
 import type { ToolPair } from "../lib/types"
-
-function safePretty(value: unknown): string {
-  if (value == null) return ""
-  if (typeof value === "string") {
-    const text = value.trim()
-    if (!text) return ""
-    if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
-      try { return JSON.stringify(JSON.parse(text), null, 2) } catch { return value }
-    }
-    return value
-  }
-  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-}
-
-function openJsonInNewTab(title: string, value: unknown): void {
-  const raw = safePretty(value)
-  const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title>
-<style>body{margin:0;padding:16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f8fafc;color:#0f172a}
-pre{white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px}</style>
-</head><body><pre>${escapeHtml(raw)}</pre></body></html>`
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" })
-  const url = URL.createObjectURL(blob)
-  window.open(url, "_blank")
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
-}
+import { safePretty, escapeHtml, openJsonInNewTab } from "../lib/json-utils"
 
 export function ToolCard({ pair }: { pair: ToolPair }) {
   const [expanded, setExpanded] = useState(false)
@@ -62,7 +34,7 @@ export function ToolCard({ pair }: { pair: ToolPair }) {
           className={cn("flex items-center gap-1.5", hasDetail && "cursor-pointer")}
           onClick={() => hasDetail && setExpanded(!expanded)}
         >
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-brand-600">Tool</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-brand-600">工具</span>
           <span className="text-[13px] font-medium text-slate-700">{call.toolName}</span>
           {result?.toolDuration != null && (
             <span className="flex items-center gap-0.5 text-[10px] text-slate-400 ml-auto">
@@ -81,7 +53,7 @@ export function ToolCard({ pair }: { pair: ToolPair }) {
             {call.toolInput != null && (
               <div className="rounded-md border border-brand-100 bg-brand-50/40 overflow-hidden">
                 <div className="px-2.5 py-0.5 bg-brand-100/50 text-[10px] font-semibold text-brand-700 uppercase tracking-wider flex items-center">
-                  <span>Input</span>
+                  <span>输入</span>
                   <button className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-brand-700 hover:text-brand-900"
                     onClick={(e) => { e.stopPropagation(); openJsonInNewTab(`Tool Input · ${call.toolName}`, call.toolInput) }}>
                     <ExternalLink className="h-3 w-3" />全文
@@ -97,7 +69,7 @@ export function ToolCard({ pair }: { pair: ToolPair }) {
                 result.toolSuccess === false ? "border-red-100 bg-red-50/40" : "border-green-100 bg-green-50/40")}>
                 <div className={cn("px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider flex items-center",
                   result.toolSuccess === false ? "bg-red-100/50 text-red-700" : "bg-green-100/50 text-green-700")}>
-                  <span>{result.toolSuccess === false ? "Error" : "Result"}</span>
+                  <span>{result.toolSuccess === false ? "错误" : "结果"}</span>
                   {result.toolResult != null && !result.error && (
                     <button className={cn("ml-auto inline-flex items-center gap-1 text-[10px] font-medium",
                       result.toolSuccess === false ? "text-red-700 hover:text-red-900" : "text-green-700 hover:text-green-900")}

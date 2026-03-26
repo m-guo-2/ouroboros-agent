@@ -1,12 +1,21 @@
+import { useState, useEffect } from "react"
 import { Clock, Zap, DollarSign, Cpu, RotateCw } from "lucide-react"
 import { formatDuration, formatCost } from "@/lib/utils"
 import type { ExecutionTrace } from "@/api/types"
 
 export function TraceStatsBar({ trace }: { trace: ExecutionTrace }) {
+  const isRunning = trace.status === "running"
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!isRunning) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [isRunning])
+
   const duration = trace.completedAt
     ? trace.completedAt - trace.startedAt
-    : Date.now() - trace.startedAt
-  const isRunning = trace.status === "running"
+    : now - trace.startedAt
 
   const llmCalls = trace.steps.filter(s => s.type === "llm_call").length
   const iterations = new Set(trace.steps.filter(s => s.iteration > 0).map(s => s.iteration)).size

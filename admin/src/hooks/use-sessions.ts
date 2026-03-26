@@ -26,8 +26,12 @@ export function useSession(id: string | undefined) {
   })
 }
 
-export function useSessionMessages(sessionId: string | undefined, opts?: { refetchInterval?: number | false; limit?: number }) {
+export function useSessionMessages(
+  sessionId: string | undefined,
+  opts?: { refetchInterval?: number | false; limit?: number; isProcessing?: boolean },
+) {
   const pageSize = opts?.limit ?? MESSAGES_PAGE_SIZE
+  const refetchInterval = opts?.isProcessing ? 3000 : (opts?.refetchInterval ?? false)
 
   const query = useInfiniteQuery<MessageData[]>({
     queryKey: ["sessions", sessionId, "messages"],
@@ -42,7 +46,7 @@ export function useSessionMessages(sessionId: string | undefined, opts?: { refet
       return oldest?.id || undefined
     },
     enabled: !!sessionId,
-    refetchInterval: opts?.refetchInterval ?? false,
+    refetchInterval,
   })
 
   const messages = useMemo(

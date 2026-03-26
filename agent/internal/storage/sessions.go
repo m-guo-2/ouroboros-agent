@@ -129,9 +129,9 @@ func CreateSession(params map[string]interface{}) (*SessionData, error) {
 	return GetSession(id)
 }
 
-// ListSessions returns sessions filtered by optional agentID/userID/channel, newest first.
+// ListSessions returns sessions filtered by optional agentID/userID/channel/status/search, newest first.
 // When beforeUpdatedAt > 0, only sessions with updated_at < beforeUpdatedAt are returned (cursor pagination).
-func ListSessions(agentID, userID, channel string, limit int, beforeUpdatedAt int64) ([]SessionData, error) {
+func ListSessions(agentID, userID, channel, status, search string, limit int, beforeUpdatedAt int64) ([]SessionData, error) {
 	query := sessionSelectSQL
 	var args []interface{}
 	var clauses []string
@@ -152,6 +152,15 @@ func ListSessions(agentID, userID, channel string, limit int, beforeUpdatedAt in
 	if channel != "" {
 		clauses = append(clauses, "source_channel = ?")
 		args = append(args, channel)
+	}
+	if status != "" {
+		clauses = append(clauses, "execution_status = ?")
+		args = append(args, status)
+	}
+	if search != "" {
+		clauses = append(clauses, "(title LIKE ? OR channel_name LIKE ?)")
+		pattern := "%" + search + "%"
+		args = append(args, pattern, pattern)
 	}
 	if beforeUpdatedAt > 0 {
 		clauses = append(clauses, "updated_at < ?")

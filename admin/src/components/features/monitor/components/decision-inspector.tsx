@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react"
-import { PanelRightClose, Archive, RefreshCw, ChevronRight, AlertCircle } from "lucide-react"
+import { PanelRightClose, Archive, RefreshCw, ChevronRight, AlertCircle, ChevronsDown, ChevronsUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useQuery } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
@@ -8,9 +8,10 @@ import { splitIntoRounds } from "../lib/build-timeline"
 import { TraceStatsBar } from "./trace-stats-bar"
 import { RoundDetail } from "./round-detail"
 
-function TraceContent({ trace, isRunning, onViewSubagentTrace }: {
+function TraceContent({ trace, isRunning, onViewSubagentTrace, defaultExpanded, expandKey }: {
   trace: ExecutionTrace; isRunning: boolean
   onViewSubagentTrace?: (subTraceId: string, name: string) => void
+  defaultExpanded?: boolean; expandKey?: number
 }) {
   const [activeRound, setActiveRound] = useState(0)
 
@@ -54,10 +55,12 @@ function TraceContent({ trace, isRunning, onViewSubagentTrace }: {
 
       {rounds.length > 0 && (
         <RoundDetail
+          key={`${trace.id}-${activeRound}-${expandKey ?? 0}`}
           steps={rounds[hasMultipleRounds ? activeRound : 0]?.steps ?? []}
           traceId={trace.id}
           isRunning={isRunning}
           onViewSubagentTrace={onViewSubagentTrace}
+          defaultExpanded={defaultExpanded}
         />
       )}
     </>
@@ -71,29 +74,37 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
   onRefreshTrace?: () => void
   isRefreshingTrace?: boolean
 }) {
-  const [subagentView, setSubagentView] = useState<{ traceId: string; name: string } | null>(null)
+  const [subagentStack, setSubagentStack] = useState<Array<{ traceId: string; name: string }>>([])
+  const [expandAll, setExpandAll] = useState<boolean | null>(null)
+  const [expandKey, setExpandKey] = useState(0)
+
+  const currentSubagent = subagentStack.length > 0 ? subagentStack[subagentStack.length - 1] : null
 
   const {
     data: subagentTrace = null,
     isLoading: isLoadingSubagent,
     error: subagentError,
   } = useQuery<ExecutionTrace | null>({
-    queryKey: ["traces", subagentView?.traceId],
+    queryKey: ["traces", currentSubagent?.traceId],
     queryFn: async () => {
-      if (!subagentView?.traceId) return null
-      const res = await tracesApi.getById(subagentView.traceId)
+      if (!currentSubagent?.traceId) return null
+      const res = await tracesApi.getById(currentSubagent.traceId)
       return res.data ?? null
     },
-    enabled: !!subagentView?.traceId,
+    enabled: !!currentSubagent?.traceId,
     staleTime: 30_000,
   })
 
   const handleViewSubagentTrace = useCallback((subTraceId: string, name: string) => {
-    setSubagentView({ traceId: subTraceId, name })
+    setSubagentStack(prev => [...prev, { traceId: subTraceId, name }])
   }, [])
 
-  const handleBackToMain = useCallback(() => {
-    setSubagentView(null)
+  const handleBackToLevel = useCallback((levelIndex: number) => {
+    if (levelIndex < 0) {
+      setSubagentStack([])
+    } else {
+      setSubagentStack(prev => prev.slice(0, levelIndex + 1))
+    }
   }, [])
 
   const isRunning = trace?.status === "running" && !!isSessionProcessing
@@ -102,7 +113,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
-          <h3 className="text-sm font-semibold text-slate-900">Decision Inspector</h3>
+          <h3 className="text-sm font-semibold text-slate-900">决策详情</h3>
           <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
             <PanelRightClose className="h-4 w-4" />
           </button>
@@ -117,9 +128,9 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
-        <h3 className="text-sm font-semibold text-slate-900">Decision Inspector</h3>
+        <h3 className="text-sm font-semibold text-slate-900">决策详情</h3>
         <div className="flex items-center gap-1">
-          {onRefreshTrace && !subagentView && (
+          {onRefreshTrace && subagentStack.length === 0 && (
             <button
               onClick={onRefreshTrace}
               disabled={isRefreshingTrace}
@@ -129,24 +140,51 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
               <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingTrace && "animate-spin")} />
             </button>
           )}
+          <button
+            onClick={() => { setExpandAll(true); setExpandKey(k => k + 1) }}
+            className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+            title="全部展开"
+          >
+            <ChevronsDown className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => { setExpandAll(false); setExpandKey(k => k + 1) }}
+            className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+            title="全部折叠"
+          >
+            <ChevronsUp className="h-3.5 w-3.5" />
+          </button>
           <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
             <PanelRightClose className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      {subagentView && (
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-slate-100 bg-slate-50 text-[12px] shrink-0">
-          <button onClick={handleBackToMain} className="text-brand-600 hover:text-brand-800 font-medium">
+      {subagentStack.length > 0 && (
+        <div className="flex items-center gap-1 px-4 py-2 border-b border-slate-100 bg-slate-50 text-[12px] shrink-0 overflow-x-auto">
+          <button onClick={() => handleBackToLevel(-1)} className="text-brand-600 hover:text-brand-800 font-medium shrink-0">
             主 Trace
           </button>
-          <ChevronRight className="h-3 w-3 text-slate-400" />
-          <span className="text-slate-700 font-medium truncate">Subagent: {subagentView.name}</span>
+          {subagentStack.map((entry, idx) => {
+            const isLast = idx === subagentStack.length - 1
+            return (
+              <span key={entry.traceId} className="flex items-center gap-1 min-w-0">
+                <ChevronRight className="h-3 w-3 text-slate-400 shrink-0" />
+                {isLast ? (
+                  <span className="text-slate-700 font-medium truncate">Subagent: {entry.name}</span>
+                ) : (
+                  <button onClick={() => handleBackToLevel(idx)} className="text-brand-600 hover:text-brand-800 font-medium truncate">
+                    Subagent: {entry.name}
+                  </button>
+                )}
+              </span>
+            )
+          })}
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {subagentView ? (
+        {currentSubagent ? (
           isLoadingSubagent ? (
             <div className="flex items-center justify-center h-32 text-sm text-slate-400">
               加载 Subagent 执行记录...
@@ -157,10 +195,10 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
               无法加载 subagent 执行记录
             </div>
           ) : (
-            <TraceContent trace={subagentTrace} isRunning={false} onViewSubagentTrace={handleViewSubagentTrace} />
+            <TraceContent trace={subagentTrace} isRunning={false} onViewSubagentTrace={handleViewSubagentTrace} defaultExpanded={expandAll ?? undefined} expandKey={expandKey} />
           )
         ) : (
-          <TraceContent trace={trace} isRunning={isRunning} onViewSubagentTrace={handleViewSubagentTrace} />
+          <TraceContent trace={trace} isRunning={isRunning} onViewSubagentTrace={handleViewSubagentTrace} defaultExpanded={expandAll ?? undefined} expandKey={expandKey} />
         )}
       </div>
     </div>

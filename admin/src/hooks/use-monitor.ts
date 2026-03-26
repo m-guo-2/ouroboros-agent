@@ -5,7 +5,7 @@ import type { AgentSessionListItem } from "@/api/types"
 
 const PAGE_SIZE = 10
 
-export function useMonitorSessions(filters?: { agentId?: string; channel?: string; limit?: number }) {
+export function useMonitorSessions(filters?: { agentId?: string; channel?: string; limit?: number; status?: string; search?: string }) {
   const pageSize = filters?.limit ?? PAGE_SIZE
 
   const query = useInfiniteQuery<AgentSessionListItem[]>({
@@ -24,6 +24,13 @@ export function useMonitorSessions(filters?: { agentId?: string; channel?: strin
       const last = lastPage[lastPage.length - 1]
       return last?.updatedAt || undefined
     },
+    refetchInterval: (q) => {
+      const pages = q.state.data?.pages
+      if (!pages?.length) return 30_000
+      const flat = pages.flat()
+      return flat.some((s) => s.executionStatus === "processing") ? 5_000 : 30_000
+    },
+    refetchIntervalInBackground: false,
   })
 
   const sessions = useMemo(

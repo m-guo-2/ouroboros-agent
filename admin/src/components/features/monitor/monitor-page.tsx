@@ -1,21 +1,26 @@
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useEffect } from "react"
 import { Activity, MessageSquare, Brain, Clock, GitBranch, PanelRight, RefreshCw } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
+import { useMonitorSearchParams } from "@/hooks/use-monitor-search-params"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
 import type { ExecutionTrace } from "@/api/types"
 import { cn } from "@/lib/utils"
 import { useSessionCompactions } from "./hooks/use-session-compactions"
+import { useSessionFacts } from "./hooks/use-session-facts"
+import { useSessionDelayedTasks } from "./hooks/use-session-delayed-tasks"
+import { useSessionSubagentJobs } from "./hooks/use-session-subagent-jobs"
 import { buildExchanges } from "./lib/build-timeline"
 import { SessionList } from "./components/session-list"
+import { DeleteSessionDialog } from "./components/delete-session-dialog"
 import { ConversationTimeline } from "./components/conversation-timeline"
 import { DecisionInspector } from "./components/decision-inspector"
 import { SessionMemoryPanel } from "./components/session-memory-panel"
 import { SessionDelayedTasksPanel } from "./components/session-delayed-tasks-panel"
 import { SubagentJobsPanel } from "./components/subagent-jobs-panel"
 
-type MonitorTab = "conversation" | "memory" | "tasks" | "subagent"
+export type MonitorTab = "conversation" | "memory" | "tasks" | "subagent"
 
 const TABS: { id: MonitorTab; label: string; icon: typeof MessageSquare }[] = [
   { id: "conversation", label: "对话", icon: MessageSquare },
@@ -26,11 +31,19 @@ const TABS: { id: MonitorTab; label: string; icon: typeof MessageSquare }[] = [
 
 export function MonitorPage() {
   const queryClient = useQueryClient()
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
-  const [selectedExchangeIndex, setSelectedExchangeIndex] = useState<number | null>(null)
-  const [search, setSearch] = useState("")
+  const urlState = useMonitorSearchParams()
   const [inspectorOpen, setInspectorOpen] = useState(true)
-  const [activeTab, setActiveTab] = useState<MonitorTab>("conversation")
+  const [searchQuery, setSearchQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("")
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
+
+  const sessionFilters = useMemo(() => {
+    const f: { status?: string; search?: string } = {}
+    if (statusFilter) f.status = statusFilter
+    if (searchQuery) f.search = searchQuery
+    return f
+  }, [statusFilter, searchQuery])
+
   const {
     sessions,
     isLoading,
@@ -38,35 +51,52 @@ export function MonitorPage() {
     hasNextPage: hasMoreSessions,
     fetchNextPage: fetchMoreSessions,
     isFetchingNextPage: isFetchingMoreSessions,
-  } = useMonitorSessions()
+  } = useMonitorSessions(sessionFilters)
   const deleteSession = useDeleteSession()
 
   const effectiveSessionId = useMemo(() => {
-    if (selectedSessionId) return selectedSessionId
+    if (urlState.sessionId) {
+      if (sessions && sessions.length > 0) {
+        const exists = sessions.some(s => s.id === urlState.sessionId)
+        if (exists) return urlState.sessionId
+      } else if (isLoading) {
+        return urlState.sessionId
+      }
+    }
     if (!sessions || sessions.length === 0) return null
     const processing = sessions.find((s) => s.executionStatus === "processing")
     return processing?.id ?? sessions[0].id
-  }, [selectedSessionId, sessions])
+  }, [urlState.sessionId, sessions, isLoading])
+
+  useEffect(() => {
+    if (!isLoading && urlState.sessionId && sessions && sessions.length > 0) {
+      const exists = sessions.some(s => s.id === urlState.sessionId)
+      if (!exists) urlState.clearInvalidSession()
+    }
+  }, [isLoading, urlState.sessionId, sessions])
 
   const handleDeleteSession = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation()
-    if (!confirm("确定删除此会话？将同时清除数据库记录、执行链路和 Agent 工作目录，不可恢复。")) return
-    deleteSession.mutate(sessionId, {
+    setDeleteTargetId(sessionId)
+  }, [])
+
+  const confirmDeleteSession = useCallback(() => {
+    if (!deleteTargetId) return
+    deleteSession.mutate(deleteTargetId, {
       onSuccess: () => {
-        if (effectiveSessionId === sessionId) {
-          setSelectedSessionId(null)
-          setSelectedExchangeIndex(null)
+        if (effectiveSessionId === deleteTargetId) {
+          urlState.setSessionId(null)
         }
       },
     })
-  }, [deleteSession, effectiveSessionId])
+    setDeleteTargetId(null)
+  }, [deleteSession, deleteTargetId, effectiveSessionId, urlState])
 
   const handleSelectExchange = useCallback((idx: number) => {
-    setSelectedExchangeIndex(idx)
+    urlState.setExchangeIndex(idx)
     if (!inspectorOpen) setInspectorOpen(true)
-  }, [inspectorOpen])
+  }, [inspectorOpen, urlState])
 
-  // Session data
   const {
     data: session,
     isFetching: isFetchingSession,
@@ -79,17 +109,29 @@ export function MonitorPage() {
     hasNextPage: hasMoreMessages,
     fetchNextPage: fetchMoreMessages,
     isFetchingNextPage: isFetchingMoreMessages,
-  } = useSessionMessages(effectiveSessionId ?? "")
+  } = useSessionMessages(effectiveSessionId ?? "", { isProcessing: !!isProcessing })
 
   const totalMessageCount = useMemo(() => {
     if (!effectiveSessionId || !sessions) return 0
     return sessions.find(s => s.id === effectiveSessionId)?.messageCount ?? messages.length
   }, [effectiveSessionId, sessions, messages.length])
 
-  // Compactions
   const { data: compactions = [] } = useSessionCompactions(effectiveSessionId)
 
-  // Build exchanges
+  const { data: factsForTabCount } = useSessionFacts(effectiveSessionId, true)
+  const { data: delayedTasksForTabCount } = useSessionDelayedTasks(effectiveSessionId, undefined, true)
+  const { data: subagentJobsForTabCount } = useSessionSubagentJobs(effectiveSessionId, true)
+
+  const tabCounts = useMemo(
+    (): Record<MonitorTab, number> => ({
+      conversation: 0,
+      memory: factsForTabCount?.length ?? 0,
+      tasks: delayedTasksForTabCount?.length ?? 0,
+      subagent: subagentJobsForTabCount?.length ?? 0,
+    }),
+    [factsForTabCount, delayedTasksForTabCount, subagentJobsForTabCount]
+  )
+
   const exchanges = useMemo(() => {
     if (messages.length === 0) return []
     return buildExchanges(messages)
@@ -110,12 +152,12 @@ export function MonitorPage() {
   }, [exchanges])
 
   const effectiveExchangeIndex = useMemo(() => {
-    if (selectedExchangeIndex != null) {
-      const selectedExchange = exchanges.find((exchange) => exchange.exchangeIndex === selectedExchangeIndex)
-      if (selectedExchange?.traceId) return selectedExchangeIndex
+    if (urlState.exchangeIndex != null) {
+      const ex = exchanges.find((exchange) => exchange.exchangeIndex === urlState.exchangeIndex)
+      if (ex?.traceId) return urlState.exchangeIndex
     }
     return latestTraceExchangeIndex
-  }, [selectedExchangeIndex, latestTraceExchangeIndex, exchanges])
+  }, [urlState.exchangeIndex, latestTraceExchangeIndex, exchanges])
 
   const selectedExchange = useMemo(() => {
     if (effectiveExchangeIndex == null) return null
@@ -136,7 +178,8 @@ export function MonitorPage() {
       return response.data ?? null
     },
     enabled: !!selectedTraceId,
-    staleTime: Infinity,
+    staleTime: 10_000,
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 3000 : false),
   })
 
   const handleRefreshSessions = useCallback(() => {
@@ -158,27 +201,24 @@ export function MonitorPage() {
 
   return (
     <div className="flex h-full">
-      {/* Left: Session list */}
       <SessionList
         sessions={sessions}
         isLoading={isLoading}
-        search={search}
-        onSearchChange={setSearch}
         selectedSessionId={effectiveSessionId}
-        onSelectSession={(id) => { setSelectedSessionId(id); setSelectedExchangeIndex(null); setActiveTab("conversation") }}
+        onSelectSession={(id) => { urlState.setSessionId(id); urlState.setTab("conversation") }}
         onDeleteSession={handleDeleteSession}
         onRefresh={handleRefreshSessions}
         isRefreshing={isRefreshingSessions}
         hasMore={!!hasMoreSessions}
         onLoadMore={() => void fetchMoreSessions()}
         isLoadingMore={isFetchingMoreSessions}
+        onSearchChange={setSearchQuery}
+        onStatusChange={setStatusFilter}
       />
 
-      {/* Center: Conversation timeline */}
       <div className="flex-1 bg-slate-50 flex flex-col min-w-0">
         {effectiveSessionId ? (
           <>
-            {/* Session header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-white shrink-0">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -195,7 +235,7 @@ export function MonitorPage() {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {activeTab === "conversation" && (
+                {urlState.tab === "conversation" && (
                   <button
                     onClick={handleRefreshMessages}
                     disabled={isRefreshingMessages}
@@ -214,30 +254,34 @@ export function MonitorPage() {
               </div>
             </div>
 
-            {/* Tab bar */}
             <div className="flex items-center gap-0.5 px-5 py-1.5 border-b border-slate-200 bg-white shrink-0">
               {TABS.map((tab) => {
                 const Icon = tab.icon
+                const count = tabCounts[tab.id]
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
+                    onClick={() => urlState.setTab(tab.id)}
                     className={cn(
                       "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-                      activeTab === tab.id
+                      urlState.tab === tab.id
                         ? "bg-slate-100 text-slate-900"
                         : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
                     )}
                   >
                     <Icon className="h-3.5 w-3.5" />
                     {tab.label}
+                    {tab.id !== "conversation" && count > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-slate-200 text-[10px] font-medium text-slate-600">
+                        {count}
+                      </span>
+                    )}
                   </button>
                 )
               })}
             </div>
 
-            {/* Tab content */}
-            {activeTab === "conversation" && (
+            {urlState.tab === "conversation" && (
               <ConversationTimeline
                 exchanges={exchanges}
                 compactions={compactions}
@@ -252,14 +296,18 @@ export function MonitorPage() {
                 isLoadingMoreMessages={isFetchingMoreMessages}
               />
             )}
-            {activeTab === "memory" && (
-              <SessionMemoryPanel sessionId={effectiveSessionId} enabled={activeTab === "memory"} />
+            {urlState.tab === "memory" && (
+              <SessionMemoryPanel sessionId={effectiveSessionId} enabled={urlState.tab === "memory"} />
             )}
-            {activeTab === "tasks" && (
-              <SessionDelayedTasksPanel sessionId={effectiveSessionId} enabled={activeTab === "tasks"} />
+            {urlState.tab === "tasks" && (
+              <SessionDelayedTasksPanel sessionId={effectiveSessionId} enabled={urlState.tab === "tasks"} />
             )}
-            {activeTab === "subagent" && (
-              <SubagentJobsPanel sessionId={effectiveSessionId} enabled={activeTab === "subagent"} />
+            {urlState.tab === "subagent" && (
+              <SubagentJobsPanel
+                sessionId={effectiveSessionId}
+                enabled={urlState.tab === "subagent"}
+                onViewTrace={() => urlState.setTab("conversation")}
+              />
             )}
           </>
         ) : (
@@ -275,7 +323,6 @@ export function MonitorPage() {
         )}
       </div>
 
-      {/* Right: Decision inspector */}
       {inspectorOpen && effectiveSessionId && (
         <div className="w-[420px] shrink-0 border-l border-slate-200 bg-white">
           <DecisionInspector
@@ -288,6 +335,13 @@ export function MonitorPage() {
           />
         </div>
       )}
+
+      <DeleteSessionDialog
+        open={!!deleteTargetId}
+        onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
+        sessionName={deleteTargetId ? (sessions?.find(s => s.id === deleteTargetId)?.channelName || sessions?.find(s => s.id === deleteTargetId)?.title || deleteTargetId.slice(0, 10)) : ""}
+        onConfirm={confirmDeleteSession}
+      />
     </div>
   )
 }

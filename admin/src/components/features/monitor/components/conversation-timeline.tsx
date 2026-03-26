@@ -1,8 +1,8 @@
-import { useRef, useEffect, useMemo } from "react"
-import { Zap, Bot, MessageSquare } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
+import { useRef, useEffect, useMemo, useState } from "react"
+import { useTimeAgoTick } from "@/hooks/use-time-ago-tick"
+import { Zap, Bot, MessageSquare, Copy, ArrowDown } from "lucide-react"
 import { MarkdownContent } from "@/components/shared/markdown-content"
-import { cn, timeAgo } from "@/lib/utils"
+import { cn, timeAgo, absoluteTime, copyToClipboard } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
 import { CompactionEvent } from "./compaction-event"
 import { ExchangeSkeleton } from "./exchange-skeleton"
@@ -29,6 +29,8 @@ export function ConversationTimeline({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const wasAtBottomRef = useRef(true)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const timeAgoTick = useTimeAgoTick()
 
   useEffect(() => {
     const el = scrollRef.current
@@ -41,7 +43,9 @@ export function ConversationTimeline({
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
-    wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    wasAtBottomRef.current = distanceFromBottom < 60
+    setShowScrollBtn(distanceFromBottom > 200)
   }
 
   const compactionsByTime = useMemo(() =>
@@ -51,7 +55,7 @@ export function ConversationTimeline({
 
   if (isLoadingMessages) {
     return (
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-time-ago-tick={timeAgoTick}>
         <ExchangeSkeleton />
         <ExchangeSkeleton />
         <ExchangeSkeleton />
@@ -61,7 +65,7 @@ export function ConversationTimeline({
 
   if (exchanges.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-center">
+      <div className="flex-1 flex flex-col items-center justify-center text-center" data-time-ago-tick={timeAgoTick}>
         <MessageSquare className="h-8 w-8 text-slate-300 mb-2" />
         <p className="text-sm text-slate-400">暂无消息</p>
       </div>
@@ -71,7 +75,8 @@ export function ConversationTimeline({
   let cIdx = 0
 
   return (
-    <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+    <div className="relative flex-1 overflow-hidden">
+    <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto" data-time-ago-tick={timeAgoTick}>
       {hasMoreMessages && (
         <div className="flex justify-center py-3 border-b border-slate-100">
           <button
@@ -103,6 +108,15 @@ export function ConversationTimeline({
           const toolCalls = steps.filter(s => s.type === "tool_call").length
           const errors = steps.filter(s => s.type === "error" || (s.type === "tool_result" && s.toolSuccess === false)).length
 
+          const initiator = exchange.userMessage.initiator
+          const initiatorStyle = !initiator || initiator === "user"
+            ? { label: "用户消息", className: "text-brand-600", bgClass: "bg-brand-50" }
+            : initiator === "system" || exchange.isSystemInitiated
+            ? { label: "系统触发", className: "text-slate-500", bgClass: "bg-slate-100" }
+            : initiator === "scheduled" || initiator === "delayed_task"
+            ? { label: "定时任务", className: "text-amber-600", bgClass: "bg-amber-50" }
+            : { label: initiator, className: "text-slate-500", bgClass: "bg-slate-100" }
+
           return (
             <div key={exchange.exchangeIndex}>
               {compactionsBeforeThis.map((c) => (
@@ -111,28 +125,32 @@ export function ConversationTimeline({
 
               <div
                 className={cn(
-                  "cursor-pointer transition-colors",
+                  "group/exchange cursor-pointer transition-colors",
                   isSelected ? "bg-brand-50/50" : "hover:bg-slate-50/50"
                 )}
                 onClick={() => onSelectExchange(exchange.exchangeIndex)}
               >
-                {/* External event */}
+                {/* User message */}
                 <div className="flex gap-3 px-5 py-3">
-                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50">
-                    <Zap className="h-3.5 w-3.5 text-brand-600" />
+                  <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full", initiatorStyle.bgClass)}>
+                    <Zap className={cn("h-3.5 w-3.5", initiatorStyle.className)} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-brand-600">外部事件</span>
+                      <span className={cn("text-xs font-medium", initiatorStyle.className)}>{initiatorStyle.label}</span>
                       {exchange.userMessage.createdAt && (
-                        <span className="text-[11px] text-slate-400">{timeAgo(exchange.userMessage.createdAt)}</span>
+                        <span className="text-[11px] text-slate-400" title={absoluteTime(exchange.userMessage.createdAt)}>{timeAgo(exchange.userMessage.createdAt)}</span>
                       )}
-                      {exchange.userMessage.initiator && exchange.userMessage.initiator !== "user" && (
-                        <Badge variant="outline" className="text-[10px]">{exchange.userMessage.initiator}</Badge>
-                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.userMessage.content || "") }}
+                        className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all shrink-0"
+                        title="复制"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
                     </div>
                     <p className="text-sm text-slate-900 mt-0.5 leading-relaxed whitespace-pre-wrap">
-                      {exchange.userMessage.content || "(外部触发)"}
+                      {exchange.userMessage.content || "(无内容)"}
                     </p>
                   </div>
                 </div>
@@ -167,8 +185,15 @@ export function ConversationTimeline({
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-medium text-slate-500">助手</span>
                         {exchange.assistantMessage.createdAt && (
-                          <span className="text-[11px] text-slate-400">{timeAgo(exchange.assistantMessage.createdAt)}</span>
+                          <span className="text-[11px] text-slate-400" title={absoluteTime(exchange.assistantMessage.createdAt)}>{timeAgo(exchange.assistantMessage.createdAt)}</span>
                         )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.assistantMessage!.content || "") }}
+                          className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all shrink-0"
+                          title="复制"
+                        >
+                          <Copy className="h-3 w-3" />
+                        </button>
                       </div>
                       <div className="mt-0.5 text-sm text-slate-800">
                         <MarkdownContent content={exchange.assistantMessage.content} />
@@ -191,6 +216,16 @@ export function ConversationTimeline({
           )
         })}
       </div>
+    </div>
+    {showScrollBtn && (
+      <button
+        onClick={() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }) }}
+        className="absolute bottom-4 right-4 flex items-center justify-center h-8 w-8 rounded-full bg-white shadow-md border border-slate-200 text-slate-500 hover:text-slate-700 transition-colors z-10"
+        title="滚动到底部"
+      >
+        <ArrowDown className="h-4 w-4" />
+      </button>
+    )}
     </div>
   )
 }

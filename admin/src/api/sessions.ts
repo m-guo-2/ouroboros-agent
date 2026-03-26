@@ -2,13 +2,15 @@ import { fetchApi } from "./client"
 import type { AgentSession, AgentSessionListItem, MessageData, CompactionData, SessionFact, DelayedTask } from "./types"
 
 export const sessionsApi = {
-  getAll: (filters?: { agentId?: string; channel?: string; userId?: string; limit?: number; before?: number }) => {
+  getAll: (filters?: { agentId?: string; channel?: string; userId?: string; limit?: number; before?: number; status?: string; search?: string }) => {
     const params = new URLSearchParams()
     if (filters?.agentId) params.set("agentId", filters.agentId)
     if (filters?.channel) params.set("channel", filters.channel)
     if (filters?.userId) params.set("userId", filters.userId)
     if (filters?.limit) params.set("limit", String(filters.limit))
     if (filters?.before) params.set("before", String(filters.before))
+    if (filters?.status) params.set("status", filters.status)
+    if (filters?.search) params.set("search", filters.search)
     const qs = params.toString()
     return fetchApi<AgentSessionListItem[]>(`/agent-sessions${qs ? `?${qs}` : ""}`)
   },
