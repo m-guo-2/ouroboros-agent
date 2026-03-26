@@ -58,11 +58,7 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"code": 200, "msg": "ok"})
 		return
 	}
-	logger.Detail(ctx, "callback 原始负载",
-		"tag", tagCallback,
-		"bytes", len(rawBody),
-		"body", string(rawBody),
-	)
+	logRawCallbackBody(ctx, rawBody)
 	messages, err := parseCallbackMessages(rawBody)
 	if err != nil {
 		logger.Warn(ctx, "callback 解析失败", "tag", tagCallback, "error", err.Error(), "body", string(rawBody))
@@ -985,6 +981,35 @@ func truncateBody(raw []byte, max int) string {
 		return s
 	}
 	return s[:max] + "...(truncated)"
+}
+
+func logRawCallbackBody(ctx context.Context, rawBody []byte) {
+	if len(rawBody) == 0 {
+		logger.Detail(ctx, "callback 原始负载", "tag", tagCallback, "bytes", 0)
+		return
+	}
+
+	const chunkSize = 180
+	body := string(rawBody)
+	runes := []rune(body)
+	total := (len(runes) + chunkSize - 1) / chunkSize
+
+	logger.Detail(ctx, "callback 原始负载开始",
+		"tag", tagCallback,
+		"bytes", len(rawBody),
+		"chunks", total,
+	)
+
+	for i := 0; i < total; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		logger.Detail(ctx, fmt.Sprintf("callback 原始负载[%d/%d] %s", i+1, total, string(runes[start:end])),
+			"tag", tagCallback,
+		)
+	}
 }
 
 func anyToString(v any) string {
