@@ -338,6 +338,34 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	}, nil
 }
 
+// FindAttachmentInSession searches for an attachment by ID within a session's messages.
+// Uses a targeted query instead of loading all messages.
+func FindAttachmentInSession(sessionID, attachmentID string) (AttachmentData, bool) {
+	if sessionID == "" || attachmentID == "" {
+		return AttachmentData{}, false
+	}
+	var raw string
+	err := DB.QueryRow(
+		`SELECT attachments_json FROM messages
+		 WHERE session_id = ? AND attachments_json LIKE ?
+		 ORDER BY id DESC LIMIT 1`,
+		sessionID, `%"id":"`+attachmentID+`"%`,
+	).Scan(&raw)
+	if err != nil {
+		return AttachmentData{}, false
+	}
+	var attachments []AttachmentData
+	if err := json.Unmarshal([]byte(raw), &attachments); err != nil {
+		return AttachmentData{}, false
+	}
+	for _, a := range attachments {
+		if a.ID == attachmentID {
+			return a, true
+		}
+	}
+	return AttachmentData{}, false
+}
+
 type jsonStringSliceAttachment []AttachmentData
 
 func (a *jsonStringSliceAttachment) Scan(src interface{}) error {

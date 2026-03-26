@@ -77,18 +77,7 @@ func resolveAttachmentForSession(request ProcessRequest, attachmentID string) (s
 	if request.SessionID == "" {
 		return storage.AttachmentData{}, false
 	}
-	msgs, err := storage.GetSessionMessages(request.SessionID, 200)
-	if err != nil {
-		return storage.AttachmentData{}, false
-	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		for _, attachment := range msgs[i].Attachments {
-			if attachment.ID == attachmentID {
-				return attachment, true
-			}
-		}
-	}
-	return storage.AttachmentData{}, false
+	return storage.FindAttachmentInSession(request.SessionID, attachmentID)
 }
 
 func normalizeAttachmentTask(task, kind string) string {
