@@ -988,28 +988,10 @@ func logRawCallbackBody(ctx context.Context, rawBody []byte) {
 		logger.Detail(ctx, "callback 原始负载", "tag", tagCallback, "bytes", 0)
 		return
 	}
-
-	const chunkSize = 180
-	body := string(rawBody)
-	runes := []rune(body)
-	total := (len(runes) + chunkSize - 1) / chunkSize
-
-	logger.Detail(ctx, "callback 原始负载开始",
+	logger.Detail(ctx, "callback 原始负载 "+string(rawBody),
 		"tag", tagCallback,
 		"bytes", len(rawBody),
-		"chunks", total,
 	)
-
-	for i := 0; i < total; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if end > len(runes) {
-			end = len(runes)
-		}
-		logger.Detail(ctx, fmt.Sprintf("callback 原始负载[%d/%d] %s", i+1, total, string(runes[start:end])),
-			"tag", tagCallback,
-		)
-	}
 }
 
 func anyToString(v any) string {
