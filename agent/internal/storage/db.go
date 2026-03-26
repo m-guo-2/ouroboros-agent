@@ -292,6 +292,20 @@ func runSchema(db *sql.DB) error {
 		// Skill system redesign: add subagent_skills column
 		`ALTER TABLE agent_configs ADD COLUMN subagent_skills TEXT DEFAULT '{}'`,
 
+		// Channel groups: group metadata reported by channel adapters
+		`CREATE TABLE IF NOT EXISTS channel_groups (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			channel TEXT NOT NULL,
+			channel_group_id TEXT NOT NULL,
+			group_name TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_groups_agent_channel_group
+			ON channel_groups(agent_id, channel, channel_group_id)`,
+
 		// Context compaction archives for audit/rollback
 		`CREATE TABLE IF NOT EXISTS context_compaction_archives (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

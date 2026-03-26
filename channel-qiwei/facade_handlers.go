@@ -501,26 +501,139 @@ func (a *app) downloadAttachment(ctx context.Context, attachment parsedAttachmen
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
-	name := attachment.Name
-	if name == "" {
-		name = "attachment"
-		switch attachment.Kind {
-		case "image":
-			name += ".jpg"
-		case "audio":
-			name += ".mp3"
-		case "document":
-			name += ".dat"
-		default:
-			name += ".dat"
-		}
-	}
-	mimeType := resp.Header.Get("Content-Type")
+	mimeType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	name := resolveDownloadedAttachmentName(attachment, resp.Header, mimeType)
 	if mimeType == "" {
 		mimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
 	}
 	attachment.Name = name
 	return a.uploadDownloadedAttachment(ctx, attachment, resp.Body, mimeType, resp.ContentLength)
+}
+
+func resolveDownloadedAttachmentName(attachment parsedAttachment, headers http.Header, contentType string) string {
+	name := strings.TrimSpace(attachment.Name)
+	if isGenericAttachmentName(name) || filepath.Ext(name) == "" {
+		if headerName := attachmentNameFromContentDisposition(headers.Get("Content-Disposition")); headerName != "" {
+			name = headerName
+		}
+	}
+	if isGenericAttachmentName(name) || filepath.Ext(name) == "" {
+		if sourceName := attachmentNameFromURL(attachment.SourceURL); sourceName != "" {
+			name = sourceName
+		}
+	}
+	if name == "" {
+		name = defaultAttachmentName(attachment.Kind)
+	}
+	if filepath.Ext(name) != "" && !isGenericAttachmentName(name) {
+		return name
+	}
+
+	ext := firstNonEmpty(
+		strings.ToLower(filepath.Ext(attachmentNameFromContentDisposition(headers.Get("Content-Disposition")))),
+		strings.ToLower(filepath.Ext(attachmentNameFromURL(attachment.SourceURL))),
+		extensionFromContentType(contentType),
+		extensionFromContentType(attachment.MIMEType),
+	)
+	if ext == "" {
+		return name
+	}
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if stem == "" {
+		stem = strings.TrimSuffix(defaultAttachmentName(attachment.Kind), filepath.Ext(defaultAttachmentName(attachment.Kind)))
+	}
+	return stem + ext
+}
+
+func attachmentNameFromContentDisposition(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(value)
+	if err != nil {
+		return ""
+	}
+	return sanitizeAttachmentFileName(firstNonEmpty(params["filename"], params["filename*"]))
+}
+
+func attachmentNameFromURL(sourceURL string) string {
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return ""
+	}
+	candidate := sourceURL
+	if idx := strings.Index(candidate, "?"); idx >= 0 {
+		candidate = candidate[:idx]
+	}
+	if idx := strings.Index(candidate, "#"); idx >= 0 {
+		candidate = candidate[:idx]
+	}
+	return sanitizeAttachmentFileName(filepath.Base(candidate))
+}
+
+func sanitizeAttachmentFileName(name string) string {
+	name = strings.TrimSpace(strings.Trim(name, `"`))
+	if name == "" {
+		return ""
+	}
+	base := filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	if base == "." || base == "/" {
+		return ""
+	}
+	return base
+}
+
+func defaultAttachmentName(kind string) string {
+	switch kind {
+	case "image":
+		return "image.jpg"
+	case "audio":
+		return "voice.mp3"
+	case "document":
+		return "file.dat"
+	default:
+		return "attachment.dat"
+	}
+}
+
+func isGenericAttachmentName(name string) bool {
+	name = strings.ToLower(sanitizeAttachmentFileName(name))
+	switch name {
+	case "", "attachment", "attachment.dat", "file", "file.dat", "voice", "voice.mp3":
+		return true
+	default:
+		return false
+	}
+}
+
+func extensionFromContentType(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if mediaType, _, err := mime.ParseMediaType(value); err == nil && mediaType != "" {
+		value = mediaType
+	}
+	switch strings.ToLower(value) {
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return ".docx"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return ".xlsx"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return ".pptx"
+	}
+	exts, err := mime.ExtensionsByType(value)
+	if err != nil {
+		return ""
+	}
+	for _, ext := range exts {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext != "" {
+			return ext
+		}
+	}
+	return ""
 }
 
 func toFacadeQiweiMessageRequest(msg facadeSendMessageRequest, toID string) (string, map[string]any, error) {
@@ -689,29 +802,10 @@ func firstURL(data any) string {
 }
 
 func inferredAttachmentName(kind, sourceURL string) string {
-	sourceURL = strings.TrimSpace(sourceURL)
-	if sourceURL != "" {
-		candidate := sourceURL
-		if idx := strings.Index(candidate, "?"); idx >= 0 {
-			candidate = candidate[:idx]
-		}
-		if base := filepath.Base(candidate); base != "." && base != "/" && base != "" {
-			if ext := strings.ToLower(filepath.Ext(base)); ext != "" {
-				return base
-			}
-		}
+	if base := attachmentNameFromURL(sourceURL); base != "" && filepath.Ext(base) != "" {
+		return base
 	}
-
-	switch kind {
-	case "image":
-		return "image.jpg"
-	case "audio":
-		return "voice.mp3"
-	case "document":
-		return "file.dat"
-	default:
-		return "attachment.dat"
-	}
+	return defaultAttachmentName(kind)
 }
 
 type volcengineRecognizer struct {
@@ -998,4 +1092,3 @@ func readDocumentTextForModel(attachment parsedAttachment) (string, error) {
 	}
 	return text, nil
 }
-

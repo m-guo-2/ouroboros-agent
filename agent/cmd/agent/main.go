@@ -123,6 +123,7 @@ func main() {
 	mux.HandleFunc("/drain", drainHandler)
 
 	mux.HandleFunc("/api/channels/incoming", dispatcher.HandleIncoming)
+	mux.HandleFunc("/api/channels/group-event", dispatcher.HandleGroupEvent)
 	mux.HandleFunc("/api/data/channels/send", handleChannelSend)
 
 	api.Mount(mux, sharedlogger.GetReader())

@@ -27,6 +27,8 @@ var userMessageTypeMap = map[int]string{
 	14:  "image",
 	15:  "file",
 	16:  "voice",
+	20:  "file",
+	22:  "video",
 	23:  "video",
 	26:  "red_packet",
 	29:  "sticker",
@@ -34,7 +36,6 @@ var userMessageTypeMap = map[int]string{
 	41:  "card",
 	43:  "video",
 	// msgType 49 (appmsg) is handled in handleNormalMessage switch by subType.
-	// 49:  handled per subType (quote=57, file=6, link=5, etc.)
 	78:  "miniapp",
 	101: "image",
 	102: "file",
@@ -106,6 +107,22 @@ func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessag
 	}
 }
 
+// groupEventTypes maps msgTypes that represent group lifecycle events.
+var groupEventTypes = map[int]string{
+	1001: "group_name_changed",
+	1002: "member_joined",
+	1003: "member_removed",
+	1005: "member_quit",
+	1023: "group_dissolved",
+}
+
+// knownIgnoredMsgTypes are documented msgTypes that agents don't act on.
+var knownIgnoredMsgTypes = map[int]bool{
+	146:  true, // 直播
+	2001: true, // 已读通知
+	2005: true, // 未读通知
+}
+
 // textMessageTypes is the set of msgTypes that carry plain text content.
 var textMessageTypes = map[int]bool{0: true, 1: true, 2: true}
 
@@ -117,6 +134,17 @@ var richContentTypes = map[string]bool{
 }
 
 func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage) error {
+	// Group lifecycle events — report to agent-server data store, don't forward as messages.
+	if eventType, ok := groupEventTypes[msg.MsgType]; ok {
+		return a.handleGroupEvent(ctx, eventType, msg)
+	}
+
+	// Known non-actionable msgTypes — log and skip.
+	if knownIgnoredMsgTypes[msg.MsgType] {
+		logger.Detail(ctx, "忽略非 agent 消息类型", "tag", tagCallback, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
+		return nil
+	}
+
 	if msg.MsgSvrID != "" && a.dedupe.Seen(msg.MsgSvrID) {
 		logger.Detail(ctx, "跳过重复消息", "tag", tagCallback, "msg", msg.MsgSvrID)
 		return nil
@@ -611,9 +639,12 @@ func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) 
 }
 
 func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) error {
+	// Group events may also arrive via cmd=15500; handle them the same way.
+	if eventType, ok := groupEventTypes[msg.MsgType]; ok {
+		return a.handleGroupEvent(ctx, eventType, msg)
+	}
+
 	switch msg.MsgType {
-	case 1002:
-		return a.handleGroupMemberJoined(ctx, msg)
 	case 2357:
 		logger.Business(ctx, "好友申请",
 			"tag", tagCallback,
@@ -631,34 +662,59 @@ func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) e
 	}
 }
 
-func (a *app) handleGroupMemberJoined(ctx context.Context, msg qiweiCallbackMessage) error {
+func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiCallbackMessage) error {
 	roomID := msg.FromRoomID
 	if roomID == "" || roomID == "0" {
-		logger.Warn(ctx, "入群通知缺少 roomId", "tag", tagCallback, "msgType", msg.MsgType)
+		logger.Warn(ctx, "群事件缺少 roomId", "tag", tagCallback, "msgType", msg.MsgType, "eventType", eventType)
 		return nil
 	}
 
-	if !a.cfg.AgentEnabled {
-		logger.Detail(ctx, "入群通知(agent 未启用)", "tag", tagCallback, "roomId", roomID)
+	groupName := ""
+	if eventType == "group_name_changed" {
+		groupName = decodeMaybeBase64(anyToString(msg.MsgData["changedMemberList"]))
+	}
+
+	logger.Business(ctx, "群事件上报",
+		"tag", tagCallback,
+		"eventType", eventType,
+		"msgType", msg.MsgType,
+		"roomId", roomID,
+		"groupName", groupName,
+	)
+
+	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
+		logger.Detail(ctx, "群事件跳过上报(agent 未启用)", "tag", tagCallback, "roomId", roomID)
 		return nil
 	}
 
-	ts := msg.CreateTime * 1000
-	if ts == 0 {
-		ts = time.Now().UnixMilli()
+	return a.reportGroupEvent(ctx, eventType, roomID, groupName)
+}
+
+func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, groupName string) error {
+	payload := map[string]any{
+		"channel":        "qiwei",
+		"agentId":        a.cfg.AgentID,
+		"channelGroupId": channelGroupID,
+		"eventType":      eventType,
+		"groupName":      groupName,
 	}
-	in := incomingMessage{
-		Channel:               "qiwei",
-		ChannelUserID:         msg.SenderID,
-		ChannelMessageID:      msg.MsgSvrID,
-		ChannelConversationID: roomID,
-		ConversationType:      "group",
-		MessageType:           "system",
-		Content:               "[群事件] 新成员加入了群聊",
-		Timestamp:             ts,
-		AgentID:               a.cfg.AgentID,
+	raw, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.AgentServer+"/api/channels/group-event", bytes.NewReader(raw))
+	if err != nil {
+		return err
 	}
-	return a.forwardToAgent(ctx, in)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		logger.Warn(ctx, "群事件上报失败", "tag", tagCallback, "eventType", eventType, "error", err.Error())
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		logger.Warn(ctx, "群事件上报响应异常", "tag", tagCallback, "eventType", eventType, "status", resp.StatusCode)
+	}
+	return nil
 }
 
 func attachmentsFromPreparedMedia(messageID, messageType string, prepared preparedMedia) []incomingAttachment {

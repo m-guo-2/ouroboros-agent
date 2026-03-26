@@ -73,6 +73,8 @@ var mediaClassifications = map[int]mediaClassification{
 	14:  {MsgType: 14, MessageType: "image", Source: mediaSourceQW, Kind: mediaKindImage},
 	15:  {MsgType: 15, MessageType: "file", Source: mediaSourceQW, Kind: mediaKindFile},
 	16:  {MsgType: 16, MessageType: "voice", Source: mediaSourceQW, Kind: mediaKindVoice},
+	20:  {MsgType: 20, MessageType: "file", Source: mediaSourceQW, Kind: mediaKindFile},
+	22:  {MsgType: 22, MessageType: "video", Source: mediaSourceQW, Kind: mediaKindVideo},
 	23:  {MsgType: 23, MessageType: "video", Source: mediaSourceQW, Kind: mediaKindVideo},
 	34:  {MsgType: 34, MessageType: "voice", Source: mediaSourceQW, Kind: mediaKindVoice},
 	43:  {MsgType: 43, MessageType: "video", Source: mediaSourceQW, Kind: mediaKindVideo},
@@ -148,8 +150,10 @@ func normalizeMediaDescriptor(msgType int, fallbackType string, msgData map[stri
 
 	name := firstNonEmpty(
 		decodeMaybeBase64(anyToString(msgData["fileName"])),
-		anyToString(msgData["name"]),
 		decodeMaybeBase64(anyToString(msgData["fileNameUtf8"])),
+		decodeMaybeBase64(anyToString(msgData["filename"])),
+		decodeMaybeBase64(anyToString(msgData["file_name"])),
+		anyToString(msgData["name"]),
 	)
 
 	desc := mediaDescriptor{
@@ -171,6 +175,11 @@ func normalizeMediaDescriptor(msgType int, fallbackType string, msgData map[stri
 	}
 	desc.PreferredURL = preferredMediaURL(desc.Classification, msgData)
 	desc.FileType = inferMediaContractFileType(desc.Classification, msgData)
+	if desc.Name != "" && filepath.Ext(desc.Name) == "" {
+		if ext := extensionFromFileNameExt(anyToString(msgData["fileNameExt"])); ext != "" {
+			desc.Name += ext
+		}
+	}
 	if desc.Name == "" {
 		desc.Name = inferredAttachmentName(string(desc.Classification.Kind), desc.PreferredURL)
 	}
@@ -528,6 +537,25 @@ func internalAttachmentKind(kind mediaKind) string {
 		return "image"
 	default:
 		return string(kind)
+	}
+}
+
+func extensionFromFileNameExt(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "excel":
+		return ".xlsx"
+	case "word":
+		return ".docx"
+	case "ppt":
+		return ".pptx"
+	case "pdf":
+		return ".pdf"
+	case "txt":
+		return ".txt"
+	case "csv":
+		return ".csv"
+	default:
+		return ""
 	}
 }
 

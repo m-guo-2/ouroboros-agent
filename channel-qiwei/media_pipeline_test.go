@@ -112,6 +112,18 @@ func TestNormalizeMediaDescriptorNormalizesVariants(t *testing.T) {
 	}
 }
 
+func TestNormalizeMediaDescriptorAcceptsAlternateFilenameFields(t *testing.T) {
+	desc, err := normalizeMediaDescriptor(15, "file", map[string]any{
+		"filename": "cmVwb3J0LmRvY3g=",
+	})
+	if err != nil {
+		t.Fatalf("normalizeMediaDescriptor failed: %v", err)
+	}
+	if desc.Name != "report.docx" {
+		t.Fatalf("expected alternate filename field to decode, got %q", desc.Name)
+	}
+}
+
 func TestPlanMediaDownloadUsesSourceSpecificContracts(t *testing.T) {
 	gwDesc := mediaDescriptor{
 		Classification: mediaClassification{MessageType: "image", Source: mediaSourceGW, Kind: mediaKindImage},
@@ -210,6 +222,43 @@ func TestParseMessageLocalFileReadsText(t *testing.T) {
 	}
 	if parsed.Text != "这是文件内容" {
 		t.Fatalf("expected resource file text, got %q", parsed.Text)
+	}
+}
+
+func TestDownloadAttachmentInfersDocxNameFromHeaders(t *testing.T) {
+	app := newTestApp(t, "")
+	downloadServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+		w.Header().Set("Content-Disposition", `attachment; filename="quarterly-report.docx"`)
+		_, _ = w.Write([]byte("fake-docx"))
+	}))
+	t.Cleanup(downloadServer.Close)
+
+	_, mimeType, err := app.downloadAttachment(context.Background(), parsedAttachment{
+		Kind:      "document",
+		SourceURL: downloadServer.URL + "/download?id=1",
+	})
+	if err != nil {
+		t.Fatalf("downloadAttachment failed: %v", err)
+	}
+	if mimeType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
+		t.Fatalf("expected docx content type, got %q", mimeType)
+	}
+
+	storage, ok := app.storage.(*fakeMediaStorage)
+	if !ok {
+		t.Fatalf("expected fake storage, got %T", app.storage)
+	}
+	if len(storage.store.Objects) != 1 {
+		t.Fatalf("expected one stored object, got %d", len(storage.store.Objects))
+	}
+	for key, obj := range storage.store.Objects {
+		if !strings.HasSuffix(key, ".docx") {
+			t.Fatalf("expected stored object key to preserve .docx, got %q", key)
+		}
+		if obj.ContentType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
+			t.Fatalf("expected stored object content type to preserve docx, got %q", obj.ContentType)
+		}
 	}
 }
 
@@ -427,4 +476,149 @@ func loadFixture(t *testing.T, name string) (int, map[string]any) {
 		t.Fatalf("decode fixture %s: %v", name, err)
 	}
 	return payload.MsgType, payload.MsgData
+}
+
+func TestMsgType20ClassifiedAsFile(t *testing.T) {
+	cls, ok := classifyMediaMessage(20, "", nil)
+	if !ok {
+		t.Fatal("expected msgType 20 to be classified")
+	}
+	if cls.Kind != mediaKindFile || cls.Source != mediaSourceQW {
+		t.Fatalf("expected qw file, got kind=%s source=%s", cls.Kind, cls.Source)
+	}
+}
+
+func TestMsgType22ClassifiedAsVideo(t *testing.T) {
+	cls, ok := classifyMediaMessage(22, "", nil)
+	if !ok {
+		t.Fatal("expected msgType 22 to be classified")
+	}
+	if cls.Kind != mediaKindVideo || cls.Source != mediaSourceQW {
+		t.Fatalf("expected qw video, got kind=%s source=%s", cls.Kind, cls.Source)
+	}
+}
+
+func TestExtensionFromFileNameExt(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"excel", ".xlsx"},
+		{"Excel", ".xlsx"},
+		{"word", ".docx"},
+		{"ppt", ".pptx"},
+		{"pdf", ".pdf"},
+		{"txt", ".txt"},
+		{"csv", ".csv"},
+		{"", ""},
+		{"unknown", ""},
+		{"  excel  ", ".xlsx"},
+	}
+	for _, c := range cases {
+		got := extensionFromFileNameExt(c.input)
+		if got != c.want {
+			t.Errorf("extensionFromFileNameExt(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeMediaDescriptorUsesFileNameExt(t *testing.T) {
+	desc, err := normalizeMediaDescriptor(15, "file", map[string]any{
+		"fileName":    "cmVwb3J0",
+		"fileNameExt": "excel",
+	})
+	if err != nil {
+		t.Fatalf("normalizeMediaDescriptor failed: %v", err)
+	}
+	if desc.Name != "report.xlsx" {
+		t.Fatalf("expected fileNameExt to add .xlsx, got %q", desc.Name)
+	}
+}
+
+func TestNormalizeMediaDescriptorFileNameExtIgnoredWhenExtPresent(t *testing.T) {
+	desc, err := normalizeMediaDescriptor(15, "file", map[string]any{
+		"fileName":    "cmVwb3J0LmRvY3g=",
+		"fileNameExt": "excel",
+	})
+	if err != nil {
+		t.Fatalf("normalizeMediaDescriptor failed: %v", err)
+	}
+	if desc.Name != "report.docx" {
+		t.Fatalf("expected original extension preserved, got %q", desc.Name)
+	}
+}
+
+func TestGroupEventTypesAreRecognized(t *testing.T) {
+	expected := map[int]string{
+		1001: "group_name_changed",
+		1002: "member_joined",
+		1003: "member_removed",
+		1005: "member_quit",
+		1023: "group_dissolved",
+	}
+	for msgType, wantEvent := range expected {
+		got, ok := groupEventTypes[msgType]
+		if !ok {
+			t.Errorf("msgType %d not in groupEventTypes", msgType)
+			continue
+		}
+		if got != wantEvent {
+			t.Errorf("groupEventTypes[%d] = %q, want %q", msgType, got, wantEvent)
+		}
+	}
+}
+
+func TestKnownIgnoredMsgTypesAreSkipped(t *testing.T) {
+	for _, msgType := range []int{146, 2001, 2005} {
+		if !knownIgnoredMsgTypes[msgType] {
+			t.Errorf("msgType %d should be in knownIgnoredMsgTypes", msgType)
+		}
+	}
+}
+
+func TestGroupEventReportsToAgentServer(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		received map[string]any
+	)
+	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/api/channels/group-event" {
+			_ = json.NewDecoder(r.Body).Decode(&received)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true}`))
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer agentServer.Close()
+
+	app := newTestApp(t, "")
+	app.cfg.AgentEnabled = true
+	app.cfg.AgentServer = agentServer.URL
+	app.cfg.AgentID = "test-agent"
+
+	msg := qiweiCallbackMessage{
+		Cmd:        15000,
+		MsgType:    1003,
+		FromRoomID: "room-123",
+		MsgSvrID:   "srv-1",
+		MsgData:    map[string]any{},
+	}
+	if err := app.handleNormalMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleNormalMessage for group event failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if received == nil {
+		t.Fatal("expected group event to be reported to agent server")
+	}
+	if received["eventType"] != "member_removed" {
+		t.Errorf("expected eventType=member_removed, got %v", received["eventType"])
+	}
+	if received["channelGroupId"] != "room-123" {
+		t.Errorf("expected channelGroupId=room-123, got %v", received["channelGroupId"])
+	}
 }
