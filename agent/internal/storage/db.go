@@ -350,23 +350,28 @@ func runSchema(db *sql.DB) error {
 		`ALTER TABLE agent_configs ADD COLUMN hooks TEXT DEFAULT '[]'`,
 
 		// Hook-based ephemeral skills: session-level dynamic skill tracking
+		`ALTER TABLE session_active_skills ADD COLUMN activation_order INTEGER NOT NULL DEFAULT 0`,
 		`CREATE TABLE IF NOT EXISTS session_active_skills (
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
 			skill_id TEXT NOT NULL,
 			source TEXT NOT NULL DEFAULT 'hook',
-			created_at INTEGER NOT NULL DEFAULT 0
+			created_at INTEGER NOT NULL DEFAULT 0,
+			activation_order INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_active_skills_session_skill
 			ON session_active_skills(session_id, skill_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_active_skills_session
 			ON session_active_skills(session_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_active_skills_session_order
+			ON session_active_skills(session_id, activation_order)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors
 	}
 
 	migrateSkillBindingsToIDs(db)
+	backfillSessionActiveSkillOrder(db)
 	seedDefaultModels(db)
 
 	return nil
@@ -432,6 +437,14 @@ func seedDefaultModels(db *sql.DB) {
 			VALUES (?, ?, ?, 1, ?, 4096, 0.7, 0, 0)`,
 			s.id, s.name, s.provider, s.model)
 	}
+}
+
+func backfillSessionActiveSkillOrder(db *sql.DB) {
+	_, _ = db.Exec(`
+		UPDATE session_active_skills
+		SET activation_order = rowid
+		WHERE activation_order = 0
+	`)
 }
 
 func min(a, b int) int {

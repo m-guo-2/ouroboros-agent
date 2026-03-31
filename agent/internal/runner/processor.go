@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -911,6 +912,11 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 			}
 		}
 	}
+	if orderedSkillIDs, orderErr := storage.SortSkillIDsByName(effectiveSkillIDs); orderErr == nil {
+		effectiveSkillIDs = orderedSkillIDs
+	} else {
+		return fmt.Errorf("sort effective skills: %w", orderErr)
+	}
 
 	skillsCtx, err := storage.GetSkillsContext(effectiveSkillIDs)
 	if err != nil || skillsCtx == nil {
@@ -1199,6 +1205,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				for id := range skillsCtx.LoadableSkillIDs {
 					available = append(available, id)
 				}
+				sort.Strings(available)
 				return nil, fmt.Errorf("skill %q is not bound to this agent. available skills: %s", skillID, strings.Join(available, ", "))
 			}
 			detail, err := storage.GetSkillDetail(skillID)

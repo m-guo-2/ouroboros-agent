@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"agent/internal/github"
@@ -164,8 +165,13 @@ func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
 		return ctx, nil
 	}
 
+	orderedSkillIDs, err := SortSkillIDsByName(skillIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	var lines []string
-	for _, id := range skillIDs {
+	for _, id := range orderedSkillIDs {
 		row, err := getSkillRowByID(id)
 		if err == sql.ErrNoRows {
 			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q missing from local store", id))
@@ -192,6 +198,57 @@ func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
 		)
 	}
 	return ctx, nil
+}
+
+// SortSkillIDsByName returns de-duplicated skill IDs ordered by skill name.
+// Missing skills fall back to skill ID ordering so runtime behavior stays deterministic.
+func SortSkillIDsByName(skillIDs []string) ([]string, error) {
+	if len(skillIDs) == 0 {
+		return nil, nil
+	}
+
+	type skillOrderEntry struct {
+		ID       string
+		SortName string
+	}
+
+	seen := make(map[string]bool, len(skillIDs))
+	entries := make([]skillOrderEntry, 0, len(skillIDs))
+	for _, skillID := range skillIDs {
+		skillID = strings.TrimSpace(skillID)
+		if skillID == "" || seen[skillID] {
+			continue
+		}
+		seen[skillID] = true
+
+		sortName := strings.ToLower(skillID)
+		row, err := getSkillRowByID(skillID)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		if err == nil {
+			if name := strings.TrimSpace(row.Name); name != "" {
+				sortName = strings.ToLower(name)
+			}
+		}
+		entries = append(entries, skillOrderEntry{
+			ID:       skillID,
+			SortName: sortName,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].SortName == entries[j].SortName {
+			return entries[i].ID < entries[j].ID
+		}
+		return entries[i].SortName < entries[j].SortName
+	})
+
+	ordered := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ordered = append(ordered, entry.ID)
+	}
+	return ordered, nil
 }
 
 // GetSkillDetail returns a skill's content, scripts list, and reference index for load_skill.

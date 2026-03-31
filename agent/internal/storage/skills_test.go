@@ -171,3 +171,66 @@ func TestSkillDiagnosticsAndMissingLocalFile(t *testing.T) {
 		t.Fatalf("expected empty local skill store after clear, got %+v", skills)
 	}
 }
+
+func TestSortSkillIDsByNameAndSkillsContextUseNameOrder(t *testing.T) {
+	cleanup := setupSkillTestDB(t)
+	defer cleanup()
+
+	alphaRoot := filepath.Join(t.TempDir(), "alpha-skill")
+	writeSkillFixture(t, alphaRoot)
+	moonRoot := filepath.Join(t.TempDir(), "moon-skill")
+	writeSkillFixture(t, moonRoot)
+	zebraRoot := filepath.Join(t.TempDir(), "zebra-skill")
+	writeSkillFixture(t, zebraRoot)
+
+	err := replaceSkillSnapshot([]github.SkillData{
+		{
+			ID:          "skill-z",
+			Name:        "Zebra",
+			Description: "z skill",
+			Enabled:     true,
+			BasePath:    zebraRoot,
+		},
+		{
+			ID:          "skill-a",
+			Name:        "Alpha",
+			Description: "a skill",
+			Enabled:     true,
+			BasePath:    alphaRoot,
+		},
+		{
+			ID:          "skill-m",
+			Name:        "Moon",
+			Description: "m skill",
+			Enabled:     true,
+			BasePath:    moonRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("replace snapshot: %v", err)
+	}
+
+	orderedIDs, err := SortSkillIDsByName([]string{"skill-z", "skill-m", "skill-a"})
+	if err != nil {
+		t.Fatalf("sort skill ids: %v", err)
+	}
+	expectedIDs := []string{"skill-a", "skill-m", "skill-z"}
+	if strings.Join(orderedIDs, ",") != strings.Join(expectedIDs, ",") {
+		t.Fatalf("unexpected skill id order: got %v want %v", orderedIDs, expectedIDs)
+	}
+
+	ctx, err := GetSkillsContext([]string{"skill-z", "skill-m", "skill-a"})
+	if err != nil {
+		t.Fatalf("get skills context: %v", err)
+	}
+
+	alphaIdx := strings.Index(ctx.SkillsSnippet, "**Alpha**")
+	moonIdx := strings.Index(ctx.SkillsSnippet, "**Moon**")
+	zebraIdx := strings.Index(ctx.SkillsSnippet, "**Zebra**")
+	if alphaIdx == -1 || moonIdx == -1 || zebraIdx == -1 {
+		t.Fatalf("expected ordered skill names in snippet, got %q", ctx.SkillsSnippet)
+	}
+	if !(alphaIdx < moonIdx && moonIdx < zebraIdx) {
+		t.Fatalf("expected snippet sorted by name, got %q", ctx.SkillsSnippet)
+	}
+}
