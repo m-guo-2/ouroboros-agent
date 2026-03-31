@@ -70,3 +70,9 @@ func (c *ttlCache) Set(key, value string) {
 	defer c.mu.Unlock()
 	c.data[key] = cacheEntry{value: value, expires: time.Now().Add(c.ttl)}
 }
+
+func (c *ttlCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.data, key)
+}

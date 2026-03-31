@@ -161,7 +161,7 @@ func (a *app) handleSearchTargets(w http.ResponseWriter, r *http.Request) {
 			if len(resp.Targets) >= limit {
 				break
 			}
-			name := firstNonEmpty(anyToString(item["roomName"]), anyToString(item["name"]))
+			name := decodeMaybeBase64(firstNonEmpty(anyToString(item["roomName"]), anyToString(item["name"])))
 			if query != "" && !strings.Contains(strings.ToLower(name), query) {
 				continue
 			}

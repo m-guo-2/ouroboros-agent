@@ -253,8 +253,12 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 	}
 
 	replyToID := msg.SenderID
+	conversationName := senderName
 	if isGroup {
 		replyToID = msg.FromRoomID
+		if gn := a.resolveGroupName(ctx, msg.FromRoomID); gn != "" {
+			conversationName = gn
+		}
 	}
 
 	if !a.cfg.AgentEnabled {
@@ -278,7 +282,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		ChannelUserID:           msg.SenderID,
 		ChannelMessageID:        msg.MsgSvrID,
 		ChannelConversationID:   replyToID,
-		ChannelConversationName: senderName,
+		ChannelConversationName: conversationName,
 		ConversationType:        conversationType,
 		MessageType:             messageType,
 		Content:                 content,
@@ -667,7 +671,8 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 
 	groupName := ""
 	if eventType == "group_name_changed" {
-		groupName = decodeMaybeBase64(anyToString(msg.MsgData["changedMemberList"]))
+		a.nameCache.Delete("room:" + roomID)
+		groupName = a.resolveGroupName(ctx, roomID)
 	}
 
 	logger.Business(ctx, "群事件上报",
@@ -764,7 +769,7 @@ func (a *app) resolveUserName(ctx context.Context, userID string) string {
 	if v, ok := a.nameCache.Get(userID); ok {
 		return v
 	}
-	return ""
+	return a.fetchUserName(ctx, userID)
 }
 
 func (a *app) loadContactsOnce(ctx context.Context) {
@@ -837,6 +842,70 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 		}
 	}
 	logger.Business(ctx, "加载内部联系人", "cached", cached)
+}
+
+func (a *app) resolveGroupName(ctx context.Context, roomID string) string {
+	cacheKey := "room:" + roomID
+	if v, ok := a.nameCache.Get(cacheKey); ok {
+		return v
+	}
+	res, err := a.client.doAPIRaw(ctx, "/room/batchGetRoomDetail", map[string]any{
+		"roomIdList": []string{roomID},
+	})
+	if err != nil {
+		logger.Warn(ctx, "获取群详情失败", "roomId", roomID, "error", err.Error())
+		return ""
+	}
+	var wrapper struct {
+		RoomList []struct {
+			RoomID   string `json:"roomId"`
+			RoomName string `json:"roomName"`
+		} `json:"roomList"`
+	}
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+		return ""
+	}
+	for _, room := range wrapper.RoomList {
+		name := decodeMaybeBase64(room.RoomName)
+		if name != "" {
+			a.nameCache.Set("room:"+room.RoomID, name)
+		}
+	}
+	if v, ok := a.nameCache.Get(cacheKey); ok {
+		return v
+	}
+	return ""
+}
+
+func (a *app) fetchUserName(ctx context.Context, userID string) string {
+	res, err := a.client.doAPIRaw(ctx, "/contact/batchGetUserinfo", map[string]any{
+		"userIdList": []string{userID},
+	})
+	if err != nil {
+		logger.Warn(ctx, "按需查询用户信息失败", "userId", userID, "error", err.Error())
+		return ""
+	}
+	var wrapper struct {
+		ContactList []map[string]any `json:"contactList"`
+	}
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+		return ""
+	}
+	for _, c := range wrapper.ContactList {
+		uid := anyToString(c["userId"])
+		name := firstNonEmpty(
+			anyToString(c["nickname"]),
+			anyToString(c["realName"]),
+			anyToString(c["alias"]),
+		)
+		if uid != "" && name != "" {
+			a.nameCache.Set(uid, name)
+		}
+	}
+	if v, ok := a.nameCache.Get(userID); ok {
+		return v
+	}
+	return ""
 }
 
 func (a *app) forwardToAgent(ctx context.Context, in incomingMessage) error {
