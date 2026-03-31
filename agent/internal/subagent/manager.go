@@ -652,7 +652,7 @@ func filterToolsByProfile(profile string, tools []types.RegisteredTool) []types.
 }
 
 // skillTools are available to all subagent profiles when skills are bound.
-var skillTools = []string{"load_skill", "load_skill_reference", "run_script"}
+var skillTools = []string{"load_skill", "load_skill_reference", "run_script", "complete_skill"}
 
 func allowedToolsForProfile(profile string) map[string]bool {
 	base := map[string]bool{}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -72,6 +73,19 @@ func parseSkillIDs(raw interface{}) []string {
 	return ids
 }
 
+// parseHooks extracts Hook slice from API input via JSON round-trip.
+func parseHooks(raw interface{}) []storage.Hook {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var hooks []storage.Hook
+	if err := json.Unmarshal(b, &hooks); err != nil {
+		return nil
+	}
+	return hooks
+}
+
 // GET/POST /api/agents
 func handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -120,6 +134,9 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		if body["subagentSkills"] != nil {
 			cfg.SubagentSkills = parseSubagentSkills(body["subagentSkills"])
+		}
+		if body["hooks"] != nil {
+			cfg.Hooks = parseHooks(body["hooks"])
 		}
 		if v, ok := body["channels"].([]interface{}); ok {
 			for _, c := range v {

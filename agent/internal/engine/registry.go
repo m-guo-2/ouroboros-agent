@@ -202,6 +202,7 @@ var skillToolDescriptions = map[string]string{
 	"load_skill":           "加载指定技能的完整文档、脚本列表和参考资料索引。当技能简介不足以完成任务时，使用此工具获取详细说明。",
 	"load_skill_reference": "获取指定技能的详细参考文档。当 load_skill 返回的文档不够详细时，根据其 references 列表加载具体的参考文件。",
 	"run_script":           "执行指定技能的脚本。skill_id 和 script 为必填参数，args 为传给脚本的命令行参数。async=true 时后台执行并立即返回，完成后系统自动通知。",
+	"complete_skill":       "卸载一个动态加载的临时技能。当技能的任务已完成、不再需要时调用此工具将其从当前会话中移除。只能卸载通过 hook 动态加载的技能，不能卸载常驻技能。",
 }
 
 var skillToolSchemas = map[string]types.JSONSchema{
@@ -229,6 +230,13 @@ var skillToolSchemas = map[string]types.JSONSchema{
 			"async":    map[string]interface{}{"type": "boolean", "description": "是否异步执行。长耗时脚本（如生成PPT）设为 true，立即返回，完成后系统自动通知"},
 		},
 		Required: []string{"skill_id", "script"},
+	},
+	"complete_skill": {
+		Type: "object",
+		Properties: map[string]interface{}{
+			"skill_id": map[string]interface{}{"type": "string", "description": "要卸载的技能 ID"},
+		},
+		Required: []string{"skill_id"},
 	},
 }
 

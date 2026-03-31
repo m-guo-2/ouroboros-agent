@@ -345,6 +345,22 @@ func runSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_compaction_archives_session ON context_compaction_archives(session_id)`,
+
+		// Hook-based ephemeral skills: hooks column on agent_configs
+		`ALTER TABLE agent_configs ADD COLUMN hooks TEXT DEFAULT '[]'`,
+
+		// Hook-based ephemeral skills: session-level dynamic skill tracking
+		`CREATE TABLE IF NOT EXISTS session_active_skills (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			skill_id TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'hook',
+			created_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_active_skills_session_skill
+			ON session_active_skills(session_id, skill_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_active_skills_session
+			ON session_active_skills(session_id)`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors

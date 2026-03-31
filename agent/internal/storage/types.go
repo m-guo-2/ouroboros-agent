@@ -6,6 +6,18 @@ type SubagentModelConfig struct {
 	Model    string `json:"model"`
 }
 
+// HookAction is a single action within a Hook rule.
+type HookAction struct {
+	Type    string `json:"type"`
+	SkillID string `json:"skillId,omitempty"`
+}
+
+// Hook is an event-driven orchestration rule: when event fires, execute actions.
+type Hook struct {
+	Event   string       `json:"event"`
+	Actions []HookAction `json:"actions"`
+}
+
 // AgentConfig holds the runtime configuration for an agent.
 type AgentConfig struct {
 	ID             string                         `json:"id"`
@@ -17,6 +29,7 @@ type AgentConfig struct {
 	SubagentModels map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
 	Skills         []string                       `json:"skills"`
 	SubagentSkills map[string][]string            `json:"subagentSkills,omitempty"`
+	Hooks          []Hook                         `json:"hooks"`
 	Channels       []ChannelBinding               `json:"channels"`
 	IsActive       bool                           `json:"isActive"`
 }

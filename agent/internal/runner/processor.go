@@ -898,7 +898,21 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		credentials = &storage.ProviderCredentials{}
 	}
 
-	skillsCtx, err := storage.GetSkillsContext(agentConfig.Skills)
+	effectiveSkillIDs := agentConfig.Skills
+	if dynamicSkills, dsErr := storage.GetActiveSessionSkills(worker.SessionID); dsErr == nil && len(dynamicSkills) > 0 {
+		seen := make(map[string]bool, len(effectiveSkillIDs))
+		for _, id := range effectiveSkillIDs {
+			seen[id] = true
+		}
+		for _, id := range dynamicSkills {
+			if !seen[id] {
+				effectiveSkillIDs = append(effectiveSkillIDs, id)
+				seen[id] = true
+			}
+		}
+	}
+
+	skillsCtx, err := storage.GetSkillsContext(effectiveSkillIDs)
 	if err != nil || skillsCtx == nil {
 		skillsCtx = &storage.SkillContext{
 			LoadableSkillIDs: map[string]bool{},
@@ -916,7 +930,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		sb = nil
 	} else if isNew {
 		skillBasePaths := make(map[string]string)
-		for _, sid := range agentConfig.Skills {
+		for _, sid := range effectiveSkillIDs {
 			meta, err := storage.GetSkillRuntimeMetadata(sid)
 			if err != nil {
 				logger.Warn(ctx, "sandbox skill 本地元数据缺失", "skillId", sid, "error", err.Error())
@@ -1317,6 +1331,31 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 				"task_id": taskID,
 				"status":  "running",
 				"message": "脚本已在后台执行，完成后系统会自动通知你",
+			}, nil
+		},
+		"complete_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
+			skillID, ok := input["skill_id"].(string)
+			if !ok || skillID == "" {
+				return nil, fmt.Errorf("skill_id is required")
+			}
+
+			deleted, err := storage.DeactivateSessionSkill(worker.SessionID, skillID)
+			if err != nil {
+				return nil, fmt.Errorf("卸载 skill 失败: %w", err)
+			}
+			if !deleted {
+				return map[string]string{
+					"status":  "skipped",
+					"message": fmt.Sprintf("skill %q 未在当前会话中动态加载，无法通过 complete_skill 卸载", skillID),
+				}, nil
+			}
+			logger.Business(ctx, "complete_skill 卸载 skill",
+				"sessionId", worker.SessionID,
+				"skillId", skillID,
+			)
+			return map[string]string{
+				"status":  "completed",
+				"message": fmt.Sprintf("skill %q 已从当前会话卸载", skillID),
 			}, nil
 		},
 	}

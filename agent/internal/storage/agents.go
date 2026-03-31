@@ -31,19 +31,19 @@ var providerCredentialsKey = map[string]providerKeyConfig{
 
 const agentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),
 	COALESCE(provider,''), COALESCE(model,''), COALESCE(skills,'[]'), COALESCE(channels,'[]'), is_active,
-	COALESCE(subagent_models,'{}'), COALESCE(subagent_skills,'{}')`
+	COALESCE(subagent_models,'{}'), COALESCE(subagent_skills,'{}'), COALESCE(hooks,'[]')`
 
 // scanAgentConfig scans a single row into AgentConfig.
 // channels in the DB may be stored with either legacy keys (channelType/channelIdentifier)
 // or current keys (type/identifier); both are handled transparently.
 func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	var cfg AgentConfig
-	var skillsJSON, channelsJSON, subagentModelsJSON, subagentSkillsJSON string
+	var skillsJSON, channelsJSON, subagentModelsJSON, subagentSkillsJSON, hooksJSON string
 	var isActive int
 	if err := scan(
 		&cfg.ID, &cfg.ModelID, &cfg.DisplayName, &cfg.SystemPrompt,
 		&cfg.Provider, &cfg.Model, &skillsJSON, &channelsJSON, &isActive,
-		&subagentModelsJSON, &subagentSkillsJSON,
+		&subagentModelsJSON, &subagentSkillsJSON, &hooksJSON,
 	); err != nil {
 		return cfg, err
 	}
@@ -51,6 +51,7 @@ func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	cfg.Skills = parseSkillIDs(skillsJSON)
 	_ = json.Unmarshal([]byte(subagentModelsJSON), &cfg.SubagentModels)
 	_ = json.Unmarshal([]byte(subagentSkillsJSON), &cfg.SubagentSkills)
+	_ = json.Unmarshal([]byte(hooksJSON), &cfg.Hooks)
 
 	// Support legacy storage format {"channelType":...,"channelIdentifier":...}
 	var rawChannels []map[string]string
@@ -75,6 +76,9 @@ func scanAgentConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	}
 	if cfg.Skills == nil {
 		cfg.Skills = []string{}
+	}
+	if cfg.Hooks == nil {
+		cfg.Hooks = []Hook{}
 	}
 	return cfg, nil
 }
@@ -170,16 +174,20 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 	if cfg.SubagentSkills == nil {
 		subagentSkillsJSON = []byte("{}")
 	}
+	hooksJSON, _ := json.Marshal(cfg.Hooks)
+	if cfg.Hooks == nil {
+		hooksJSON = []byte("[]")
+	}
 	isActive := 0
 	if cfg.IsActive {
 		isActive = 1
 	}
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, subagent_models, subagent_skills, is_active, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO agent_configs (id, user_id, model_id, display_name, system_prompt, provider, model, skills, channels, subagent_models, subagent_skills, hooks, is_active, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cfg.ID, "", cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
-		string(skillsJSON), string(channelsJSON), string(subagentModelsJSON), string(subagentSkillsJSON), isActive, now, now,
+		string(skillsJSON), string(channelsJSON), string(subagentModelsJSON), string(subagentSkillsJSON), string(hooksJSON), isActive, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -234,6 +242,10 @@ func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentCo
 	if subagentSkills, ok := updates["subagentSkills"]; ok {
 		b, _ := json.Marshal(subagentSkills)
 		DB.Exec("UPDATE agent_configs SET subagent_skills = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
+	}
+	if hooks, ok := updates["hooks"]; ok {
+		b, _ := json.Marshal(hooks)
+		DB.Exec("UPDATE agent_configs SET hooks = ?, updated_at = ? WHERE id = ?", string(b), timeutil.NowMs(), agentID)
 	}
 	return GetAgentConfig(agentID)
 }
