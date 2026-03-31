@@ -1,5 +1,5 @@
 import { fetchApi } from "./client"
-import type { AgentProfile } from "./types"
+import type { AgentProfile, HookEventDef } from "./types"
 
 export const agentsApi = {
   getAll: () => fetchApi<AgentProfile[]>("/agents"),
@@ -29,4 +29,6 @@ export const agentsApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  getHookEvents: () => fetchApi<HookEventDef[]>("/hook-events"),
 }

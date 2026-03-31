@@ -52,6 +52,9 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	// Services status
 	mux.HandleFunc("/api/services", handleServices)
 
+	// Hook events (known event definitions for admin UI)
+	mux.HandleFunc("/api/hook-events", handleHookEvents)
+
 	// Channel adapters status
 	mux.HandleFunc("/api/channels", handleChannelsStatus)
 }

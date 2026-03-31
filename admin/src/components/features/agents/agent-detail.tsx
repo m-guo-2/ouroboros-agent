@@ -14,10 +14,11 @@ import { useAgent, useUpdateAgent, useDeleteAgent } from "@/hooks/use-agents"
 import { useUnconfiguredGroups } from "@/hooks/use-personas"
 import { PersonaList } from "@/components/features/agents/persona-list"
 import { GroupAssignments } from "@/components/features/agents/group-assignments"
+import { AgentHooks } from "@/components/features/agents/agent-hooks"
 import { useSkills } from "@/hooks/use-skills"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
-import type { AvailableModel, SubagentModelConfig } from "@/api/types"
+import type { AvailableModel, SubagentModelConfig, Hook } from "@/api/types"
 
 const PROVIDERS = [
   { value: "anthropic", label: "Anthropic (Claude)" },
@@ -53,6 +54,7 @@ export function AgentDetail() {
   const [isActive, setIsActive] = useState(true)
   const [subagentModels, setSubagentModels] = useState<Record<string, SubagentModelConfig>>({})
   const [subagentSkills, setSubagentSkills] = useState<Record<string, string[]>>({})
+  const [hooks, setHooks] = useState<Hook[]>([])
   const [initialized, setInitialized] = useState(false)
 
   // 模型查询相关
@@ -109,6 +111,7 @@ export function AgentDetail() {
     setIsActive(agent.isActive !== false)
     setSubagentModels(agent.subagentModels ?? {})
     setSubagentSkills(agent.subagentSkills ?? {})
+    setHooks(agent.hooks ?? [])
     setInitialized(true)
   }
 
@@ -171,6 +174,7 @@ export function AgentDetail() {
         skills: selectedSkills,
         subagentModels: filteredSubagentModels,
         subagentSkills: filteredSubagentSkills,
+        hooks,
         isActive,
       },
     })
@@ -233,6 +237,7 @@ export function AgentDetail() {
         <TabsList>
           <TabsTrigger value="config">配置</TabsTrigger>
           <TabsTrigger value="skills">技能</TabsTrigger>
+          <TabsTrigger value="hooks">Hooks</TabsTrigger>
           <TabsTrigger value="channels">渠道</TabsTrigger>
           <TabsTrigger value="personas">Personas</TabsTrigger>
           <TabsTrigger value="groups" className="inline-flex items-center gap-1.5">
@@ -509,6 +514,10 @@ export function AgentDetail() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="hooks">
+          <AgentHooks hooks={hooks} onChange={setHooks} />
         </TabsContent>
 
         <TabsContent value="channels">

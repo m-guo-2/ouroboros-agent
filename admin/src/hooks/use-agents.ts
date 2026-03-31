@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { agentsApi } from "@/api/agents"
-import type { AgentProfile } from "@/api/types"
+import type { AgentProfile, HookEventDef } from "@/api/types"
 
 export function useAgents() {
   return useQuery({
@@ -47,5 +47,16 @@ export function useDeleteAgent() {
   return useMutation({
     mutationFn: agentsApi.delete,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["agents"] }) },
+  })
+}
+
+export function useHookEvents() {
+  return useQuery<HookEventDef[]>({
+    queryKey: ["hook-events"],
+    queryFn: async () => {
+      const res = await agentsApi.getHookEvents()
+      return res.data ?? []
+    },
+    staleTime: 5 * 60 * 1000,
   })
 }

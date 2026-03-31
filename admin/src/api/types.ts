@@ -38,12 +38,31 @@ export interface AgentProfile {
   subagentModels?: Record<string, SubagentModelConfig>
   skills?: string[]
   subagentSkills?: Record<string, string[]>
+  hooks?: Hook[]
   channels?: Array<{ type: string; identifier: string }>
   isActive?: boolean
   avatarUrl?: string
   isDefault?: boolean
   createdAt?: number
   updatedAt?: number
+}
+
+// ===== Hooks =====
+
+export interface HookAction {
+  type: string
+  skillId?: string
+}
+
+export interface Hook {
+  event: string
+  actions: HookAction[]
+}
+
+export interface HookEventDef {
+  name: string
+  label: string
+  description: string
 }
 
 // ===== Sessions =====
