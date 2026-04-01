@@ -131,6 +131,10 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		}
 		logger.Business(ctx, "新 Session 创建",
 			"sessionId", session.ID, "agentId", agentCfg.ID)
+
+		// Dispatch hooks for the new session so ephemeral skills get activated
+		// before the first processSession reads session_active_skills.
+		runner.DispatchHooks(ctx, agentCfg.Hooks, "session_started", session.ID)
 	} else {
 		// Patch any new metadata onto existing session.
 		patch := map[string]string{}

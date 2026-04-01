@@ -669,18 +669,30 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		return nil
 	}
 
+	// Detect bot entering a new group: first time seeing this room.
+	isNewRoom := a.roomStore.Add(roomID)
+	reportType := eventType
+	if isNewRoom && eventType == "member_joined" {
+		reportType = "group_joined"
+	}
+
 	groupName := ""
 	if eventType == "group_name_changed" {
 		a.nameCache.Delete("room:" + roomID)
 		groupName = a.resolveGroupName(ctx, roomID)
 	}
+	if isNewRoom && groupName == "" {
+		groupName = a.resolveGroupName(ctx, roomID)
+	}
 
 	logger.Business(ctx, "群事件上报",
 		"tag", tagCallback,
-		"eventType", eventType,
+		"eventType", reportType,
+		"originalEvent", eventType,
 		"msgType", msg.MsgType,
 		"roomId", roomID,
 		"groupName", groupName,
+		"isNewRoom", isNewRoom,
 	)
 
 	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
@@ -688,7 +700,7 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		return nil
 	}
 
-	return a.reportGroupEvent(ctx, eventType, roomID, groupName)
+	return a.reportGroupEvent(ctx, reportType, roomID, groupName)
 }
 
 func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, groupName string) error {

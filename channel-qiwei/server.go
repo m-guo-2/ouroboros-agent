@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ type app struct {
 	registry      modules.Registry
 	dedupe        *ttlSet
 	nameCache     *ttlCache
+	roomStore     *roomStore
 
 	contactsMu       sync.Mutex
 	contactsLoadedAt time.Time
@@ -40,6 +43,7 @@ func newApp(cfg Config) *app {
 		registry:      modules.BuildRegistry(),
 		dedupe:        newTTLSet(5 * time.Minute),
 		nameCache:     newTTLCache(10 * time.Minute),
+		roomStore:     newRoomStore(filepath.Join(cfg.DataDir, "known_rooms.txt")),
 	}
 }
 
@@ -69,6 +73,28 @@ func withJSONMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *app) preloadKnownRooms(ctx context.Context) {
+	groups, err := a.listGroups(ctx)
+	if err != nil {
+		logger.Warn(ctx, "预加载群列表失败，已知群依赖文件持久化", "error", err.Error())
+		return
+	}
+	var roomIDs []string
+	for _, g := range groups {
+		rid := anyToString(g["roomId"])
+		if rid == "" {
+			rid = anyToString(g["id"])
+		}
+		if rid != "" && rid != "0" {
+			roomIDs = append(roomIDs, rid)
+		}
+	}
+	if len(roomIDs) > 0 {
+		a.roomStore.Merge(roomIDs)
+	}
+	logger.Business(ctx, "预加载群列表完成", "apiRooms", len(groups), "merged", len(roomIDs))
 }
 
 func (a *app) handleHealth(w http.ResponseWriter, _ *http.Request) {

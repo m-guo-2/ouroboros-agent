@@ -23,6 +23,10 @@ func main() {
 
 	ctx := context.Background()
 
+	// Preload known rooms from the qiwei platform so restarts don't
+	// re-trigger group_joined for groups the bot is already in.
+	go app.preloadKnownRooms(ctx)
+
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      app.routes(),

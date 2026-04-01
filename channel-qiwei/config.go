@@ -19,6 +19,7 @@ type Config struct {
 	Port        string `yaml:"port"`
 	LogLevel    string `yaml:"log_level"`
 	LogDir      string `yaml:"log_dir"`
+	DataDir     string `yaml:"data_dir"`
 	HTTPTimeout int    `yaml:"http_timeout"`
 
 	Agent AgentConfig `yaml:"agent"`
@@ -116,6 +117,7 @@ func configDefaults() Config {
 		APIBaseURL:  "http://manager.qiweapi.com/qiwe",
 		Port:        "2000",
 		LogLevel:    "info",
+		DataDir:     "./data",
 		HTTPTimeout: 25,
 		Agent: AgentConfig{
 			Enabled:   true,
