@@ -95,3 +95,6 @@ skills/
 # Local deploy configs
 deploy/config/agent.yaml
 deploy/config/qiwei.yaml
+
+
+claude-code-src/*
