@@ -183,6 +183,20 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 			)
 			return nil
 		}
+		if replyMap := mapValue(msg.MsgData["reply"]); len(replyMap) > 0 {
+			replyContent := strings.TrimSpace(anyToString(replyMap["content"]))
+			replyMsgID := anyToString(replyMap["msgId"])
+			if replyContent != "" || replyMsgID != "" {
+				messageType = "quote"
+				channelMeta = map[string]any{
+					"quotedMessage": map[string]any{
+						"msgSvrId":   replyMsgID,
+						"content":    replyContent,
+						"senderName": "",
+					},
+				}
+			}
+		}
 
 	case msg.MsgType == 49:
 		content, channelMeta, messageType = a.handleAppMessage(ctx, msg)

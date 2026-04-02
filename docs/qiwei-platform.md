@@ -254,7 +254,7 @@ channel-qiwei 服务 → QiWe 平台 API
 
 | msgType | 内部 messageType | 处理逻辑 | 发给 agent 的 content 格式 |
 |---------|-----------------|---------|--------------------------|
-| **0, 1, 2** | `text` | 提取 `msgData.content` 纯文本，空文本跳过 | 原始文本 |
+| **0, 1, 2** | `text` / `quote` | 提取 `msgData.content` 纯文本，空文本跳过；当 `msgData.reply` 存在时 messageType 升级为 `quote`，被引用消息信息写入 `channelMeta.quotedMessage`（含 msgSvrId、content） | 原始文本（引用时附带 quotedMessage meta） |
 | **3, 7, 14** | `image` | 媒体管道：QW 源下载 → OSS 上传 | `[收到图片]\n名称: xxx\n地址: oss://...` + attachment |
 | **101** | `image` | 媒体管道：GW 源下载 → OSS 上传 | 同上 |
 | **6** | `location` | `extractRichContent` 提取标题/地址/经纬度 | `[位置] 标题 地址 (纬度:xx, 经度:xx)` |
