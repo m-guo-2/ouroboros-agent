@@ -29,6 +29,7 @@ var validGroupEventTypes = map[string]bool{
 	"group_dissolved":    true,
 	"group_created":      true,
 	"group_joined":       true,
+	"new_contact":        true,
 }
 
 // HandleGroupEvent is an HTTP handler for POST /api/channels/group-event.

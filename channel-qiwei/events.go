@@ -197,6 +197,25 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 				}
 			}
 		}
+		atList := extractAtList(msg.MsgData["atList"])
+		if len(atList) > 0 {
+			if channelMeta == nil {
+				channelMeta = map[string]any{}
+			}
+			channelMeta["atList"] = atList
+			selfID := a.selfUserID
+			if selfID == "" {
+				selfID = anyToString(msg.MsgData["userId"])
+			}
+			if selfID != "" {
+				for _, uid := range atList {
+					if uid == selfID {
+						channelMeta["mentionedSelf"] = true
+						break
+					}
+				}
+			}
+		}
 
 	case msg.MsgType == 49:
 		content, channelMeta, messageType = a.handleAppMessage(ctx, msg)
@@ -253,7 +272,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 
 	senderName := msg.SenderNickname
 	if senderName == "" && msg.SenderID != "" {
-		senderName = a.resolveUserName(ctx, msg.SenderID)
+		senderName = a.resolveUserNameInRoom(ctx, msg.SenderID, msg.FromRoomID)
 	}
 	msgTime := time.Now()
 	if msg.CreateTime > 0 {
@@ -270,8 +289,11 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 	conversationName := senderName
 	if isGroup {
 		replyToID = msg.FromRoomID
-		if gn := a.resolveGroupName(ctx, msg.FromRoomID); gn != "" {
+		gn := a.resolveGroupName(ctx, msg.FromRoomID)
+		if gn != "" {
 			conversationName = gn
+		} else {
+			conversationName = msg.FromRoomID
 		}
 	}
 
@@ -660,12 +682,19 @@ func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) e
 
 	switch msg.MsgType {
 	case 2357:
-		logger.Business(ctx, "好友申请",
+		contactID := anyToString(msg.MsgData["contactId"])
+		contactNickname := decodeMaybeBase64(anyToString(msg.MsgData["contactNickname"]))
+		contactType := anyToString(msg.MsgData["contactType"])
+		logger.Business(ctx, "好友申请 - 自动通过",
 			"tag", tagCallback,
 			"msgType", msg.MsgType,
-			"contactNickname", anyToString(msg.MsgData["contactNickname"]),
-			"contactId", anyToString(msg.MsgData["contactId"]),
+			"contactNickname", contactNickname,
+			"contactId", contactID,
+			"contactType", contactType,
 		)
+		if contactID != "" {
+			go a.autoAcceptFriendRequest(context.Background(), contactID, contactNickname, contactType)
+		}
 		return nil
 	case 2132:
 		logger.Business(ctx, "好友申请(简)", "tag", tagCallback, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
@@ -699,6 +728,14 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		groupName = a.resolveGroupName(ctx, roomID)
 	}
 
+	memberIDs := parseChangedMemberList(msg.MsgData["changedMemberList"])
+	eventPayload := map[string]any{
+		"memberIds": memberIDs,
+	}
+	if msg.SenderID != "" {
+		eventPayload["operatorId"] = msg.SenderID
+	}
+
 	logger.Business(ctx, "群事件上报",
 		"tag", tagCallback,
 		"eventType", reportType,
@@ -707,6 +744,7 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		"roomId", roomID,
 		"groupName", groupName,
 		"isNewRoom", isNewRoom,
+		"memberIds", memberIDs,
 	)
 
 	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
@@ -714,16 +752,45 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		return nil
 	}
 
-	return a.reportGroupEvent(ctx, reportType, roomID, groupName)
+	return a.reportGroupEvent(ctx, reportType, roomID, groupName, eventPayload)
 }
 
-func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, groupName string) error {
+// parseChangedMemberList decodes the changedMemberList field (may be base64, semicolon-separated).
+func parseChangedMemberList(raw any) []string {
+	if raw == nil {
+		return []string{}
+	}
+	s := strings.TrimSpace(anyToString(raw))
+	if s == "" {
+		return []string{}
+	}
+	decoded := decodeMaybeBase64(s)
+	if decoded == "" {
+		return []string{}
+	}
+	var out []string
+	for _, id := range strings.Split(decoded, ";") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	if out == nil {
+		return []string{}
+	}
+	return out
+}
+
+func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, groupName string, eventPayload map[string]any) error {
 	payload := map[string]any{
 		"channel":        "qiwei",
 		"agentId":        a.cfg.AgentID,
 		"channelGroupId": channelGroupID,
 		"eventType":      eventType,
 		"groupName":      groupName,
+	}
+	if len(eventPayload) > 0 {
+		payload["payload"] = eventPayload
 	}
 	raw, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.AgentServer+"/api/channels/group-event", bytes.NewReader(raw))
@@ -742,6 +809,26 @@ func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, g
 		logger.Warn(ctx, "群事件上报响应异常", "tag", tagCallback, "eventType", eventType, "status", resp.StatusCode)
 	}
 	return nil
+}
+
+func (a *app) autoAcceptFriendRequest(ctx context.Context, contactID, contactNickname, contactType string) {
+	_, err := a.client.doAPIRaw(ctx, "/contact/agreeContact", map[string]any{
+		"contactId": contactID,
+	})
+	if err != nil {
+		logger.Warn(ctx, "自动通过好友申请失败", "tag", tagCallback, "contactId", contactID, "error", err.Error())
+		return
+	}
+	logger.Business(ctx, "自动通过好友申请成功", "tag", tagCallback, "contactId", contactID, "contactNickname", contactNickname)
+
+	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
+		return
+	}
+	_ = a.reportGroupEvent(ctx, "new_contact", contactID, "", map[string]any{
+		"contactId":       contactID,
+		"contactNickname": contactNickname,
+		"contactType":     contactType,
+	})
 }
 
 func attachmentsFromPreparedMedia(messageID, messageType string, prepared preparedMedia) []incomingAttachment {
@@ -788,6 +875,10 @@ func formatVoiceContent(prefix, transcript string) string {
 }
 
 func (a *app) resolveUserName(ctx context.Context, userID string) string {
+	return a.resolveUserNameInRoom(ctx, userID, "")
+}
+
+func (a *app) resolveUserNameInRoom(ctx context.Context, userID, roomID string) string {
 	if v, ok := a.nameCache.Get(userID); ok {
 		return v
 	}
@@ -795,7 +886,65 @@ func (a *app) resolveUserName(ctx context.Context, userID string) string {
 	if v, ok := a.nameCache.Get(userID); ok {
 		return v
 	}
-	return a.fetchUserName(ctx, userID)
+	if name := a.fetchUserName(ctx, userID); name != "" {
+		return name
+	}
+	if roomID != "" && roomID != "0" {
+		return a.fetchMemberNameFromRoom(ctx, userID, roomID)
+	}
+	return ""
+}
+
+// fetchMemberNameFromRoom queries /room/batchGetRoomDetail and caches all member names.
+func (a *app) fetchMemberNameFromRoom(ctx context.Context, userID, roomID string) string {
+	res, err := a.client.doAPIRaw(ctx, "/room/batchGetRoomDetail", map[string]any{
+		"roomIdList": []string{roomID},
+	})
+	if err != nil {
+		logger.Warn(ctx, "查询群成员名称失败", "userId", userID, "roomId", roomID, "error", err.Error())
+		return ""
+	}
+	var wrapper struct {
+		RoomList []struct {
+			RoomID     string           `json:"roomId"`
+			MemberList []map[string]any `json:"memberList"`
+		} `json:"roomList"`
+	}
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+		return ""
+	}
+	for _, room := range wrapper.RoomList {
+		for _, m := range room.MemberList {
+			uid := anyToString(m["userId"])
+			name := decodeMaybeBase64(anyToString(m["name"]))
+			if uid != "" && name != "" {
+				a.nameCache.Set(uid, name)
+			}
+		}
+	}
+	if v, ok := a.nameCache.Get(userID); ok {
+		return v
+	}
+	return ""
+}
+
+func (a *app) loadSelfUserID(ctx context.Context) {
+	res, err := a.client.doAPIRaw(ctx, "/user/getProfile", nil)
+	if err != nil {
+		logger.Warn(ctx, "获取自身用户信息失败", "error", err.Error())
+		return
+	}
+	var profile struct {
+		UserID string `json:"userId"`
+	}
+	if err := unmarshalSafe(res.Data, &profile); err != nil {
+		logger.Warn(ctx, "解析自身用户信息失败", "error", err.Error())
+		return
+	}
+	if profile.UserID != "" {
+		a.selfUserID = profile.UserID
+		logger.Business(ctx, "缓存自身 userId", "selfUserID", a.selfUserID)
+	}
 }
 
 func (a *app) loadContactsOnce(ctx context.Context) {
@@ -829,10 +978,10 @@ func (a *app) loadExternalContacts(ctx context.Context) {
 	for _, c := range wrapper.ContactList {
 		uid := anyToString(c["userId"])
 		name := firstNonEmpty(
-			anyToString(c["nickname"]),
-			anyToString(c["realName"]),
-			anyToString(c["remark"]),
-			anyToString(c["alias"]),
+			decodeMaybeBase64(anyToString(c["nickname"])),
+			decodeMaybeBase64(anyToString(c["realName"])),
+			decodeMaybeBase64(anyToString(c["remark"])),
+			decodeMaybeBase64(anyToString(c["alias"])),
 		)
 		if uid != "" && name != "" {
 			a.nameCache.Set(uid, name)
@@ -857,10 +1006,10 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 	for _, c := range wrapper.ContactList {
 		uid := anyToString(c["userId"])
 		name := firstNonEmpty(
-			anyToString(c["nickname"]),
-			anyToString(c["realName"]),
-			anyToString(c["remark"]),
-			anyToString(c["name"]),
+			decodeMaybeBase64(anyToString(c["nickname"])),
+			decodeMaybeBase64(anyToString(c["realName"])),
+			decodeMaybeBase64(anyToString(c["remark"])),
+			decodeMaybeBase64(anyToString(c["name"])),
 		)
 		if uid != "" && uid != "0" && name != "" {
 			a.nameCache.Set(uid, name)
@@ -920,9 +1069,9 @@ func (a *app) fetchUserName(ctx context.Context, userID string) string {
 	for _, c := range wrapper.ContactList {
 		uid := anyToString(c["userId"])
 		name := firstNonEmpty(
-			anyToString(c["nickname"]),
-			anyToString(c["realName"]),
-			anyToString(c["alias"]),
+			decodeMaybeBase64(anyToString(c["nickname"])),
+			decodeMaybeBase64(anyToString(c["realName"])),
+			decodeMaybeBase64(anyToString(c["alias"])),
 		)
 		if uid != "" && name != "" {
 			a.nameCache.Set(uid, name)
@@ -1059,7 +1208,7 @@ func decodeOneMessage(in map[string]any) (qiweiCallbackMessage, error) {
 		MsgType:        int(anyToInt64(in["msgType"])),
 		MsgData:        mapValue(in["msgData"]),
 		SenderID:       firstNonEmpty(anyToString(in["senderId"]), anyToString(in["senderID"])),
-		SenderNickname: firstNonEmpty(anyToString(in["senderNickname"]), anyToString(in["senderName"])),
+		SenderNickname: decodeMaybeBase64(firstNonEmpty(anyToString(in["senderNickname"]), anyToString(in["senderName"]))),
 		FromRoomID:     anyToString(in["fromRoomId"]),
 		MsgSvrID:       firstNonEmpty(anyToString(in["msgSvrId"]), anyToString(in["msgServerId"])),
 		CreateTime:     firstNonZero(anyToInt64(in["createTime"]), anyToInt64(in["timestamp"])),
@@ -1155,6 +1304,40 @@ func mapValue(v any) map[string]any {
 		return m
 	}
 	return map[string]any{}
+}
+
+// extractAtList parses the atList field from callback msgData.
+// The field may be a base64-encoded semicolon-separated string, a plain string,
+// or a JSON array.
+func extractAtList(raw any) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []any:
+		var out []string
+		for _, item := range v {
+			if s := strings.TrimSpace(anyToString(item)); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		decoded := decodeMaybeBase64(v)
+		if decoded == "" {
+			return nil
+		}
+		var out []string
+		for _, s := range strings.Split(decoded, ";") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func firstNonEmpty(values ...string) string {

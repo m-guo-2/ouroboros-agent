@@ -375,6 +375,141 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+func (a *app) handleGetGroupDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, apiResponse{Success: false, Error: "method not allowed"})
+		return
+	}
+
+	var req struct {
+		RoomIDs []string `json:"roomIds"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
+		return
+	}
+	if len(req.RoomIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "roomIds is required"})
+		return
+	}
+
+	res, err := a.client.doAPIRaw(r.Context(), "/room/batchGetRoomDetail", map[string]any{
+		"roomIdList": req.RoomIDs,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+	var wrapper struct {
+		RoomList []map[string]any `json:"roomList"`
+	}
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	type member struct {
+		UserID string `json:"userId"`
+		Name   string `json:"name"`
+	}
+	type groupDetail struct {
+		RoomID       string   `json:"roomId"`
+		RoomName     string   `json:"roomName"`
+		Announcement string   `json:"announcement"`
+		CreateUserID string   `json:"createUserId"`
+		MemberCount  int      `json:"memberCount"`
+		Members      []member `json:"members"`
+	}
+
+	groups := make([]groupDetail, 0, len(wrapper.RoomList))
+	for _, room := range wrapper.RoomList {
+		roomName := decodeMaybeBase64(anyToString(room["roomName"]))
+		announcement := decodeMaybeBase64(anyToString(room["announcement"]))
+		var members []member
+		if rawMembers, ok := room["memberList"].([]any); ok {
+			for _, rm := range rawMembers {
+				m, ok := rm.(map[string]any)
+				if !ok {
+					continue
+				}
+				members = append(members, member{
+					UserID: anyToString(m["userId"]),
+					Name:   decodeMaybeBase64(anyToString(m["name"])),
+				})
+			}
+		}
+		groups = append(groups, groupDetail{
+			RoomID:       anyToString(room["roomId"]),
+			RoomName:     roomName,
+			Announcement: announcement,
+			CreateUserID: anyToString(room["createUserId"]),
+			MemberCount:  int(anyToInt64(room["memberCount"])),
+			Members:      members,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: groups})
+}
+
+func (a *app) handleGetContactDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, apiResponse{Success: false, Error: "method not allowed"})
+		return
+	}
+
+	var req struct {
+		UserIDs []string `json:"userIds"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
+		return
+	}
+	if len(req.UserIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "userIds is required"})
+		return
+	}
+
+	res, err := a.client.doAPIRaw(r.Context(), "/contact/batchGetUserinfo", map[string]any{
+		"userIdList": req.UserIDs,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+	var wrapper struct {
+		ContactList []map[string]any `json:"contactList"`
+	}
+	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+
+	type contactDetail struct {
+		UserID    string `json:"userId"`
+		Nickname  string `json:"nickname"`
+		RealName  string `json:"realName"`
+		Alias     string `json:"alias"`
+		CorpID    string `json:"corpId"`
+		Gender    string `json:"gender"`
+		AvatarURL string `json:"avatarUrl"`
+	}
+
+	contacts := make([]contactDetail, 0, len(wrapper.ContactList))
+	for _, c := range wrapper.ContactList {
+		contacts = append(contacts, contactDetail{
+			UserID:    anyToString(c["userId"]),
+			Nickname:  decodeMaybeBase64(anyToString(c["nickname"])),
+			RealName:  decodeMaybeBase64(anyToString(c["realName"])),
+			Alias:     decodeMaybeBase64(anyToString(c["alias"])),
+			CorpID:    anyToString(c["corpId"]),
+			Gender:    anyToString(c["gender"]),
+			AvatarURL: anyToString(c["avatarUrl"]),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: contacts})
+}
+
 func (a *app) searchContacts(ctx context.Context, query string) ([]map[string]any, error) {
 	if strings.TrimSpace(query) != "" {
 		res, err := a.client.doAPIRaw(ctx, "/contact/searchContact", map[string]any{"keyword": query})

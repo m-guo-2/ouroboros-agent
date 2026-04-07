@@ -114,6 +114,38 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 		createWecomSendMessageExecutor(),
 	)
 
+	registry.RegisterBuiltin("wecom_get_group_detail",
+		"查询企微群聊详情。传入群 ID 列表，返回群名、公告、创建者、成员数、成员列表。",
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"roomIds": map[string]interface{}{
+					"type":        "array",
+					"description": "要查询的群聊 ID 列表",
+					"items":       map[string]interface{}{"type": "string"},
+				},
+			},
+			Required: []string{"roomIds"},
+		},
+		createWecomHTTPToolExecutor("get_group_detail"),
+	)
+
+	registry.RegisterBuiltin("wecom_get_contact_detail",
+		"查询企微联系人详情。传入用户 ID 列表，返回昵称、真名、别名、企业、性别、头像等信息。",
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"userIds": map[string]interface{}{
+					"type":        "array",
+					"description": "要查询的用户 ID 列表",
+					"items":       map[string]interface{}{"type": "string"},
+				},
+			},
+			Required: []string{"userIds"},
+		},
+		createWecomHTTPToolExecutor("get_contact_detail"),
+	)
+
 	registry.RegisterBuiltin("wecom_revoke_message",
 		"撤回已发送的企微消息。需要 chatId（会话 ID）和 msgServerId（消息服务端 ID）。",
 		types.JSONSchema{

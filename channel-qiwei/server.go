@@ -26,6 +26,7 @@ type app struct {
 	nameCache     *ttlCache
 	roomStore     *roomStore
 
+	selfUserID       string
 	contactsMu       sync.Mutex
 	contactsLoadedAt time.Time
 }
@@ -58,6 +59,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/qiwei/send_message", a.handleFacadeSendMessage)
 	mux.HandleFunc("/api/qiwei/send", a.handleSend)
 	mux.HandleFunc("/api/qiwei/do", a.handleDoAPI)
+	mux.HandleFunc("/api/qiwei/get_group_detail", a.handleGetGroupDetail)
+	mux.HandleFunc("/api/qiwei/get_contact_detail", a.handleGetContactDetail)
 	mux.HandleFunc("/api/qiwei/", a.handleModuleAction)
 
 	logMiddleware := logger.Middleware(logger.MiddlewareOptions{

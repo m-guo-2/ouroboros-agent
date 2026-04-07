@@ -254,7 +254,7 @@ channel-qiwei 服务 → QiWe 平台 API
 
 | msgType | 内部 messageType | 处理逻辑 | 发给 agent 的 content 格式 |
 |---------|-----------------|---------|--------------------------|
-| **0, 1, 2** | `text` / `quote` | 提取 `msgData.content` 纯文本，空文本跳过；当 `msgData.reply` 存在时 messageType 升级为 `quote`，被引用消息信息写入 `channelMeta.quotedMessage`（含 msgSvrId、content） | 原始文本（引用时附带 quotedMessage meta） |
+| **0, 1, 2** | `text` / `quote` | 提取 `msgData.content` 纯文本，空文本跳过；当 `msgData.reply` 存在时 messageType 升级为 `quote`；提取 `msgData.atList`（base64/分号分隔）写入 `channelMeta.atList`，比对自身 userId 写入 `channelMeta.mentionedSelf` | 原始文本（引用/@ 时附带对应 channelMeta） |
 | **3, 7, 14** | `image` | 媒体管道：QW 源下载 → OSS 上传 | `[收到图片]\n名称: xxx\n地址: oss://...` + attachment |
 | **101** | `image` | 媒体管道：GW 源下载 → OSS 上传 | 同上 |
 | **6** | `location` | `extractRichContent` 提取标题/地址/经纬度 | `[位置] 标题 地址 (纬度:xx, 经度:xx)` |
@@ -310,14 +310,16 @@ channel-qiwei 服务 → QiWe 平台 API
 
 | msgType | 内部 eventType | 特殊处理 | 发给 agent 的 payload |
 |---------|---------------|---------|---------------------|
-| **1001** | `group_name_changed` | 清除群名缓存，调用 `/room/batchGetRoomDetail` 获取新群名 | `{"channel":"qiwei", "agentId":"...", "channelGroupId":"roomId", "eventType":"group_name_changed", "groupName":"新群名"}` |
-| **1002** | `member_joined` | 无 | `{"channel":"qiwei", "agentId":"...", "channelGroupId":"roomId", "eventType":"member_joined"}` |
-| **1003** | `member_removed` | 无 | `{"channel":"qiwei", ..., "eventType":"member_removed"}` |
-| **1005** | `member_quit` | 无 | `{"channel":"qiwei", ..., "eventType":"member_quit"}` |
-| **1023** | `group_dissolved` | agent 端将群状态标记为 `dissolved` | `{"channel":"qiwei", ..., "eventType":"group_dissolved"}` |
+| **1001** | `group_name_changed` | 清除群名缓存，调用 `/room/batchGetRoomDetail` 获取新群名 | `{..., "eventType":"group_name_changed", "groupName":"新群名", "payload":{"memberIds":[], "operatorId":"..."}}` |
+| **1002** | `member_joined` | 从 `changedMemberList` 解码成员 ID 列表 | `{..., "eventType":"member_joined", "payload":{"memberIds":["uid1","uid2"], "operatorId":"..."}}` |
+| **1003** | `member_removed` | 从 `changedMemberList` 解码成员 ID 列表 | `{..., "eventType":"member_removed", "payload":{"memberIds":["uid1"], "operatorId":"..."}}` |
+| **1005** | `member_quit` | 从 `changedMemberList` 解码成员 ID 列表 | `{..., "eventType":"member_quit", "payload":{"memberIds":["uid1"], "operatorId":"..."}}` |
+| **1023** | `group_dissolved` | agent 端将群状态标记为 `dissolved` | `{..., "eventType":"group_dissolved", "payload":{"memberIds":[], "operatorId":"..."}}` |
+
+`changedMemberList` 字段可能是 base64 编码的分号分隔字符串，解码失败时 `memberIds` 为空数组，不影响事件投递。
 
 **agent 端处理**（`agent/internal/dispatcher/group_event.go`）：
-- 验证 eventType 在允许列表中（额外允许 `group_created`，但平台目前不会产生该事件）
+- 验证 eventType 在允许列表中（额外允许 `group_created`、`new_contact`）
 - 调用 `storage.UpsertChannelGroup` 写入/更新群记录
 - `group_dissolved` 事件将群 status 设为 `dissolved`，其余为 `active`
 
@@ -330,7 +332,7 @@ channel-qiwei 服务 → QiWe 平台 API
 | msgType | 含义 | 处理方式 |
 |---------|------|---------|
 | 1001/1002/1003/1005/1023 | 群事件 | 委托给 `handleGroupEvent`，与 cmd=15000 相同 |
-| **2357** | 好友申请 | `logger.Business` 记录 contactNickname、contactId，不转发 |
+| **2357** | 好友申请 | 自动调用 `/contact/agreeContact` 通过申请，成功后向 agent 推送 `new_contact` 事件（payload 含 contactId/contactNickname/contactType） |
 | **2132** | 好友申请(简) | `logger.Business` 记录，不转发 |
 | 其他 | 未知系统事件 | `logger.Detail` 记录，不转发 |
 
@@ -368,7 +370,7 @@ channel-qiwei 服务 → QiWe 平台 API
   "content": "带发送者前缀的消息内容（格式：昵称[ID] 2026-03-31 12:00:00:消息内容）",
   "senderName": "发送者昵称",
   "timestamp": 1711843200000,
-  "channelMeta": { "quotedMessage": {...}, "miniappData": {...}, "shared_id": "..." },
+  "channelMeta": { "quotedMessage": {...}, "miniappData": {...}, "shared_id": "...", "atList": ["userId1", "userId2"], "mentionedSelf": true },
   "attachments": [
     {
       "id": "MsgSvrID:0",
@@ -399,8 +401,9 @@ channel-qiwei 服务 → QiWe 平台 API
   "channel": "qiwei",
   "agentId": "配置的 agent ID",
   "channelGroupId": "群 ID (roomId)",
-  "eventType": "group_name_changed | member_joined | member_removed | member_quit | group_dissolved",
-  "groupName": "仅 group_name_changed 时填充"
+  "eventType": "group_name_changed | member_joined | member_removed | member_quit | group_dissolved | new_contact",
+  "groupName": "仅 group_name_changed 时填充",
+  "payload": { "memberIds": ["userId1"], "operatorId": "senderId" }
 }
 ```
 
@@ -445,6 +448,8 @@ agent 通过 `POST {qiweiBaseURL}/api/qiwei/send` 发送消息，由 `handleSend
 | `/api/qiwei/list_or_get_conversations` | POST | 会话列表/历史消息 | agent 内置工具 `wecom_list_or_get_conversations` |
 | `/api/qiwei/parse_message` | POST | 解析消息内容 | agent 内置工具 `wecom_parse_message` |
 | `/api/qiwei/send_message` | POST | Facade 发送消息 | agent 内置工具 `wecom_send_message` |
+| `/api/qiwei/get_group_detail` | POST | 查询群聊详情 | agent 内置工具 `wecom_get_group_detail` |
+| `/api/qiwei/get_contact_detail` | POST | 查询联系人详情 | agent 内置工具 `wecom_get_contact_detail` |
 | `/api/qiwei/do` | POST | 通用 API 代理 | 管理端 |
 | `/api/qiwei/{module}/{action}` | POST | 模块化 API 代理 | 管理端 |
 

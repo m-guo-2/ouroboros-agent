@@ -26,6 +26,7 @@ func main() {
 	// Preload known rooms from the qiwei platform so restarts don't
 	// re-trigger group_joined for groups the bot is already in.
 	go app.preloadKnownRooms(ctx)
+	go app.loadSelfUserID(ctx)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,

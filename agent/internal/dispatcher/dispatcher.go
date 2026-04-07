@@ -22,6 +22,7 @@ type IncomingMessage struct {
 	ChannelMessageID        string                   `json:"channelMessageId"`
 	ChannelConversationID   string                   `json:"channelConversationId,omitempty"`
 	ChannelConversationName string                   `json:"channelConversationName,omitempty"`
+	ConversationType        string                   `json:"conversationType,omitempty"`
 	SenderName              string                   `json:"senderName,omitempty"`
 	Content                 string                   `json:"content"`
 	MessageType             string                   `json:"messageType,omitempty"`
