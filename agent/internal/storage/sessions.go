@@ -18,11 +18,11 @@ func newID() string {
 
 func scanSession(row *sql.Row) (*SessionData, error) {
 	var sd SessionData
-	var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, ctx sql.NullString
+	var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, mode, ctx sql.NullString
 	err := row.Scan(
 		&sd.ID, &sd.Title, &agentID, &userID, &sourceChannel,
 		&sessionKey, &channelConvID, &channelName, &workDir,
-		&sd.ExecutionStatus, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+		&sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -37,6 +37,10 @@ func scanSession(row *sql.Row) (*SessionData, error) {
 	sd.ChannelConversationID = channelConvID.String
 	sd.ChannelName = channelName.String
 	sd.WorkDir = workDir.String
+	sd.Mode = mode.String
+	if sd.Mode == "" {
+		sd.Mode = "normal"
+	}
 	sd.Context = ctx.String
 	return &sd, nil
 }
@@ -45,6 +49,7 @@ const sessionSelectSQL = `
 	SELECT id, title, agent_id, user_id, source_channel, session_key,
 	       channel_conversation_id, COALESCE(channel_name,''), work_dir,
 	       COALESCE(execution_status,'idle'),
+	       COALESCE(mode,'normal'),
 	       COALESCE(event_cursor, 0),
 	       created_at,
 	       updated_at,
@@ -181,11 +186,11 @@ func ListSessions(agentID, userID, channel, status, search string, limit int, be
 	var out []SessionData
 	for rows.Next() {
 		var sd SessionData
-		var agentIDn, userIDn, sourceChannel, sessionKey, channelConvID, channelName, workDir, ctx sql.NullString
+		var agentIDn, userIDn, sourceChannel, sessionKey, channelConvID, channelName, workDir, mode, ctx sql.NullString
 		if err := rows.Scan(
 			&sd.ID, &sd.Title, &agentIDn, &userIDn, &sourceChannel,
 			&sessionKey, &channelConvID, &channelName, &workDir,
-			&sd.ExecutionStatus, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+			&sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 		); err != nil {
 			return nil, err
 		}
@@ -196,6 +201,10 @@ func ListSessions(agentID, userID, channel, status, search string, limit int, be
 		sd.ChannelConversationID = channelConvID.String
 		sd.ChannelName = channelName.String
 		sd.WorkDir = workDir.String
+		sd.Mode = mode.String
+		if sd.Mode == "" {
+			sd.Mode = "normal"
+		}
 		sd.Context = ctx.String
 		out = append(out, sd)
 	}
@@ -240,6 +249,7 @@ func UpdateSession(sessionID string, updates map[string]interface{}) error {
 		"title":           "title",
 		"sessionKey":      "session_key",
 		"eventCursor":     "event_cursor",
+		"mode":            "mode",
 	}
 	for key, val := range updates {
 		col, ok := colMap[key]

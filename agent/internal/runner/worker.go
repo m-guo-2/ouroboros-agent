@@ -10,6 +10,7 @@ import (
 	"agent/internal/logger"
 	"agent/internal/sandbox"
 	"agent/internal/storage"
+	"agent/internal/types"
 )
 
 type ProcessRequest struct {
@@ -33,6 +34,7 @@ type SessionWorker struct {
 	SessionID      string
 	SessionKey     string
 	WorkDir        string
+	Mode           types.SessionMode
 	EventLog       *eventlog.EventLog
 	Processing     bool
 	CancelFunc     context.CancelFunc

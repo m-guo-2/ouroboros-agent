@@ -2,6 +2,16 @@ package types
 
 import "context"
 
+// SessionMode controls the agent's behavior within a session.
+// In "plan" mode the LLM is instructed to gather information and
+// produce a plan instead of executing actions directly.
+type SessionMode string
+
+const (
+	SessionModeNormal SessionMode = "normal"
+	SessionModePlan   SessionMode = "plan"
+)
+
 // ToolDefinition corresponds to the tool definition in Anthropic API
 // typically adhering to a JSON Schema structure.
 type ToolDefinition struct {

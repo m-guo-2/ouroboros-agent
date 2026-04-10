@@ -365,6 +365,9 @@ func runSchema(db *sql.DB) error {
 			ON session_active_skills(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_session_active_skills_session_order
 			ON session_active_skills(session_id, activation_order)`,
+
+		// Auto plan mode: track session mode (normal/plan)
+		`ALTER TABLE agent_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'`,
 	}
 	for _, m := range migrations {
 		db.Exec(m) // nolint: ignore "duplicate column" / "already exists" errors

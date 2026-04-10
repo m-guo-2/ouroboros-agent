@@ -841,6 +841,13 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		return nil
 	}
 
+	// Restore session mode from DB.
+	if types.SessionMode(sessionData.Mode) == types.SessionModePlan {
+		worker.Mode = types.SessionModePlan
+	} else {
+		worker.Mode = types.SessionModeNormal
+	}
+
 	agentID := sessionData.AgentID
 	channel := sessionData.SourceChannel
 	channelConvID := sessionData.ChannelConversationID
@@ -1101,6 +1108,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	})
 
 	registerWecomBuiltinTools(registry, sessionReq)
+	registerPlanModeTools(registry, worker, sessionReq)
 
 	registerRenderCardTool(registry)
 
@@ -1369,6 +1377,9 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	registry.RegisterSkillInternalTools(internalHandlers)
 
 	systemPrompt := BuildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SkillsSnippet)
+	if worker.Mode == types.SessionModePlan {
+		systemPrompt += planModePromptSuffix
+	}
 
 	var historyMessages []types.AgentMessage
 	var histSource string
@@ -1546,6 +1557,9 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 					worker.EventLog.Cursor(),
 				)
 			}
+			_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
+				"mode": string(worker.Mode),
+			})
 		}
 
 		// Check if more events arrived while we were processing.
