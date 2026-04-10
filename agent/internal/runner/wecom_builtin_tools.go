@@ -18,6 +18,13 @@ import (
 	sharedlogger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
+func resolveSessionConversationID(request ProcessRequest) string {
+	if request.ChannelConversationID != "" {
+		return request.ChannelConversationID
+	}
+	return request.ChannelUserID
+}
+
 func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessRequest) {
 	registry.RegisterBuiltin("wecom_search_targets",
 		"搜索企微中的沟通对象，统一覆盖联系人和群聊。输入关键词后返回可直接沟通的 targets，每个结果都带 type、id、name。",
@@ -34,17 +41,17 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	)
 
 	registry.RegisterBuiltin("wecom_list_or_get_conversations",
-		"统一处理企微会话读取。不给 conversationId 时，返回最近会话列表；给了 conversationId 时，返回该会话的历史消息。",
+		"读取企微会话。默认读取当前会话的历史消息；设置 listRecent=true 时返回最近会话列表。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
-				"conversationId": map[string]interface{}{"type": "string", "description": "目标会话 ID。留空时列最近会话；填写后读取该会话历史消息"},
-				"msgSvrId":       map[string]interface{}{"type": "string", "description": "读取历史消息时的翻页起点。留空则从最新消息开始"},
-				"currentSeq":     map[string]interface{}{"type": "number", "description": "列会话时的分页游标，首次传 0"},
-				"pageSize":       map[string]interface{}{"type": "number", "description": "列会话时每页数量，默认使用服务端默认值"},
+				"listRecent": map[string]interface{}{"type": "boolean", "description": "设为 true 时返回最近会话列表，而非当前会话历史"},
+				"msgSvrId":   map[string]interface{}{"type": "string", "description": "读取历史消息时的翻页起点。留空则从最新消息开始"},
+				"currentSeq": map[string]interface{}{"type": "number", "description": "列会话时的分页游标，首次传 0"},
+				"pageSize":   map[string]interface{}{"type": "number", "description": "每页数量，默认使用服务端默认值"},
 			},
 		},
-		createWecomHTTPToolExecutor("list_or_get_conversations"),
+		createSessionAwareConversationExecutor(request),
 	)
 
 	registry.RegisterBuiltin("wecom_parse_message",
@@ -86,10 +93,8 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
-				"channelConversationId": map[string]interface{}{"type": "string", "description": "群聊 ID（群消息时填写）"},
-				"channelUserId":         map[string]interface{}{"type": "string", "description": "联系人 ID（私聊时填写）"},
-				"messageType":           map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
-				"content":               map[string]interface{}{"type": "string", "description": "单条消息内容（与 messages 二选一）。text/rich_text 填文字；image/file/voice 填可访问 URL；link 填链接地址；location/miniapp 可留空由 channelMeta 承载"},
+				"messageType": map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+				"content":     map[string]interface{}{"type": "string", "description": "单条消息内容（与 messages 二选一）。text/rich_text 填文字；image/file/voice 填可访问 URL；link 填链接地址；location/miniapp 可留空由 channelMeta 承载"},
 				"messages": map[string]interface{}{
 					"type":        "array",
 					"description": "多条消息数组，最多 4 条，按顺序发送。与 content 二选一。适合文字+图片混发等场景",
@@ -111,23 +116,16 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 - text/rich_text 引用回复: {"reply": {"msgSvrId": "被引用消息ID", "content": "原消息摘要"}}`},
 			},
 		},
-		createWecomSendMessageExecutor(),
+		createWecomSendMessageExecutor(request),
 	)
 
 	registry.RegisterBuiltin("wecom_get_group_detail",
-		"查询企微群聊详情。传入群 ID 列表，返回群名、公告、创建者、成员数、成员列表。",
+		"查询当前群聊的详情，返回群名、公告、创建者、成员数、成员列表。仅在群聊会话中可用。",
 		types.JSONSchema{
-			Type: "object",
-			Properties: map[string]interface{}{
-				"roomIds": map[string]interface{}{
-					"type":        "array",
-					"description": "要查询的群聊 ID 列表",
-					"items":       map[string]interface{}{"type": "string"},
-				},
-			},
-			Required: []string{"roomIds"},
+			Type:       "object",
+			Properties: map[string]interface{}{},
 		},
-		createWecomHTTPToolExecutor("get_group_detail"),
+		createSessionAwareGroupDetailExecutor(request),
 	)
 
 	registry.RegisterBuiltin("wecom_get_contact_detail",
@@ -147,20 +145,19 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	)
 
 	registry.RegisterBuiltin("wecom_revoke_message",
-		"撤回已发送的企微消息。需要 chatId（会话 ID）和 msgServerId（消息服务端 ID）。",
+		"撤回已发送的企微消息。只需提供待撤回消息的服务端 ID。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
-				"chatId":      map[string]interface{}{"type": "string", "description": "会话 ID，即消息所在的聊天对象 ID"},
 				"msgServerId": map[string]interface{}{"type": "string", "description": "待撤回消息的服务端 ID"},
 			},
-			Required: []string{"chatId", "msgServerId"},
+			Required: []string{"msgServerId"},
 		},
-		createWecomModuleActionExecutor("message", "revoke"),
+		createSessionAwareRevokeExecutor(request),
 	)
 }
 
-func createWecomSendMessageExecutor() types.ToolExecutor {
+func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecutor {
 	sendOne := func(ctx context.Context, payload map[string]interface{}) (interface{}, error) {
 		url := fmt.Sprintf("%s/api/qiwei/send_message", config.ResolveQiweiBaseURL(func(key string) string {
 			v, _ := storage.GetSettingValue(key)
@@ -196,9 +193,10 @@ func createWecomSendMessageExecutor() types.ToolExecutor {
 		return string(respBytes), nil
 	}
 
+	convID := sessionReq.ChannelConversationID
+	userID := sessionReq.ChannelUserID
+
 	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-		convID, _ := input["channelConversationId"].(string)
-		userID, _ := input["channelUserId"].(string)
 
 		type msgItem struct {
 			content     string
@@ -277,6 +275,38 @@ func createWecomSendMessageExecutor() types.ToolExecutor {
 			return nil, fmt.Errorf("%s", results[0].Error)
 		}
 		return map[string]interface{}{"success": allOK, "results": results}, nil
+	}
+}
+
+func createSessionAwareConversationExecutor(sessionReq ProcessRequest) types.ToolExecutor {
+	inner := createWecomHTTPToolExecutor("list_or_get_conversations")
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		listRecent, _ := input["listRecent"].(bool)
+		delete(input, "listRecent")
+		if !listRecent {
+			input["conversationId"] = resolveSessionConversationID(sessionReq)
+		}
+		return inner(ctx, input)
+	}
+}
+
+func createSessionAwareGroupDetailExecutor(sessionReq ProcessRequest) types.ToolExecutor {
+	inner := createWecomHTTPToolExecutor("get_group_detail")
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		roomID := sessionReq.ChannelConversationID
+		if roomID == "" || roomID == sessionReq.ChannelUserID {
+			return nil, fmt.Errorf("当前不在群聊中，无法查询群详情")
+		}
+		input["roomIds"] = []string{roomID}
+		return inner(ctx, input)
+	}
+}
+
+func createSessionAwareRevokeExecutor(sessionReq ProcessRequest) types.ToolExecutor {
+	inner := createWecomModuleActionExecutor("message", "revoke")
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		input["chatId"] = resolveSessionConversationID(sessionReq)
+		return inner(ctx, input)
 	}
 }
 
