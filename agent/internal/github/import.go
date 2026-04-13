@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // GitHubSource holds the parsed components of a GitHub URL.
@@ -123,6 +124,8 @@ type BrowseSkillEntry struct {
 	Exists      bool   `json:"exists"`
 }
 
+const maxConcurrency = 5
+
 // BrowseSkills lists all skill directories under basePath in the given client's repo.
 // A directory is considered a skill if it contains a SKILL.md file.
 func BrowseSkills(client *Client, basePath string) ([]BrowseSkillEntry, error) {
@@ -134,44 +137,88 @@ func BrowseSkills(client *Client, basePath string) ([]BrowseSkillEntry, error) {
 		return nil, fmt.Errorf("list directory %q: %w", basePath, err)
 	}
 
-	var skills []BrowseSkillEntry
+	var dirs []FileEntry
 	for _, e := range entries {
-		if e.Type != "dir" {
-			continue
+		if e.Type == "dir" {
+			dirs = append(dirs, e)
 		}
+	}
 
-		skillMdPath := basePath + "/" + e.Name + "/SKILL.md"
-		if basePath == "." {
-			skillMdPath = e.Name + "/SKILL.md"
-		}
-		content, _, err := client.GetFileContent(skillMdPath)
-		if err != nil {
-			if IsNotFound(err) {
-				continue
+	type indexedEntry struct {
+		idx   int
+		entry BrowseSkillEntry
+		ok    bool
+	}
+
+	results := make(chan indexedEntry, len(dirs))
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	for i, e := range dirs {
+		wg.Add(1)
+		go func(idx int, dirName string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			skillMdPath := basePath + "/" + dirName + "/SKILL.md"
+			if basePath == "." {
+				skillMdPath = dirName + "/SKILL.md"
 			}
-			continue
-		}
+			content, _, err := client.GetFileContent(skillMdPath)
+			if err != nil {
+				return
+			}
 
-		fm, _ := splitFrontmatter(content)
-		name := e.Name
-		description := ""
-		if fm != "" {
-			var meta map[string]interface{}
-			if err := json.Unmarshal([]byte(frontmatterToJSON(fm)), &meta); err == nil {
-				if v, ok := meta["name"].(string); ok && v != "" {
-					name = v
-				}
-				if v, ok := meta["description"].(string); ok {
-					description = v
+			fm, _ := splitFrontmatter(content)
+			name := dirName
+			description := ""
+			if fm != "" {
+				var meta map[string]interface{}
+				if err := json.Unmarshal([]byte(frontmatterToJSON(fm)), &meta); err == nil {
+					if v, ok := meta["name"].(string); ok && v != "" {
+						name = v
+					}
+					if v, ok := meta["description"].(string); ok {
+						description = v
+					}
 				}
 			}
-		}
 
-		skills = append(skills, BrowseSkillEntry{
-			ID:          e.Name,
-			Name:        name,
-			Description: description,
-		})
+			results <- indexedEntry{
+				idx: idx,
+				entry: BrowseSkillEntry{
+					ID:          dirName,
+					Name:        name,
+					Description: description,
+				},
+				ok: true,
+			}
+		}(i, e.Name)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect and sort by original directory order.
+	collected := make([]indexedEntry, 0, len(dirs))
+	for r := range results {
+		if r.ok {
+			collected = append(collected, r)
+		}
+	}
+	skills := make([]BrowseSkillEntry, 0, len(collected))
+	// Use a simple insertion approach since we need original order.
+	ordered := make(map[int]BrowseSkillEntry, len(collected))
+	for _, c := range collected {
+		ordered[c.idx] = c.entry
+	}
+	for i := range dirs {
+		if entry, ok := ordered[i]; ok {
+			skills = append(skills, entry)
+		}
 	}
 
 	return skills, nil
@@ -185,27 +232,36 @@ type ImportSkillResult struct {
 }
 
 // ImportSkills copies selected skills from a source repo into the destination Store's
-// GitHub repository, committing each file via PutFile.
+// GitHub repository, committing each file via PutFile. Skills are imported concurrently.
 func ImportSkills(src *Client, srcBasePath string, dst *Store, skillIDs []string, overwrite bool) []ImportSkillResult {
-	results := make([]ImportSkillResult, 0, len(skillIDs))
+	results := make([]ImportSkillResult, len(skillIDs))
 
-	for _, id := range skillIDs {
-		r := ImportSkillResult{ID: id}
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	for i, id := range skillIDs {
+		results[i].ID = id
 
 		if !overwrite && dst.GetByID(id) != nil {
-			r.Error = "skill already exists"
-			results = append(results, r)
+			results[i].Error = "skill already exists"
 			continue
 		}
 
-		if err := importOneSkill(src, srcBasePath, dst, id); err != nil {
-			r.Error = err.Error()
-		} else {
-			r.OK = true
-		}
-		results = append(results, r)
+		wg.Add(1)
+		go func(idx int, skillID string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := importOneSkill(src, srcBasePath, dst, skillID); err != nil {
+				results[idx].Error = err.Error()
+			} else {
+				results[idx].OK = true
+			}
+		}(i, id)
 	}
 
+	wg.Wait()
 	return results
 }
 
@@ -215,7 +271,30 @@ func importOneSkill(src *Client, srcBasePath string, dst *Store, id string) erro
 		srcDir = srcBasePath + "/" + id
 	}
 
-	// SKILL.md is required
+	// List the skill directory once to discover what exists,
+	// avoiding blind requests that produce 404s for missing scripts/references.
+	entries, err := src.ListDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("list skill dir: %w", err)
+	}
+
+	hasSkillMd := false
+	hasScripts := false
+	hasRefs := false
+	for _, e := range entries {
+		switch {
+		case e.Type == "file" && e.Name == "SKILL.md":
+			hasSkillMd = true
+		case e.Type == "dir" && e.Name == "scripts":
+			hasScripts = true
+		case e.Type == "dir" && e.Name == "references":
+			hasRefs = true
+		}
+	}
+	if !hasSkillMd {
+		return fmt.Errorf("SKILL.md not found in %s", srcDir)
+	}
+
 	content, _, err := src.GetFileContent(srcDir + "/SKILL.md")
 	if err != nil {
 		return fmt.Errorf("read SKILL.md: %w", err)
@@ -223,7 +302,6 @@ func importOneSkill(src *Client, srcBasePath string, dst *Store, id string) erro
 
 	dstPath := dst.skillMdPath(id)
 
-	// If overwriting, get current SHA for the PutFile update
 	var sha string
 	if existing := dst.GetByID(id); existing != nil {
 		dst.mu.RLock()
@@ -238,11 +316,12 @@ func importOneSkill(src *Client, srcBasePath string, dst *Store, id string) erro
 		return fmt.Errorf("write SKILL.md: %w", err)
 	}
 
-	// Copy scripts/
-	importDir(src, srcDir+"/scripts", dst, dst.scriptsDir(id), id)
-
-	// Copy references/
-	importDir(src, srcDir+"/references", dst, dst.refsDir(id), id)
+	if hasScripts {
+		importDir(src, srcDir+"/scripts", dst, dst.scriptsDir(id), id)
+	}
+	if hasRefs {
+		importDir(src, srcDir+"/references", dst, dst.refsDir(id), id)
+	}
 
 	return nil
 }
@@ -252,16 +331,36 @@ func importDir(src *Client, srcDir string, dst *Store, dstDir, skillID string) {
 	if err != nil {
 		return
 	}
+
+	var files []FileEntry
 	for _, e := range entries {
-		if e.Type != "file" {
-			continue
+		if e.Type == "file" {
+			files = append(files, e)
 		}
-		content, _, err := src.GetFileContent(srcDir + "/" + e.Name)
-		if err != nil {
-			continue
-		}
-		dstPath := dstDir + "/" + e.Name
-		msg := fmt.Sprintf("import skill %s: %s", skillID, e.Name)
-		_ = dst.client.PutFile(dstPath, msg, content, "")
 	}
+	if len(files) == 0 {
+		return
+	}
+
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	for _, e := range files {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			content, _, err := src.GetFileContent(srcDir + "/" + name)
+			if err != nil {
+				return
+			}
+			dstPath := dstDir + "/" + name
+			msg := fmt.Sprintf("import skill %s: %s", skillID, name)
+			_ = dst.client.PutFile(dstPath, msg, content, "")
+		}(e.Name)
+	}
+
+	wg.Wait()
 }
