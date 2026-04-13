@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"agent/internal/github"
 	"agent/internal/storage"
 )
 
@@ -145,4 +146,113 @@ func handleSkillsWithID(w http.ResponseWriter, r *http.Request) {
 	default:
 		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// POST /api/skills/import/browse — browse skills from an external public GitHub repo
+func handleSkillsImportBrowse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := decodeBody(r, &body); err != nil || body.URL == "" {
+		apiErr(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	src, err := github.ParseGitHubURL(body.URL)
+	if err != nil {
+		apiErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	client := github.NewPublicClient(src.Owner, src.Repo, src.Branch)
+	skills, err := github.BrowseSkills(client, src.Path)
+	if err != nil {
+		if github.IsNotFound(err) {
+			apiErr(w, http.StatusNotFound, "path not found in repository")
+			return
+		}
+		apiErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	localSkills, _ := storage.GetAllSkills()
+	localIDs := make(map[string]bool, len(localSkills))
+	for _, s := range localSkills {
+		localIDs[s.ID] = true
+	}
+	for i := range skills {
+		if localIDs[skills[i].ID] {
+			skills[i].Exists = true
+		}
+	}
+
+	ok(w, map[string]interface{}{
+		"repo":   src.Owner + "/" + src.Repo,
+		"branch": src.Branch,
+		"path":   src.Path,
+		"skills": skills,
+	})
+}
+
+// POST /api/skills/import — import selected skills from an external public GitHub repo
+func handleSkillsImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Repo      string   `json:"repo"`
+		Branch    string   `json:"branch"`
+		Path      string   `json:"path"`
+		Skills    []string `json:"skills"`
+		Overwrite bool     `json:"overwrite"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		apiErr(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.Repo == "" || len(body.Skills) == 0 {
+		apiErr(w, http.StatusBadRequest, "repo and skills are required")
+		return
+	}
+	if body.Branch == "" {
+		body.Branch = "main"
+	}
+
+	parts := strings.SplitN(body.Repo, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		apiErr(w, http.StatusBadRequest, "repo must be owner/repo format")
+		return
+	}
+
+	store := github.DefaultStore
+	if store == nil {
+		apiErr(w, http.StatusInternalServerError, "skill store not initialized")
+		return
+	}
+
+	srcClient := github.NewPublicClient(parts[0], parts[1], body.Branch)
+	results := github.ImportSkills(srcClient, body.Path, store, body.Skills, body.Overwrite)
+
+	if err := store.Refresh(); err != nil {
+		apiErr(w, http.StatusInternalServerError, "import succeeded but refresh failed: "+err.Error())
+		return
+	}
+
+	imported := 0
+	for _, r := range results {
+		if r.OK {
+			imported++
+		}
+	}
+
+	ok(w, map[string]interface{}{
+		"imported": imported,
+		"total":    len(body.Skills),
+		"results":  results,
+	})
 }

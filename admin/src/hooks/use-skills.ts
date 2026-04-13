@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { skillsApi } from "@/api/skills"
+import type { ImportParams } from "@/api/skills"
 
 export function useSkills() {
   return useQuery({
@@ -62,6 +63,20 @@ export function useRefreshSkills() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => skillsApi.refresh(),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
+  })
+}
+
+export function useBrowseImport() {
+  return useMutation({
+    mutationFn: (url: string) => skillsApi.browseImport(url),
+  })
+}
+
+export function useImportSkills() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (params: ImportParams) => skillsApi.importSkills(params),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["skills"] }) },
   })
 }

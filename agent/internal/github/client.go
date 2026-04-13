@@ -106,7 +106,9 @@ func (c *Client) do(method, url string, body interface{}) (*http.Response, error
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if body != nil {
@@ -219,4 +221,8 @@ func (c *Client) DeleteFile(path, message, sha string) error {
 func IsNotFound(err error) bool {
 	ae, ok := err.(*apiError)
 	return ok && ae.StatusCode == 404
+}
+
+func defaultHTTPClient() *http.Client {
+	return sharedlogger.NewClient("github", 15*time.Second)
 }

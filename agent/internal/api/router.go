@@ -35,6 +35,8 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	// Skills
 	mux.HandleFunc("/api/skills", handleSkills)
 	mux.HandleFunc("/api/skills/refresh", handleSkillsRefresh)
+	mux.HandleFunc("/api/skills/import/browse", handleSkillsImportBrowse)
+	mux.HandleFunc("/api/skills/import", handleSkillsImport)
 	mux.HandleFunc("/api/skills/", handleSkillsWithID)
 
 	// Users

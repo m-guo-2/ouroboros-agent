@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Blocks, Plus, Pencil, RefreshCw, FileCode, FileText } from "lucide-react"
+import { Blocks, Plus, Pencil, RefreshCw, FileCode, FileText, Download } from "lucide-react"
 import { PageHeader } from "@/components/layout/page-header"
 import { EmptyState } from "@/components/layout/empty-state"
 import { Card } from "@/components/ui/card"
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { SkillFormDialog } from "./skill-form"
+import { SkillImportDialog } from "./skill-import-dialog"
 import { useSkills, useToggleSkill, useRefreshSkills } from "@/hooks/use-skills"
 
 export function SkillList() {
@@ -16,6 +17,7 @@ export function SkillList() {
   const toggleMutation = useToggleSkill()
   const refreshMutation = useRefreshSkills()
   const [showCreate, setShowCreate] = useState(false)
+  const [showImport, setShowImport] = useState(false)
 
   if (isLoading) {
     return (
@@ -44,6 +46,10 @@ export function SkillList() {
               <RefreshCw className={`h-3.5 w-3.5 ${refreshMutation.isPending ? "animate-spin" : ""}`} />
               {refreshMutation.isPending ? "同步中…" : "同步仓库"}
             </Button>
+            <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>
+              <Download className="h-3.5 w-3.5" />
+              导入
+            </Button>
             <Button size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="h-3.5 w-3.5" />
               新建技能
@@ -53,6 +59,7 @@ export function SkillList() {
       />
 
       <SkillFormDialog open={showCreate} onOpenChange={setShowCreate} />
+      <SkillImportDialog open={showImport} onOpenChange={setShowImport} />
 
       {!skills || skills.length === 0 ? (
         <EmptyState icon={Blocks} title="暂无技能" className="mt-12" />
