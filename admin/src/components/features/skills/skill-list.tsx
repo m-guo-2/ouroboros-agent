@@ -12,6 +12,27 @@ import { SkillFormDialog } from "./skill-form"
 import { SkillImportDialog } from "./skill-import-dialog"
 import { useSkills, useToggleSkill, useRefreshSkills } from "@/hooks/use-skills"
 
+const AVATAR_COLORS = [
+  "bg-blue-100 text-blue-700",
+  "bg-violet-100 text-violet-700",
+  "bg-amber-100 text-amber-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-rose-100 text-rose-700",
+  "bg-cyan-100 text-cyan-700",
+  "bg-orange-100 text-orange-700",
+  "bg-teal-100 text-teal-700",
+]
+
+function nameToColor(name: string) {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
+}
+
+function nameToInitial(name: string) {
+  return name.charAt(0).toUpperCase()
+}
+
 export function SkillList() {
   const { data: skills, isLoading } = useSkills()
   const toggleMutation = useToggleSkill()
@@ -23,8 +44,8 @@ export function SkillList() {
     return (
       <div>
         <PageHeader title="Skills" description="管理 Agent 技能" />
-        <div className="mt-6 space-y-2">
-          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 rounded-lg" />)}
+        <div className="mt-6 space-y-1.5">
+          {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
         </div>
       </div>
     )
@@ -72,36 +93,38 @@ export function SkillList() {
               return (
                 <div
                   key={skill.id}
-                  className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 transition-colors"
+                  className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50/80 transition-colors"
                 >
-                  <Link to={`/skills/${skill.id}`} className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-100">
-                        <Blocks className="h-4 w-4 text-slate-600" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-slate-900">{skill.name}</span>
+                  <Link to={`/skills/${skill.id}`} className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold ${nameToColor(skill.name)}`}>
+                      {nameToInitial(skill.name)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-slate-900 truncate">{skill.name}</span>
+                        <div className="flex items-center gap-1 shrink-0">
                           {scriptCount > 0 && (
-                            <Badge className="bg-emerald-50 text-emerald-700 gap-0.5">
-                              <FileCode className="h-2.5 w-2.5" />{scriptCount} 脚本
+                            <Badge className="bg-emerald-50 text-emerald-700 gap-0.5 text-[10px] px-1.5 py-0">
+                              <FileCode className="h-2.5 w-2.5" />{scriptCount}
                             </Badge>
                           )}
                           {refCount > 0 && (
-                            <Badge className="bg-blue-50 text-blue-700 gap-0.5">
-                              <FileText className="h-2.5 w-2.5" />{refCount} 参考
+                            <Badge className="bg-blue-50 text-blue-700 gap-0.5 text-[10px] px-1.5 py-0">
+                              <FileText className="h-2.5 w-2.5" />{refCount}
                             </Badge>
                           )}
                         </div>
-                        <p className="text-xs text-slate-500 truncate mt-0.5">{skill.description}</p>
                       </div>
+                      {skill.description && (
+                        <p className="text-xs text-slate-400 truncate">{skill.description}</p>
+                      )}
                     </div>
                   </Link>
 
-                  <div className="flex items-center gap-3 shrink-0 ml-4">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <Link to={`/skills/${skill.id}?edit=1`}>
-                      <Button variant="ghost" size="sm" title="编辑">
-                        <Pencil className="h-3.5 w-3.5 text-slate-500" />
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="编辑">
+                        <Pencil className="h-3 w-3 text-slate-400" />
                       </Button>
                     </Link>
                     <Switch
