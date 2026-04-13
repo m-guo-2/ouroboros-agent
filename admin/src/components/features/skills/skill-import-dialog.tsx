@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { useBrowseImport, useImportSkills } from "@/hooks/use-skills"
 import type { BrowseSkillEntry } from "@/api/skills"
 
@@ -94,18 +93,19 @@ export function SkillImportDialog({ open, onOpenChange }: SkillImportDialogProps
 
   const importableCount = skills.filter(s => !s.exists).length
   const hasBrowsed = browseCtx !== null
+  const hasContent = skills.length > 0 || browseMutation.isPending || hasBrowsed
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v) }}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>导入技能</DialogTitle>
-          <DialogDescription>从公开 GitHub 仓库浏览并导入技能到本地仓库</DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden">
+        {/* Fixed header */}
+        <div className="px-6 pt-6 pb-4 shrink-0">
+          <DialogHeader>
+            <DialogTitle>导入技能</DialogTitle>
+            <DialogDescription>从公开 GitHub 仓库浏览并导入技能到本地仓库</DialogDescription>
+          </DialogHeader>
 
-        <div className="space-y-4">
-          {/* URL input */}
-          <div>
+          <div className="mt-4">
             <div className="flex gap-2">
               <Input
                 value={url}
@@ -131,54 +131,56 @@ export function SkillImportDialog({ open, onOpenChange }: SkillImportDialogProps
           </div>
 
           {browseMutation.isError && (
-            <p className="text-sm text-red-600">{(browseMutation.error as Error).message}</p>
+            <p className="text-sm text-red-600 mt-3">{(browseMutation.error as Error).message}</p>
           )}
+        </div>
 
-          {/* Loading skeleton */}
-          {browseMutation.isPending && (
-            <div className="space-y-2 pt-1">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="flex items-center gap-3 px-3 py-2.5">
-                  <Skeleton className="h-4 w-4 rounded shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-3.5 w-32" />
-                    <Skeleton className="h-3 w-48" />
+        {/* Scrollable middle area */}
+        {hasContent && (
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 border-t border-slate-100">
+            {/* Loading skeleton */}
+            {browseMutation.isPending && (
+              <div className="space-y-2 py-3">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+                    <Skeleton className="h-4 w-4 rounded shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-3.5 w-32" />
+                      <Skeleton className="h-3 w-48" />
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Skill list */}
-          {!browseMutation.isPending && skills.length > 0 && (
-            <>
-              {/* Repo context */}
-              {browseCtx && (
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <GitBranch className="h-3 w-3" />
-                  <span className="font-mono">{browseCtx.repo}</span>
-                  {browseCtx.path && (
-                    <>
-                      <span className="text-slate-300">/</span>
-                      <span className="font-mono">{browseCtx.path}</span>
-                    </>
-                  )}
-                  <Badge className="bg-slate-100 text-slate-500 text-[10px] ml-1">{browseCtx.branch}</Badge>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-500">
-                  发现 {skills.length} 个技能，{importableCount} 个可导入
-                </span>
-                {importableCount > 0 && (
-                  <Button variant="ghost" size="sm" onClick={selectAll} className="text-xs h-7">
-                    {selected.size === importableCount ? "取消全选" : "全选"}
-                  </Button>
-                )}
+                ))}
               </div>
+            )}
 
-              <ScrollArea className="max-h-72">
+            {/* Skill list */}
+            {!browseMutation.isPending && skills.length > 0 && (
+              <div className="py-3 space-y-3">
+                {browseCtx && (
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <GitBranch className="h-3 w-3" />
+                    <span className="font-mono">{browseCtx.repo}</span>
+                    {browseCtx.path && (
+                      <>
+                        <span className="text-slate-300">/</span>
+                        <span className="font-mono">{browseCtx.path}</span>
+                      </>
+                    )}
+                    <Badge className="bg-slate-100 text-slate-500 text-[10px] ml-1">{browseCtx.branch}</Badge>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-500">
+                    发现 {skills.length} 个技能，{importableCount} 个可导入
+                  </span>
+                  {importableCount > 0 && (
+                    <Button variant="ghost" size="sm" onClick={selectAll} className="text-xs h-7">
+                      {selected.size === importableCount ? "取消全选" : "全选"}
+                    </Button>
+                  )}
+                </div>
+
                 <div className="space-y-0.5">
                   {skills.map((skill) => {
                     const isSelected = selected.has(skill.id)
@@ -216,41 +218,42 @@ export function SkillImportDialog({ open, onOpenChange }: SkillImportDialogProps
                             )}
                           </div>
                           {skill.description && (
-                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{skill.description}</p>
+                            <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{skill.description}</p>
                           )}
                         </div>
                       </div>
                     )
                   })}
                 </div>
-              </ScrollArea>
-            </>
-          )}
-
-          {hasBrowsed && skills.length === 0 && !browseMutation.isPending && (
-            <p className="text-sm text-slate-500 text-center py-4">该路径下未发现技能</p>
-          )}
-
-          {/* Result feedback */}
-          {result && (
-            <div className={`flex items-start gap-2 rounded-lg p-3 text-sm ${
-              result.failures.length > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"
-            }`}>
-              {result.failures.length > 0
-                ? <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-                : <Check className="h-4 w-4 mt-0.5 shrink-0" />}
-              <div>
-                <p>成功导入 {result.imported} 个技能</p>
-                {result.failures.map((f, i) => (
-                  <p key={i} className="text-xs mt-1 opacity-80">{f}</p>
-                ))}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Actions */}
-          {(skills.length > 0 || hasBrowsed) && (
-            <div className="flex justify-end gap-2 pt-1">
+            {hasBrowsed && skills.length === 0 && !browseMutation.isPending && (
+              <p className="text-sm text-slate-500 text-center py-6">该路径下未发现技能</p>
+            )}
+          </div>
+        )}
+
+        {/* Fixed bottom: result feedback + actions */}
+        {hasContent && (
+          <div className="px-6 py-4 shrink-0 border-t border-slate-100 space-y-3">
+            {result && (
+              <div className={`flex items-start gap-2 rounded-lg p-3 text-sm ${
+                result.failures.length > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800"
+              }`}>
+                {result.failures.length > 0
+                  ? <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  : <Check className="h-4 w-4 mt-0.5 shrink-0" />}
+                <div>
+                  <p>成功导入 {result.imported} 个技能</p>
+                  {result.failures.map((f, i) => (
+                    <p key={i} className="text-xs mt-1 opacity-80">{f}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
               <Button variant="secondary" onClick={() => onOpenChange(false)}>关闭</Button>
               {importableCount > 0 && (
                 <Button
@@ -263,8 +266,8 @@ export function SkillImportDialog({ open, onOpenChange }: SkillImportDialogProps
                 </Button>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
