@@ -863,7 +863,11 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 
 	logger.Business(ctx, "开始处理会话",
 		"agentId", agentID, "channel", channel, "userId", userID,
-		"eventCount", len(events))
+		"eventCount", len(events), "mode", string(worker.Mode))
+	if worker.Mode == types.SessionModePlan {
+		logger.Business(ctx, "会话处于计划模式（从 DB 恢复）",
+			"traceEvent", "mode_restore", "mode", "plan")
+	}
 	logger.Business(ctx, "加载配置中", "traceEvent", "thinking", "source", "system")
 
 	agentConfig, err := storage.GetAgentConfig(agentID)
@@ -1379,6 +1383,8 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	systemPrompt := BuildSystemPrompt(agentConfig.SystemPrompt, skillsCtx.SkillsSnippet)
 	if worker.Mode == types.SessionModePlan {
 		systemPrompt += planModePromptSuffix
+		logger.Business(ctx, "计划模式 prompt 已注入",
+			"traceEvent", "plan_prompt_injected")
 	}
 
 	var historyMessages []types.AgentMessage

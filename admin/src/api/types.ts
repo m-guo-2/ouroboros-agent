@@ -160,7 +160,7 @@ export interface ExecutionStep {
   /** ReAct 迭代轮次（从 1 开始；system 步骤可能为 0） */
   iteration: number
   timestamp: number
-  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call" | "absorb" | "compact" | "subagent_reentry"
+  type: "thinking" | "tool_call" | "tool_result" | "content" | "error" | "llm_call" | "absorb" | "compact" | "subagent_reentry" | "mode_change"
   thinking?: string
   /** 来源：model = 模型推理, system = 系统状态日志（加载配置/Skills 等） */
   source?: "model" | "system"
@@ -193,6 +193,10 @@ export interface ExecutionStep {
   archivedCount?: number
   /** tool_result (run_subagent_async)：关联的 subagent trace ID */
   subTraceId?: string
+  /** mode_change 事件：切换前模式 */
+  modeFrom?: string
+  /** mode_change 事件：切换后模式 */
+  modeTo?: string
 }
 
 export interface ExecutionTrace {

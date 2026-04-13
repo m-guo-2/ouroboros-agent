@@ -7,6 +7,7 @@ import (
 
 	"agent/internal/channels"
 	"agent/internal/engine"
+	"agent/internal/logger"
 	"agent/internal/types"
 )
 
@@ -63,6 +64,10 @@ func createEnterPlanModeExecutor(worker *SessionWorker) types.ToolExecutor {
 			}, nil
 		}
 		worker.Mode = types.SessionModePlan
+		logger.Business(ctx, "进入计划模式",
+			"traceEvent", "mode_change",
+			"sessionId", worker.SessionID,
+			"from", "normal", "to", "plan")
 		return map[string]interface{}{
 			"status":  "entered_plan_mode",
 			"message": "已进入计划模式。请使用只读工具收集信息、制定执行计划，完成后调用 exit_plan_mode 将计划发送给用户审批。",
@@ -94,6 +99,11 @@ func createExitPlanModeExecutor(worker *SessionWorker, sessionReq ProcessRequest
 		}
 
 		worker.Mode = types.SessionModeNormal
+		logger.Business(ctx, "退出计划模式，计划已发送",
+			"traceEvent", "mode_change",
+			"sessionId", worker.SessionID,
+			"from", "plan", "to", "normal",
+			"planLength", len(plan))
 		return map[string]interface{}{
 			"status":  "plan_sent",
 			"message": "计划已发送给用户。等待用户回复确认或修改意见后，再按计划执行。",

@@ -239,6 +239,8 @@ export function flattenSteps(steps: ExecutionStep[]): FlatEvent[] {
       events.push({ type: "error", step })
     } else if (step.type === "subagent_reentry") {
       events.push({ type: "subagent-reentry", step })
+    } else if (step.type === "mode_change") {
+      events.push({ type: "mode-change", step })
     }
   }
 

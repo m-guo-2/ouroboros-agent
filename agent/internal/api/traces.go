@@ -90,6 +90,8 @@ type executionStep struct {
 	TokensBefore  int    `json:"tokensBefore,omitempty"`
 	TokensAfter   int    `json:"tokensAfter,omitempty"`
 	ArchivedCount int    `json:"archivedCount,omitempty"`
+	ModeFrom      string `json:"modeFrom,omitempty"`
+	ModeTo        string `json:"modeTo,omitempty"`
 }
 
 type executionTrace struct {
@@ -281,6 +283,27 @@ func (h *tracesHandler) buildTrace(traceID string) *executionTrace {
 				Index: len(steps), Iteration: iter, Timestamp: ts,
 				Type:    "subagent_reentry",
 				Content: fmt.Sprintf("Re-entry 第 %d 轮 (job: %s)", reentry, jobID),
+			})
+		case "mode_change":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type:     "mode_change",
+				Content:  strField(row, "msg"),
+				ModeFrom: strField(row, "from"),
+				ModeTo:   strField(row, "to"),
+			})
+		case "mode_restore":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type:    "mode_change",
+				Content: strField(row, "msg"),
+				ModeTo:  strField(row, "mode"),
+			})
+		case "plan_prompt_injected":
+			steps = append(steps, executionStep{
+				Index: len(steps), Iteration: iter, Timestamp: ts,
+				Type:    "mode_change",
+				Content: strField(row, "msg"),
 			})
 		}
 	}

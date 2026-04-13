@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react"
 import {
   Brain, Wrench, CheckCircle2, XCircle, Clock, ChevronDown, ChevronRight,
-  Zap, FileText, ExternalLink, AlertTriangle, RotateCw,
+  Zap, FileText, ExternalLink, AlertTriangle, RotateCw, Shield,
 } from "lucide-react"
 import { cn, formatDuration, formatCost, truncate } from "@/lib/utils"
 import type { ExecutionStep } from "@/api/types"
@@ -236,6 +236,25 @@ function ErrorRow({ step, defaultExpanded }: { step: ExecutionStep; defaultExpan
   )
 }
 
+// --- Mode Change Row ---
+function ModeChangeRow({ step }: { step: ExecutionStep }) {
+  const isPlanEnter = step.modeTo === "plan"
+  return (
+    <div className={cn(
+      "flex items-center gap-2 px-3 py-1.5 rounded-md border text-[11px]",
+      isPlanEnter
+        ? "bg-amber-50 border-amber-200/60 text-amber-700"
+        : "bg-emerald-50 border-emerald-200/60 text-emerald-700"
+    )}>
+      <Shield className="h-3.5 w-3.5 shrink-0" />
+      <span>{step.content || (isPlanEnter ? "进入计划模式" : "退出计划模式")}</span>
+      {step.modeFrom && step.modeTo && (
+        <span className="text-[10px] opacity-70 ml-auto">{step.modeFrom} → {step.modeTo}</span>
+      )}
+    </div>
+  )
+}
+
 // --- Subagent Reentry Row ---
 function SubagentReentryRow({ step }: { step: ExecutionStep }) {
   return (
@@ -277,6 +296,8 @@ function FlatEventRow({ event, traceId, allEvents, onViewSubagentTrace, defaultE
       return <ErrorRow step={event.step} defaultExpanded={defaultExpanded} />
     case "subagent-reentry":
       return <SubagentReentryRow step={event.step} />
+    case "mode-change":
+      return <ModeChangeRow step={event.step} />
   }
 }
 

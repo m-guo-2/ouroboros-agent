@@ -21,6 +21,7 @@ export type FlatEvent =
   | { type: "tool-result"; step: ExecutionStep; callStep?: ExecutionStep }
   | { type: "error"; step: ExecutionStep }
   | { type: "subagent-reentry"; step: ExecutionStep }
+  | { type: "mode-change"; step: ExecutionStep }
 
 export interface MessageExchange {
   userMessage: Pick<MessageData, "role" | "content"> & Partial<MessageData>
