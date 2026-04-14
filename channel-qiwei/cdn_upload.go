@@ -67,6 +67,10 @@ func (a *app) resolveMediaSendParams(ctx context.Context, messageType, toID, con
 		return "", nil, err
 	}
 
+	if strings.TrimSpace(cdn.Filename) == "" {
+		cdn.Filename = filename
+	}
+
 	method, params := buildMediaSendParams(messageType, toID, cdn, meta)
 	return method, params, nil
 }

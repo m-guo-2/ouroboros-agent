@@ -54,6 +54,10 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 	if len(res.Data) > 0 {
 		_ = unmarshalSafe(res.Data, &data)
 	}
+	if errMsg := checkSendSuccess(data); errMsg != "" {
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: errMsg, Data: data})
+		return
+	}
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: data})
 }
 

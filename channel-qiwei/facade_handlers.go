@@ -361,6 +361,20 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if errMsg := checkSendSuccess(data); errMsg != "" {
+		logger.Error(r.Context(), "facade 发送投递失败",
+			"method", method,
+			"toId", toID,
+			"error", errMsg,
+			"data", string(res.Data),
+		)
+		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: errMsg, Data: map[string]any{
+			"method": method,
+			"data":   data,
+		}})
+		return
+	}
+
 	logger.Business(r.Context(), "facade 发送成功",
 		"method", method,
 		"toId", toID,

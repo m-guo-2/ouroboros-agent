@@ -100,3 +100,21 @@ func parseIntOrDefault(v string, fallback int) int {
 	}
 	return n
 }
+
+// checkSendSuccess inspects the response data from /msg/send* APIs.
+// Returns a non-empty error message when the platform accepted the request
+// (code=0) but the message was not actually delivered (isSendSuccess=0).
+func checkSendSuccess(data any) string {
+	m, ok := data.(map[string]any)
+	if !ok {
+		return ""
+	}
+	raw, exists := m["isSendSuccess"]
+	if !exists {
+		return ""
+	}
+	if anyToInt64(raw) != 0 {
+		return ""
+	}
+	return "消息未投递成功 (isSendSuccess=0)"
+}
