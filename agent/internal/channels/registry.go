@@ -145,7 +145,7 @@ type HTTPAdapter struct {
 
 func (a *HTTPAdapter) httpClient() *http.Client {
 	a.once.Do(func() {
-		a.client = sharedlogger.NewClient("channel-adapter", 15*time.Second)
+		a.client = sharedlogger.NewClient("channel-adapter", 120*time.Second)
 	})
 	return a.client
 }

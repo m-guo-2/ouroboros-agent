@@ -174,7 +174,7 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := sharedlogger.NewClient("wecom-tool", 30*time.Second)
+		client := sharedlogger.NewClient("wecom-tool", 120*time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
@@ -243,8 +243,25 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 		allOK := true
 
 		for i, item := range items {
+			messageType := item.messageType
+			content := item.content
+
+			if !isMediaMessageType(messageType) && looksLikeFilePath(strings.TrimSpace(content)) {
+				if inferred := inferMessageTypeFromFile(strings.TrimSpace(content)); inferred != "" {
+					messageType = inferred
+				}
+			}
+
+			resolved, err := resolveMediaContent(ctx, messageType, content)
+			if err != nil {
+				results = append(results, sendResult{Index: i, Success: false, Error: err.Error()})
+				allOK = false
+				continue
+			}
+			content = resolved
+
 			payload := map[string]interface{}{
-				"content": item.content,
+				"content": content,
 			}
 			if convID != "" {
 				payload["channelConversationId"] = convID
@@ -252,8 +269,8 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 			if userID != "" {
 				payload["channelUserId"] = userID
 			}
-			if item.messageType != "" {
-				payload["messageType"] = item.messageType
+			if messageType != "" {
+				payload["messageType"] = messageType
 			}
 			if len(item.channelMeta) > 0 {
 				payload["channelMeta"] = item.channelMeta
