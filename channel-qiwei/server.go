@@ -92,11 +92,11 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/qiwei/get_group_detail", a.handleGetGroupDetail)
 	mux.HandleFunc("/api/qiwei/get_contact_detail", a.handleGetContactDetail)
 
-	// Admin endpoints are mounted unconditionally; the auth middleware
-	// returns 404 when cfg.AdminToken is empty so operators can't
-	// accidentally enumerate a disabled admin API. Registering here
-	// (even for empty tokens) also prevents the /api/qiwei/ catch-all
-	// below from swallowing these paths.
+	// Admin endpoints are mounted unconditionally. The auth middleware
+	// decides how to treat requests: with a configured X-Admin-Token it
+	// enforces the token; with an empty token it runs in debug mode and
+	// logs a warning. Registering here (even without a token) also keeps
+	// the /api/qiwei/ catch-all below from swallowing admin paths.
 	a.registerAdminRoutes(mux)
 	a.registerGatewayRoutes(mux)
 

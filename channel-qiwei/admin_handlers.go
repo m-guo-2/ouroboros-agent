@@ -26,13 +26,19 @@ func (a *app) registerAdminRoutes(mux *http.ServeMux) {
 }
 
 // adminAuthMiddleware enforces X-Admin-Token on every admin request. When
-// the configured token is empty we return 404 for every path in here; the
-// route is considered "not mounted" from the outside.
+// the configured token is empty we run in "debug" mode and allow all requests
+// through — this lets local admin UIs reach the endpoints without managing
+// credentials, at the cost of trusting anyone who can reach the port. A
+// warning is logged once so operators notice when production gets deployed
+// without a token.
 func (a *app) adminAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		want := strings.TrimSpace(a.cfg.AdminToken)
 		if want == "" {
-			http.NotFound(w, r)
+			logger.Warn(r.Context(), "admin API 未配置 X-Admin-Token，当前为调试模式放行",
+				"tag", tagAdmin, "path", r.URL.Path,
+			)
+			next.ServeHTTP(w, r)
 			return
 		}
 		got := strings.TrimSpace(r.Header.Get("X-Admin-Token"))

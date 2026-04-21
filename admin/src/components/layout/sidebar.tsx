@@ -3,6 +3,7 @@ import {
   Bot, Blocks, Cpu,
   Activity,
   Settings,
+  MessageSquare,
   PanelLeftClose, PanelLeft,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -23,6 +24,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
       { label: "Agents", path: "/agents", icon: Bot },
       { label: "Skills", path: "/skills", icon: Blocks },
       { label: "Models", path: "/models", icon: Cpu },
+      { label: "企微账号", path: "/qiwei-accounts", icon: MessageSquare },
     ],
   },
   {

@@ -13,6 +13,7 @@ const ModelList = lazy(() => import("@/components/features/models/model-list").t
 const SkillList = lazy(() => import("@/components/features/skills/skill-list").then((m) => ({ default: m.SkillList })))
 const SkillDetail = lazy(() => import("@/components/features/skills/skill-detail").then((m) => ({ default: m.SkillDetail })))
 const SettingsPage = lazy(() => import("@/components/features/settings/settings-page").then((m) => ({ default: m.SettingsPage })))
+const QiweiAccountList = lazy(() => import("@/components/features/qiwei-accounts/account-list").then((m) => ({ default: m.QiweiAccountList })))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -87,6 +88,7 @@ export default function RootApp() {
             <Route path="models" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><ModelList /></Suspense></ErrorBoundary>} />
             <Route path="skills" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillList /></Suspense></ErrorBoundary>} />
             <Route path="skills/:name" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillDetail /></Suspense></ErrorBoundary>} />
+            <Route path="qiwei-accounts" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><QiweiAccountList /></Suspense></ErrorBoundary>} />
             <Route path="settings" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></ErrorBoundary>} />
             <Route path="*" element={<Navigate to="/monitor" replace />} />
           </Route>

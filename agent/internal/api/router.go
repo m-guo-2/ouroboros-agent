@@ -59,6 +59,11 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 
 	// Channel adapters status
 	mux.HandleFunc("/api/channels", handleChannelsStatus)
+
+	// Channel-qiwei admin API (multi-account management). We reverse-proxy
+	// /api/qiwei/_admin/* to the channel-qiwei process so the admin SPA
+	// can reach it through the same /api origin.
+	mux.HandleFunc(qiweiAdminPrefix, handleQiweiAdminProxy)
 }
 
 // --------------------------------------------------------------------------

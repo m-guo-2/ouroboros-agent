@@ -81,15 +81,22 @@ func TestAdminAuthRejectsWrongToken(t *testing.T) {
 	}
 }
 
-func TestAdminRoutesHiddenWhenTokenEmpty(t *testing.T) {
-	// When AdminToken is empty, server.routes() should NOT register the admin
-	// routes at all — hitting the path should give a plain 404.
+func TestAdminRoutesAllowWhenTokenEmpty(t *testing.T) {
+	// Empty AdminToken switches the admin API into "debug mode": the
+	// middleware logs a warning but lets every request through so local
+	// admin UIs can iterate without juggling credentials. This test pins
+	// that contract — production deployments should set a token and rely
+	// on the explicit 401 paths instead.
 	_, handler := adminTestApp(t, "")
 
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, adminReq(http.MethodGet, "/api/qiwei/_admin/accounts", "anything", nil))
-	if rr.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 when admin disabled, got %d body=%s", rr.Code, rr.Body.String())
+	handler.ServeHTTP(rr, adminReq(http.MethodGet, "/api/qiwei/_admin/accounts", "", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 in debug mode, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	resp := decodeResponse(t, rr)
+	if !resp.Success {
+		t.Fatalf("expected success=true, got %+v", resp)
 	}
 }
 
