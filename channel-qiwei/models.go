@@ -22,6 +22,12 @@ type outgoingMessage struct {
 	MessageType             string         `json:"messageType"`
 	Content                 string         `json:"content"`
 	ChannelMeta             map[string]any `json:"channelMeta,omitempty"`
+
+	// AccountID lets operators target a specific qiwei account when the
+	// conversation id has no suffix (e.g. custom tooling calling /api/qiwei/send
+	// directly). Optional — default account is used when unset and only one
+	// account is registered.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 type incomingAttachment struct {
@@ -31,6 +37,25 @@ type incomingAttachment struct {
 	DisplayName       string `json:"displayName,omitempty"`
 	MIMEType          string `json:"mimeType,omitempty"`
 	SourceMessageType string `json:"sourceMessageType,omitempty"`
+}
+
+// channelIdentitySelf describes the qiwei account's own identity as fetched
+// from /user/getProfile. It is surfaced to the agent for display, e.g. so
+// the agent can greet on behalf of "小助手 (爱学习有限公司)" without having
+// to know anything about guids or routing keys.
+type channelIdentitySelf struct {
+	UserID   string `json:"userId,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Alias    string `json:"alias,omitempty"`
+	CorpName string `json:"corpName,omitempty"`
+}
+
+// channelIdentity carries display-only metadata about the specific qiwei
+// account this message belongs to. Agents MUST NOT use any of these fields
+// for routing — the routing key remains the opaque ChannelConversationID.
+type channelIdentity struct {
+	DisplayName string              `json:"displayName,omitempty"`
+	Self        channelIdentitySelf `json:"self,omitempty"`
 }
 
 type incomingMessage struct {
@@ -47,6 +72,7 @@ type incomingMessage struct {
 	ChannelMeta             map[string]any       `json:"channelMeta,omitempty"`
 	Attachments             []incomingAttachment `json:"attachments,omitempty"`
 	AgentID                 string               `json:"agentId,omitempty"`
+	ChannelIdentity         *channelIdentity     `json:"channelIdentity,omitempty"`
 }
 
 type qiweiCallbackBody struct {

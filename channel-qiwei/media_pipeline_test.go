@@ -162,7 +162,7 @@ func TestParseMessageVoiceReturnsTranscript(t *testing.T) {
 	msgType, msgData := loadFixture(t, "qw-voice.json")
 	raw := map[string]any{"msgType": msgType}
 
-	parsed, err := app.parseMessage(context.Background(), "voice", msgData, raw, "")
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "voice", msgData, raw, "")
 	if err != nil {
 		t.Fatalf("parseMessage failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestPrepareMediaForAgentVoiceSubmitsBase64DataForASR(t *testing.T) {
 	app := newTestApp(t, "语音转写结果")
 	msgType, msgData := loadFixture(t, "qw-voice.json")
 
-	prepared := app.prepareMediaForAgent(context.Background(), msgType, "voice", msgData)
+	prepared := app.prepareMediaForAgent(context.Background(), testRuntime(t, app), msgType, "voice", msgData)
 	if prepared.Content != "语音转写结果" {
 		t.Fatalf("expected transcript content, got %q", prepared.Content)
 	}
@@ -203,7 +203,7 @@ func TestParseMessageLocalImageUsesRecognizer(t *testing.T) {
 	app.recognizer = &fakeRecognizer{imageText: "图片里的文字"}
 	resourceURI := putTestObject(t, app, "sample.png", "image/png", []byte("fake image"))
 
-	parsed, err := app.parseMessage(context.Background(), "image", nil, nil, resourceURI)
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "image", nil, nil, resourceURI)
 	if err != nil {
 		t.Fatalf("parseMessage resource image failed: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestParseMessageLocalFileReadsText(t *testing.T) {
 	app := newTestApp(t, "")
 	resourceURI := putTestObject(t, app, "sample.txt", "text/plain; charset=utf-8", []byte("这是文件内容"))
 
-	parsed, err := app.parseMessage(context.Background(), "file", nil, nil, resourceURI)
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "file", nil, nil, resourceURI)
 	if err != nil {
 		t.Fatalf("parseMessage resource file failed: %v", err)
 	}
@@ -376,10 +376,49 @@ func newTestApp(t *testing.T, transcript string) *app {
 		RequestTimout:    5,
 		OSSPublicBaseURL: "https://public.example.com/media",
 	}
-	app := newApp(cfg)
+	app := newTestAppWithCfg(t, cfg)
 	app.recognizer = &fakeRecognizer{transcript: transcript}
 	app.storage = newFakeMediaStorage("test-bucket")
 	return app
+}
+
+// newTestAppWithCfg wires up an in-memory SQLite and pre-registers a
+// single test account so the registry has a default runtime. Tests that
+// need the runtime explicitly can call testRuntime(t, app).
+func newTestAppWithCfg(t *testing.T, cfg Config) *app {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "qiwei.db")
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := newAccountRepo(db)
+	if _, err := repo.CreateAccount(context.Background(), Account{
+		ID:      "qw_test",
+		GUID:    firstNonEmpty(cfg.GUID, "guid"),
+		Token:   firstNonEmpty(cfg.Token, "token"),
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("seed test account: %v", err)
+	}
+	app := newApp(cfg, db)
+	if err := app.reloadRegistry(context.Background()); err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	return app
+}
+
+// testRuntime returns the single registered runtime or fails the test if
+// the registry isn't in the expected single-account state.
+func testRuntime(t *testing.T, app *app) *accountRuntime {
+	t.Helper()
+	rt, ok := app.currentRegistry().Default()
+	if !ok {
+		t.Fatalf("expected a single default account in registry, got %d", app.currentRegistry().Count())
+	}
+	return rt
 }
 
 func putTestObject(t *testing.T, app *app, fileName, contentType string, body []byte) string {
@@ -606,7 +645,7 @@ func TestGroupEventReportsToAgentServer(t *testing.T) {
 		MsgSvrID:   "srv-1",
 		MsgData:    map[string]any{},
 	}
-	if err := app.handleNormalMessage(context.Background(), msg); err != nil {
+	if err := app.handleNormalMessage(context.Background(), testRuntime(t, app), msg); err != nil {
 		t.Fatalf("handleNormalMessage for group event failed: %v", err)
 	}
 

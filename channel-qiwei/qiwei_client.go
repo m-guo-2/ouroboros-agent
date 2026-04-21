@@ -26,11 +26,14 @@ type qiweiRequest struct {
 	Params map[string]any `json:"params"`
 }
 
-func newQiweiClient(cfg Config) *qiweiClient {
+// newQiweiClient builds a per-account client. The (guid, token) pair comes
+// from the accounts registry, while timeout/base URL remain process-wide
+// Config values.
+func newQiweiClient(cfg Config, guid, token string) *qiweiClient {
 	return &qiweiClient{
-		baseURL: cfg.APIBaseURL,
-		token:   cfg.Token,
-		guid:    cfg.GUID,
+		baseURL:    cfg.APIBaseURL,
+		token:      token,
+		guid:       guid,
 		httpClient: logger.NewClient("qiwei-api", time.Duration(cfg.RequestTimout)*time.Second),
 	}
 }

@@ -17,24 +17,24 @@ import (
 const tagCallback = "callback"
 
 var userMessageTypeMap = map[int]string{
-	0:   "text",
-	1:   "text",
-	2:   "text",
-	3:   "image",
-	6:   "location",
-	7:   "image",
-	13:  "link",
-	14:  "image",
-	15:  "file",
-	16:  "voice",
-	20:  "file",
-	22:  "video",
-	23:  "video",
-	26:  "red_packet",
-	29:  "sticker",
-	34:  "voice",
-	41:  "card",
-	43:  "video",
+	0:  "text",
+	1:  "text",
+	2:  "text",
+	3:  "image",
+	6:  "location",
+	7:  "image",
+	13: "link",
+	14: "image",
+	15: "file",
+	16: "voice",
+	20: "file",
+	22: "video",
+	23: "video",
+	26: "red_packet",
+	29: "sticker",
+	34: "voice",
+	41: "card",
+	43: "video",
 	// msgType 49 (appmsg) is handled in handleNormalMessage switch by subType.
 	78:  "miniapp",
 	101: "image",
@@ -86,16 +86,42 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessage) error {
-	switch msg.Cmd {
+	// Resolve the account runtime up front: every downstream handler needs
+	// it for API calls, dedupe and session routing. Unknown/disabled guids
+	// are buffered for operator visibility (admin API exposes the buffer)
+	// and silently dropped here so we don't starve the callback ack.
+	rt, ok := a.currentRegistry().GetByGUID(msg.GUID)
+	if !ok {
+		a.unknownGuids.Record(unknownGuidEvent{
+			GUID:     msg.GUID,
+			Cmd:      msg.Cmd,
+			MsgType:  msg.MsgType,
+			MsgSvrID: msg.MsgSvrID,
+			At:       time.Now().Unix(),
+		})
+		logger.Warn(ctx, "未注册的企微账号，丢弃回调",
+			"tag", tagCallback, "guid", msg.GUID,
+			"cmd", msg.Cmd, "msgType", msg.MsgType, "msg", msg.MsgSvrID)
+		return nil
+	}
+
+	// 历史上 decodeOneMessage 会把 cmd=0 归一为 15000（正常消息）。这里
+	// 把同样的归一化前移到公共入口，便于测试或其它调用方直接构造
+	// qiweiCallbackMessage 不设置 Cmd 时也能走正常消息路径。
+	cmd := msg.Cmd
+	if cmd == 0 {
+		cmd = 15000
+	}
+	switch cmd {
 	case 15000:
-		return a.handleNormalMessage(ctx, msg)
+		return a.handleNormalMessage(ctx, rt, msg)
 	case 15500:
-		return a.handleSystemEvent(ctx, msg)
+		return a.handleSystemEvent(ctx, rt, msg)
 	case 11016:
-		logger.Detail(ctx, "账号状态变化", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID)
+		logger.Detail(ctx, "账号状态变化", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID, "accountId", rt.AccountID())
 		return nil
 	case 20000:
-		logger.Detail(ctx, "API 异步消息", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID)
+		logger.Detail(ctx, "API 异步消息", "tag", tagCallback, "msgType", msg.MsgType, "guid", msg.GUID, "accountId", rt.AccountID())
 		return nil
 	default:
 		logger.Detail(ctx, "未处理的 cmd 类型", "tag", tagCallback, "cmd", msg.Cmd, "msgType", msg.MsgType)
@@ -129,10 +155,10 @@ var richContentTypes = map[string]bool{
 	"red_packet": true, "miniapp": true, "channel_msg": true,
 }
 
-func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage) error {
+func (a *app) handleNormalMessage(ctx context.Context, rt *accountRuntime, msg qiweiCallbackMessage) error {
 	// Group lifecycle events — report to agent-server data store, don't forward as messages.
 	if eventType, ok := groupEventTypes[msg.MsgType]; ok {
-		return a.handleGroupEvent(ctx, eventType, msg)
+		return a.handleGroupEvent(ctx, rt, eventType, msg)
 	}
 
 	// Known non-actionable msgTypes — log and skip.
@@ -141,8 +167,8 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		return nil
 	}
 
-	if msg.MsgSvrID != "" && a.dedupe.Seen(msg.MsgSvrID) {
-		logger.Detail(ctx, "跳过重复消息", "tag", tagCallback, "msg", msg.MsgSvrID)
+	if msg.MsgSvrID != "" && rt.dedupe.Seen(msg.MsgSvrID) {
+		logger.Detail(ctx, "跳过重复消息", "tag", tagCallback, "msg", msg.MsgSvrID, "accountId", rt.AccountID())
 		return nil
 	}
 
@@ -203,7 +229,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 				channelMeta = map[string]any{}
 			}
 			channelMeta["atList"] = atList
-			selfID := a.selfUserID
+			selfID := rt.SelfUserID()
 			if selfID == "" {
 				selfID = anyToString(msg.MsgData["userId"])
 			}
@@ -218,9 +244,9 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		}
 
 	case msg.MsgType == 49:
-		content, channelMeta, messageType = a.handleAppMessage(ctx, msg)
+		content, channelMeta, messageType = a.handleAppMessage(ctx, rt, msg)
 		if content == "" && messageType == "file" {
-			prepared := a.prepareMediaForAgent(ctx, msg.MsgType, "file", msg.MsgData)
+			prepared := a.prepareMediaForAgent(ctx, rt, msg.MsgType, "file", msg.MsgData)
 			if prepared.MessageType != "" {
 				messageType = prepared.MessageType
 			}
@@ -237,10 +263,10 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		content, channelMeta = a.extractRichContent(messageType, msg.MsgData)
 
 	case messageType == "mixed":
-		content, attachments = a.handleMixedMessage(ctx, msg)
+		content, attachments = a.handleMixedMessage(ctx, rt, msg)
 
 	case messageType == "sticker":
-		prepared := a.prepareMediaForAgent(ctx, msg.MsgType, "image", msg.MsgData)
+		prepared := a.prepareMediaForAgent(ctx, rt, msg.MsgType, "image", msg.MsgData)
 		if prepared.ResourceURI != "" {
 			content = prepared.Content
 			attachments = attachmentsFromPreparedMedia(msg.MsgSvrID, "image", prepared)
@@ -250,7 +276,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		}
 
 	default:
-		prepared := a.prepareMediaForAgent(ctx, msg.MsgType, messageType, msg.MsgData)
+		prepared := a.prepareMediaForAgent(ctx, rt, msg.MsgType, messageType, msg.MsgData)
 		if prepared.MessageType != "" {
 			messageType = prepared.MessageType
 		}
@@ -270,9 +296,13 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		}
 	}
 
+	if a.contactSync != nil && rt.gateway != nil && msg.SenderID != "" && !rt.gateway.HasContact(ctx, msg.SenderID) {
+		a.contactSync.EnqueueContact(rt, msg.SenderID, "message-miss")
+	}
+
 	senderName := msg.SenderNickname
 	if senderName == "" && msg.SenderID != "" {
-		senderName = a.resolveUserNameInRoom(ctx, msg.SenderID, msg.FromRoomID)
+		senderName = a.resolveUserNameInRoom(ctx, rt, msg.SenderID, msg.FromRoomID)
 	}
 	msgTime := time.Now()
 	if msg.CreateTime > 0 {
@@ -289,7 +319,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 	conversationName := senderName
 	if isGroup {
 		replyToID = msg.FromRoomID
-		gn := a.resolveGroupName(ctx, msg.FromRoomID)
+		gn := a.resolveGroupName(ctx, rt, msg.FromRoomID)
 		if gn != "" {
 			conversationName = gn
 		} else {
@@ -300,7 +330,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 	if !a.cfg.AgentEnabled {
 		logger.Business(ctx, "echo 模式", "tag", tagCallback, "msg", msg.MsgSvrID, "to", replyToID, "type", messageType)
 		if textMessageTypes[msg.MsgType] {
-			_, err := a.client.doAPIRaw(ctx, "/msg/sendText", map[string]any{
+			_, err := rt.client.doAPIRaw(ctx, "/msg/sendText", map[string]any{
 				"toId":    replyToID,
 				"content": "收到消息: " + content,
 			})
@@ -317,7 +347,7 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		Channel:                 "qiwei",
 		ChannelUserID:           msg.SenderID,
 		ChannelMessageID:        msg.MsgSvrID,
-		ChannelConversationID:   replyToID,
+		ChannelConversationID:   encodeConversationID(replyToID, rt.ShortHash()),
 		ChannelConversationName: conversationName,
 		ConversationType:        conversationType,
 		MessageType:             messageType,
@@ -326,16 +356,18 @@ func (a *app) handleNormalMessage(ctx context.Context, msg qiweiCallbackMessage)
 		Timestamp:               ts,
 		ChannelMeta:             channelMeta,
 		Attachments:             attachments,
-		AgentID:                 a.cfg.AgentID,
+		AgentID:                 firstNonEmpty(rt.AgentID(), a.cfg.AgentID),
+		ChannelIdentity:         rt.channelIdentity(),
 	}
 	logger.Business(ctx, "转发消息到 agent",
 		"tag", tagCallback,
 		"msg", msg.MsgSvrID,
+		"accountId", rt.AccountID(),
 		"conversation", in.ChannelConversationID,
 		"type", in.MessageType,
 		"sender", senderName,
 	)
-	err := a.forwardToAgent(ctx, in)
+	err := a.forwardToAgent(ctx, rt, in)
 	if err != nil {
 		return err
 	}
@@ -458,7 +490,9 @@ func contentFromChannelMsg(msgData map[string]any) string {
 }
 
 // handleAppMessage routes msgType 49 (appmsg) by subType.
-func (a *app) handleAppMessage(ctx context.Context, msg qiweiCallbackMessage) (string, map[string]any, string) {
+func (a *app) handleAppMessage(ctx context.Context, rt *accountRuntime, msg qiweiCallbackMessage) (string, map[string]any, string) {
+	_ = rt // appmsg parsing today is pure; keep the signature to match the
+	//       routing convention and make it easy to pull from rt later.
 	subType := int(anyToInt64(msg.MsgData["subType"]))
 	if subType == 0 {
 		subType = int(anyToInt64(msg.MsgData["type"]))
@@ -615,7 +649,7 @@ func firstNonNilMap(values ...any) map[string]any {
 	return nil
 }
 
-func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) (string, []incomingAttachment) {
+func (a *app) handleMixedMessage(ctx context.Context, rt *accountRuntime, msg qiweiCallbackMessage) (string, []incomingAttachment) {
 	rawData, ok := msg.MsgData["content"]
 	if !ok {
 		rawData = msg.MsgData["msgData"]
@@ -652,7 +686,7 @@ func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) 
 				textParts = append(textParts, text)
 			}
 		case 7, 14, 101:
-			prepared := a.prepareMediaForAgent(ctx, subType, "image", subData)
+			prepared := a.prepareMediaForAgent(ctx, rt, subType, "image", subData)
 			if prepared.ResourceURI != "" {
 				attachments = append(attachments, incomingAttachment{
 					ID:                fmt.Sprintf("%s:%d", msg.MsgSvrID, i),
@@ -674,10 +708,10 @@ func (a *app) handleMixedMessage(ctx context.Context, msg qiweiCallbackMessage) 
 	return content, attachments
 }
 
-func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) error {
+func (a *app) handleSystemEvent(ctx context.Context, rt *accountRuntime, msg qiweiCallbackMessage) error {
 	// Group events may also arrive via cmd=15500; handle them the same way.
 	if eventType, ok := groupEventTypes[msg.MsgType]; ok {
-		return a.handleGroupEvent(ctx, eventType, msg)
+		return a.handleGroupEvent(ctx, rt, eventType, msg)
 	}
 
 	switch msg.MsgType {
@@ -687,13 +721,14 @@ func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) e
 		contactType := anyToString(msg.MsgData["contactType"])
 		logger.Business(ctx, "好友申请 - 自动通过",
 			"tag", tagCallback,
+			"accountId", rt.AccountID(),
 			"msgType", msg.MsgType,
 			"contactNickname", contactNickname,
 			"contactId", contactID,
 			"contactType", contactType,
 		)
 		if contactID != "" {
-			go a.autoAcceptFriendRequest(context.Background(), contactID, contactNickname, contactType)
+			go a.autoAcceptFriendRequest(context.Background(), rt, contactID, contactNickname, contactType)
 		}
 		return nil
 	case 2132:
@@ -705,15 +740,20 @@ func (a *app) handleSystemEvent(ctx context.Context, msg qiweiCallbackMessage) e
 	}
 }
 
-func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiCallbackMessage) error {
+func (a *app) handleGroupEvent(ctx context.Context, rt *accountRuntime, eventType string, msg qiweiCallbackMessage) error {
 	roomID := msg.FromRoomID
 	if roomID == "" || roomID == "0" {
-		logger.Warn(ctx, "群事件缺少 roomId", "tag", tagCallback, "msgType", msg.MsgType, "eventType", eventType)
+		logger.Warn(ctx, "群事件缺少 roomId",
+			"tag", tagCallback,
+			"accountId", rt.AccountID(),
+			"msgType", msg.MsgType,
+			"eventType", eventType,
+		)
 		return nil
 	}
 
-	// Detect bot entering a new group: first time seeing this room.
-	isNewRoom := a.roomStore.Add(roomID)
+	// Detect bot entering a new group: first time seeing this room (per account).
+	isNewRoom := rt.roomStore.Add(roomID)
 	reportType := eventType
 	if isNewRoom && eventType == "member_joined" {
 		reportType = "group_joined"
@@ -721,11 +761,11 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 
 	groupName := ""
 	if eventType == "group_name_changed" {
-		a.nameCache.Delete("room:" + roomID)
-		groupName = a.resolveGroupName(ctx, roomID)
+		rt.nameCache.Delete("room:" + roomID)
+		groupName = a.resolveGroupName(ctx, rt, roomID)
 	}
 	if isNewRoom && groupName == "" {
-		groupName = a.resolveGroupName(ctx, roomID)
+		groupName = a.resolveGroupName(ctx, rt, roomID)
 	}
 
 	memberIDs := parseChangedMemberList(msg.MsgData["changedMemberList"])
@@ -738,6 +778,7 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 
 	logger.Business(ctx, "群事件上报",
 		"tag", tagCallback,
+		"accountId", rt.AccountID(),
 		"eventType", reportType,
 		"originalEvent", eventType,
 		"msgType", msg.MsgType,
@@ -746,13 +787,20 @@ func (a *app) handleGroupEvent(ctx context.Context, eventType string, msg qiweiC
 		"isNewRoom", isNewRoom,
 		"memberIds", memberIDs,
 	)
+	if a.contactSync != nil {
+		a.contactSync.EnqueueRoom(rt, roomID, reportType)
+	}
 
 	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
-		logger.Detail(ctx, "群事件跳过上报(agent 未启用)", "tag", tagCallback, "roomId", roomID)
+		logger.Detail(ctx, "群事件跳过上报(agent 未启用)",
+			"tag", tagCallback,
+			"accountId", rt.AccountID(),
+			"roomId", roomID,
+		)
 		return nil
 	}
 
-	return a.reportGroupEvent(ctx, reportType, roomID, groupName, eventPayload)
+	return a.reportGroupEvent(ctx, rt, reportType, roomID, groupName, eventPayload)
 }
 
 // parseChangedMemberList decodes the changedMemberList field (may be base64, semicolon-separated).
@@ -781,13 +829,22 @@ func parseChangedMemberList(raw any) []string {
 	return out
 }
 
-func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, groupName string, eventPayload map[string]any) error {
+func (a *app) reportGroupEvent(ctx context.Context, rt *accountRuntime, eventType, channelGroupID, groupName string, eventPayload map[string]any) error {
+	agentID := a.cfg.AgentID
+	if rt != nil {
+		if id := rt.AgentID(); id != "" {
+			agentID = id
+		}
+	}
 	payload := map[string]any{
 		"channel":        "qiwei",
-		"agentId":        a.cfg.AgentID,
+		"agentId":        agentID,
 		"channelGroupId": channelGroupID,
 		"eventType":      eventType,
 		"groupName":      groupName,
+	}
+	if rt != nil {
+		payload["channelIdentity"] = rt.channelIdentity()
 	}
 	if len(eventPayload) > 0 {
 		payload["payload"] = eventPayload
@@ -811,20 +868,33 @@ func (a *app) reportGroupEvent(ctx context.Context, eventType, channelGroupID, g
 	return nil
 }
 
-func (a *app) autoAcceptFriendRequest(ctx context.Context, contactID, contactNickname, contactType string) {
-	_, err := a.client.doAPIRaw(ctx, "/contact/agreeContact", map[string]any{
+func (a *app) autoAcceptFriendRequest(ctx context.Context, rt *accountRuntime, contactID, contactNickname, contactType string) {
+	_, err := rt.client.doAPIRaw(ctx, "/contact/agreeContact", map[string]any{
 		"contactId": contactID,
 	})
 	if err != nil {
-		logger.Warn(ctx, "自动通过好友申请失败", "tag", tagCallback, "contactId", contactID, "error", err.Error())
+		logger.Warn(ctx, "自动通过好友申请失败",
+			"tag", tagCallback,
+			"accountId", rt.AccountID(),
+			"contactId", contactID,
+			"error", err.Error(),
+		)
 		return
 	}
-	logger.Business(ctx, "自动通过好友申请成功", "tag", tagCallback, "contactId", contactID, "contactNickname", contactNickname)
+	logger.Business(ctx, "自动通过好友申请成功",
+		"tag", tagCallback,
+		"accountId", rt.AccountID(),
+		"contactId", contactID,
+		"contactNickname", contactNickname,
+	)
+	if a.contactSync != nil {
+		a.contactSync.EnqueueContact(rt, contactID, "friend-accepted")
+	}
 
 	if !a.cfg.AgentEnabled || a.cfg.AgentServer == "" {
 		return
 	}
-	_ = a.reportGroupEvent(ctx, "new_contact", contactID, "", map[string]any{
+	_ = a.reportGroupEvent(ctx, rt, "new_contact", contactID, "", map[string]any{
 		"contactId":       contactID,
 		"contactNickname": contactNickname,
 		"contactType":     contactType,
@@ -874,34 +944,39 @@ func formatVoiceContent(prefix, transcript string) string {
 	return prefix + transcript + "(语音消息)"
 }
 
-func (a *app) resolveUserName(ctx context.Context, userID string) string {
-	return a.resolveUserNameInRoom(ctx, userID, "")
+func (a *app) resolveUserName(ctx context.Context, rt *accountRuntime, userID string) string {
+	return a.resolveUserNameInRoom(ctx, rt, userID, "")
 }
 
-func (a *app) resolveUserNameInRoom(ctx context.Context, userID, roomID string) string {
-	if v, ok := a.nameCache.Get(userID); ok {
-		return v
+func (a *app) resolveUserNameInRoom(ctx context.Context, rt *accountRuntime, userID, roomID string) string {
+	if rt == nil || rt.gateway == nil {
+		return ""
 	}
-	a.loadContactsOnce(ctx)
-	if v, ok := a.nameCache.Get(userID); ok {
-		return v
+	name, err := rt.gateway.ResolveName(ctx, userID, roomID)
+	if err != nil {
+		logger.Warn(ctx, "联系人姓名解析失败",
+			"accountId", rt.AccountID(),
+			"userId", userID,
+			"roomId", roomID,
+			"error", err.Error(),
+		)
+		return ""
 	}
-	if name := a.fetchUserName(ctx, userID); name != "" {
-		return name
-	}
-	if roomID != "" && roomID != "0" {
-		return a.fetchMemberNameFromRoom(ctx, userID, roomID)
-	}
-	return ""
+	return name
 }
 
 // fetchMemberNameFromRoom queries /room/batchGetRoomDetail and caches all member names.
-func (a *app) fetchMemberNameFromRoom(ctx context.Context, userID, roomID string) string {
-	res, err := a.client.doAPIRaw(ctx, "/room/batchGetRoomDetail", map[string]any{
+func (a *app) fetchMemberNameFromRoom(ctx context.Context, rt *accountRuntime, userID, roomID string) string {
+	res, err := rt.client.doAPIRaw(ctx, "/room/batchGetRoomDetail", map[string]any{
 		"roomIdList": []string{roomID},
 	})
 	if err != nil {
-		logger.Warn(ctx, "查询群成员名称失败", "userId", userID, "roomId", roomID, "error", err.Error())
+		logger.Warn(ctx, "查询群成员名称失败",
+			"accountId", rt.AccountID(),
+			"userId", userID,
+			"roomId", roomID,
+			"error", err.Error(),
+		)
 		return ""
 	}
 	var wrapper struct {
@@ -918,55 +993,66 @@ func (a *app) fetchMemberNameFromRoom(ctx context.Context, userID, roomID string
 			uid := anyToString(m["userId"])
 			name := decodeMaybeBase64(anyToString(m["name"]))
 			if uid != "" && name != "" {
-				a.nameCache.Set(uid, name)
+				rt.nameCache.Set(uid, name)
 			}
 		}
 	}
-	if v, ok := a.nameCache.Get(userID); ok {
+	if v, ok := rt.nameCache.Get(userID); ok {
 		return v
 	}
 	return ""
 }
 
-func (a *app) loadSelfUserID(ctx context.Context) {
-	res, err := a.client.doAPIRaw(ctx, "/user/getProfile", nil)
+func (a *app) loadSelfUserID(ctx context.Context, rt *accountRuntime) {
+	res, err := rt.client.doAPIRaw(ctx, "/user/getProfile", nil)
 	if err != nil {
-		logger.Warn(ctx, "获取自身用户信息失败", "error", err.Error())
+		logger.Warn(ctx, "获取自身用户信息失败", "accountId", rt.AccountID(), "error", err.Error())
 		return
 	}
 	var profile struct {
 		UserID string `json:"userId"`
 	}
 	if err := unmarshalSafe(res.Data, &profile); err != nil {
-		logger.Warn(ctx, "解析自身用户信息失败", "error", err.Error())
+		logger.Warn(ctx, "解析自身用户信息失败", "accountId", rt.AccountID(), "error", err.Error())
 		return
 	}
 	if profile.UserID != "" {
-		a.selfUserID = profile.UserID
-		logger.Business(ctx, "缓存自身 userId", "selfUserID", a.selfUserID)
+		rt.setSelfUserID(profile.UserID)
+		logger.Business(ctx, "缓存自身 userId",
+			"accountId", rt.AccountID(),
+			"selfUserID", profile.UserID,
+		)
 	}
 }
 
-func (a *app) loadContactsOnce(ctx context.Context) {
-	a.contactsMu.Lock()
-	if time.Since(a.contactsLoadedAt) < 5*time.Minute {
-		a.contactsMu.Unlock()
+func (a *app) loadContactsOnce(ctx context.Context, rt *accountRuntime) {
+	if rt == nil || rt.gateway == nil {
 		return
 	}
-	a.contactsMu.Unlock()
+	rt.contactsMu.Lock()
+	if time.Since(rt.contactsLoadedAt) < 5*time.Minute {
+		rt.contactsMu.Unlock()
+		return
+	}
+	rt.contactsMu.Unlock()
 
-	a.loadExternalContacts(ctx)
-	a.loadInternalContacts(ctx)
+	if err := rt.gateway.SyncContacts(ctx); err != nil {
+		logger.Warn(ctx, "联系人同步失败",
+			"accountId", rt.AccountID(),
+			"error", err.Error(),
+		)
+		return
+	}
 
-	a.contactsMu.Lock()
-	a.contactsLoadedAt = time.Now()
-	a.contactsMu.Unlock()
+	rt.contactsMu.Lock()
+	rt.contactsLoadedAt = time.Now()
+	rt.contactsMu.Unlock()
 }
 
-func (a *app) loadExternalContacts(ctx context.Context) {
-	res, err := a.client.doAPIRaw(ctx, "/contact/getWxContactList", nil)
+func (a *app) loadExternalContacts(ctx context.Context, rt *accountRuntime) {
+	res, err := rt.client.doAPIRaw(ctx, "/contact/getWxContactList", nil)
 	if err != nil {
-		logger.Warn(ctx, "加载外部联系人失败", "error", err.Error())
+		logger.Warn(ctx, "加载外部联系人失败", "accountId", rt.AccountID(), "error", err.Error())
 		return
 	}
 	var wrapper struct {
@@ -984,16 +1070,19 @@ func (a *app) loadExternalContacts(ctx context.Context) {
 			decodeMaybeBase64(anyToString(c["alias"])),
 		)
 		if uid != "" && name != "" {
-			a.nameCache.Set(uid, name)
+			rt.nameCache.Set(uid, name)
 		}
 	}
-	logger.Business(ctx, "加载外部联系人", "cached", len(wrapper.ContactList))
+	logger.Business(ctx, "加载外部联系人",
+		"accountId", rt.AccountID(),
+		"cached", len(wrapper.ContactList),
+	)
 }
 
-func (a *app) loadInternalContacts(ctx context.Context) {
-	res, err := a.client.doAPIRaw(ctx, "/contact/getWxWorkContactList", nil)
+func (a *app) loadInternalContacts(ctx context.Context, rt *accountRuntime) {
+	res, err := rt.client.doAPIRaw(ctx, "/contact/getWxWorkContactList", nil)
 	if err != nil {
-		logger.Warn(ctx, "加载内部联系人失败", "error", err.Error())
+		logger.Warn(ctx, "加载内部联系人失败", "accountId", rt.AccountID(), "error", err.Error())
 		return
 	}
 	var wrapper struct {
@@ -1012,78 +1101,36 @@ func (a *app) loadInternalContacts(ctx context.Context) {
 			decodeMaybeBase64(anyToString(c["name"])),
 		)
 		if uid != "" && uid != "0" && name != "" {
-			a.nameCache.Set(uid, name)
+			rt.nameCache.Set(uid, name)
 			cached++
 		}
 	}
-	logger.Business(ctx, "加载内部联系人", "cached", cached)
+	logger.Business(ctx, "加载内部联系人", "accountId", rt.AccountID(), "cached", cached)
 }
 
-func (a *app) resolveGroupName(ctx context.Context, roomID string) string {
-	cacheKey := "room:" + roomID
-	if v, ok := a.nameCache.Get(cacheKey); ok {
-		return v
+func (a *app) resolveGroupName(ctx context.Context, rt *accountRuntime, roomID string) string {
+	if rt == nil || rt.gateway == nil {
+		return ""
 	}
-	res, err := a.client.doAPIRaw(ctx, "/room/batchGetRoomDetail", map[string]any{
-		"roomIdList": []string{roomID},
-	})
+	room, err := rt.gateway.ResolveRoom(ctx, roomID)
 	if err != nil {
-		logger.Warn(ctx, "获取群详情失败", "roomId", roomID, "error", err.Error())
-		return ""
-	}
-	var wrapper struct {
-		RoomList []struct {
-			RoomID   string `json:"roomId"`
-			RoomName string `json:"roomName"`
-		} `json:"roomList"`
-	}
-	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
-		return ""
-	}
-	for _, room := range wrapper.RoomList {
-		name := decodeMaybeBase64(room.RoomName)
-		if name != "" {
-			a.nameCache.Set("room:"+room.RoomID, name)
-		}
-	}
-	if v, ok := a.nameCache.Get(cacheKey); ok {
-		return v
-	}
-	return ""
-}
-
-func (a *app) fetchUserName(ctx context.Context, userID string) string {
-	res, err := a.client.doAPIRaw(ctx, "/contact/batchGetUserinfo", map[string]any{
-		"userIdList": []string{userID},
-	})
-	if err != nil {
-		logger.Warn(ctx, "按需查询用户信息失败", "userId", userID, "error", err.Error())
-		return ""
-	}
-	var wrapper struct {
-		ContactList []map[string]any `json:"contactList"`
-	}
-	if err := unmarshalSafe(res.Data, &wrapper); err != nil {
-		return ""
-	}
-	for _, c := range wrapper.ContactList {
-		uid := anyToString(c["userId"])
-		name := firstNonEmpty(
-			decodeMaybeBase64(anyToString(c["nickname"])),
-			decodeMaybeBase64(anyToString(c["realName"])),
-			decodeMaybeBase64(anyToString(c["alias"])),
+		logger.Warn(ctx, "获取群详情失败",
+			"accountId", rt.AccountID(),
+			"roomId", roomID,
+			"error", err.Error(),
 		)
-		if uid != "" && name != "" {
-			a.nameCache.Set(uid, name)
-		}
+		return ""
 	}
-	if v, ok := a.nameCache.Get(userID); ok {
-		return v
-	}
-	return ""
+	return room.Name
 }
 
-func (a *app) forwardToAgent(ctx context.Context, in incomingMessage) error {
+func (a *app) fetchUserName(ctx context.Context, rt *accountRuntime, userID string) string {
+	return a.resolveUserName(ctx, rt, userID)
+}
+
+func (a *app) forwardToAgent(ctx context.Context, rt *accountRuntime, in incomingMessage) error {
+	_ = rt // rt currently only influences fields baked into `in` by the caller;
+	//       kept for symmetry and future per-account transport customization.
 	raw, _ := json.Marshal(in)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.AgentServer+"/api/channels/incoming", bytes.NewReader(raw))
 	if err != nil {

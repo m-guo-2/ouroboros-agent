@@ -18,6 +18,7 @@ import (
 )
 
 type searchTargetsRequest struct {
+	AccountID       string `json:"account_id,omitempty"`
 	Query           string `json:"query"`
 	Limit           int    `json:"limit"`
 	IncludeContacts *bool  `json:"includeContacts,omitempty"`
@@ -25,6 +26,7 @@ type searchTargetsRequest struct {
 }
 
 type listOrGetConversationsRequest struct {
+	AccountID      string `json:"account_id,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
 	MsgSvrID       string `json:"msgSvrId,omitempty"`
 	CurrentSeq     int64  `json:"currentSeq,omitempty"`
@@ -32,6 +34,7 @@ type listOrGetConversationsRequest struct {
 }
 
 type parseMessageRequest struct {
+	AccountID   string         `json:"account_id,omitempty"`
 	Message     map[string]any `json:"message,omitempty"`
 	MessageType string         `json:"messageType,omitempty"`
 	MsgData     map[string]any `json:"msgData,omitempty"`
@@ -40,11 +43,26 @@ type parseMessageRequest struct {
 }
 
 type facadeSendMessageRequest struct {
+	AccountID             string         `json:"account_id,omitempty"`
 	ChannelConversationID string         `json:"channelConversationId,omitempty"`
 	ChannelUserID         string         `json:"channelUserId,omitempty"`
 	MessageType           string         `json:"messageType,omitempty"`
 	Content               string         `json:"content"`
 	ChannelMeta           map[string]any `json:"channelMeta,omitempty"`
+}
+
+// resolveRuntimeForFacade picks the runtime for a facade/admin-adjacent
+// endpoint that has no explicit conversation id. Priority matches the rest
+// of the code: explicit account_id > default single account > error.
+func (a *app) resolveRuntimeForFacade(accountID string) (*accountRuntime, error) {
+	reg := a.currentRegistry()
+	if strings.TrimSpace(accountID) != "" {
+		return resolveByAccountID(reg, accountID)
+	}
+	if rt, ok := reg.Default(); ok {
+		return rt, nil
+	}
+	return nil, ErrAmbiguousAccount
 }
 
 type parsedAttachment struct {
@@ -94,6 +112,11 @@ func (a *app) handleSearchTargets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
 		return
 	}
+	rt, err := a.resolveRuntimeForFacade(req.AccountID)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
 
 	limit := req.Limit
 	if limit <= 0 {
@@ -121,7 +144,7 @@ func (a *app) handleSearchTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if includeContacts {
-		contacts, err := a.searchContacts(r.Context(), req.Query)
+		contacts, err := a.searchContacts(r.Context(), rt, req.Query)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 			return
@@ -151,7 +174,7 @@ func (a *app) handleSearchTargets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if includeGroups && len(resp.Targets) < limit {
-		groups, err := a.listGroups(r.Context())
+		groups, err := a.listGroups(r.Context(), rt)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 			return
@@ -193,6 +216,18 @@ func (a *app) handleListOrGetConversations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The conversationId — if present — already carries an @shortHash
+	// suffix in multi-account deployments, so it's the strongest routing
+	// hint. Fall back to account_id, then to the default account.
+	rt, toID, err := a.resolveOutgoingFromRequest(req.AccountID, req.ConversationID)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+	if toID == "" {
+		toID = req.ConversationID
+	}
+
 	if strings.TrimSpace(req.ConversationID) == "" {
 		params := map[string]any{}
 		if req.CurrentSeq != 0 {
@@ -201,7 +236,7 @@ func (a *app) handleListOrGetConversations(w http.ResponseWriter, r *http.Reques
 		if req.PageSize > 0 {
 			params["pageSize"] = req.PageSize
 		}
-		res, err := a.client.doAPIRaw(r.Context(), "/session/getSessionPage", params)
+		res, err := rt.client.doAPIRaw(r.Context(), "/session/getSessionPage", params)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 			return
@@ -219,11 +254,11 @@ func (a *app) handleListOrGetConversations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	params := map[string]any{"toId": req.ConversationID}
+	params := map[string]any{"toId": toID}
 	if strings.TrimSpace(req.MsgSvrID) != "" {
 		params["msgSvrId"] = req.MsgSvrID
 	}
-	res, err := a.client.doAPIRaw(r.Context(), "/msg/syncMsg", params)
+	res, err := rt.client.doAPIRaw(r.Context(), "/msg/syncMsg", params)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
@@ -257,6 +292,11 @@ func (a *app) handleParseMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
 		return
 	}
+	rt, err := a.resolveRuntimeForFacade(req.AccountID)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
 
 	msgType := strings.TrimSpace(req.MessageType)
 	raw := req.Message
@@ -283,7 +323,7 @@ func (a *app) handleParseMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resourceURI := strings.TrimSpace(firstNonEmpty(req.ResourceURI, req.LocalPath))
-	parsed, err := a.parseMessage(r.Context(), msgType, msgData, raw, resourceURI)
+	parsed, err := a.parseMessage(r.Context(), rt, msgType, msgData, raw, resourceURI)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
@@ -307,10 +347,18 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toID := firstNonEmpty(req.ChannelConversationID, req.ChannelUserID)
-	if toID == "" {
+	composite := firstNonEmpty(req.ChannelConversationID, req.ChannelUserID)
+	if composite == "" {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "channelConversationId or channelUserId is required"})
 		return
+	}
+	rt, toID, err := a.resolveOutgoingFromRequest(req.AccountID, composite)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
+	if toID == "" {
+		toID = composite
 	}
 
 	messageType := strings.TrimSpace(req.MessageType)
@@ -320,10 +368,9 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	var method string
 	var params map[string]any
-	var err error
 
 	if isMediaMessageType(messageType) {
-		method, params, err = a.resolveMediaSendParams(r.Context(), messageType, toID, req.Content, req.ChannelMeta)
+		method, params, err = a.resolveMediaSendParams(r.Context(), rt, messageType, toID, req.Content, req.ChannelMeta)
 	} else {
 		method, params, err = toFacadeQiweiMessageRequest(req, toID)
 	}
@@ -333,13 +380,14 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger.Business(r.Context(), "facade 发送开始",
+		"accountId", rt.AccountID(),
 		"method", method,
 		"toId", toID,
 		"messageType", messageType,
 		"content", req.Content,
 	)
 
-	res, err := a.client.doAPIRaw(r.Context(), method, params)
+	res, err := rt.client.doAPIRaw(r.Context(), method, params)
 	if err != nil {
 		logger.Error(r.Context(), "facade 发送失败",
 			"method", method,
@@ -396,7 +444,8 @@ func (a *app) handleGetGroupDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		RoomIDs []string `json:"roomIds"`
+		AccountID string   `json:"account_id,omitempty"`
+		RoomIDs   []string `json:"roomIds"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
@@ -406,8 +455,13 @@ func (a *app) handleGetGroupDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "roomIds is required"})
 		return
 	}
+	rt, err := a.resolveRuntimeForFacade(req.AccountID)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
 
-	res, err := a.client.doAPIRaw(r.Context(), "/room/batchGetRoomDetail", map[string]any{
+	res, err := rt.client.doAPIRaw(r.Context(), "/room/batchGetRoomDetail", map[string]any{
 		"roomIdList": req.RoomIDs,
 	})
 	if err != nil {
@@ -472,7 +526,8 @@ func (a *app) handleGetContactDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		UserIDs []string `json:"userIds"`
+		AccountID string   `json:"account_id,omitempty"`
+		UserIDs   []string `json:"userIds"`
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "invalid json"})
@@ -482,8 +537,13 @@ func (a *app) handleGetContactDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "userIds is required"})
 		return
 	}
+	rt, err := a.resolveRuntimeForFacade(req.AccountID)
+	if err != nil {
+		writeJSON(w, statusForRouting(err), apiResponse{Success: false, Error: err.Error()})
+		return
+	}
 
-	res, err := a.client.doAPIRaw(r.Context(), "/contact/batchGetUserinfo", map[string]any{
+	res, err := rt.client.doAPIRaw(r.Context(), "/contact/batchGetUserinfo", map[string]any{
 		"userIdList": req.UserIDs,
 	})
 	if err != nil {
@@ -524,9 +584,9 @@ func (a *app) handleGetContactDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: contacts})
 }
 
-func (a *app) searchContacts(ctx context.Context, query string) ([]map[string]any, error) {
+func (a *app) searchContacts(ctx context.Context, rt *accountRuntime, query string) ([]map[string]any, error) {
 	if strings.TrimSpace(query) != "" {
-		res, err := a.client.doAPIRaw(ctx, "/contact/searchContact", map[string]any{"keyword": query})
+		res, err := rt.client.doAPIRaw(ctx, "/contact/searchContact", map[string]any{"keyword": query})
 		if err != nil {
 			return nil, err
 		}
@@ -537,11 +597,11 @@ func (a *app) searchContacts(ctx context.Context, query string) ([]map[string]an
 		return extractItems(data, "contactList", "list", "rows", "data"), nil
 	}
 
-	externalRes, err := a.client.doAPIRaw(ctx, "/contact/getWxContactList", nil)
+	externalRes, err := rt.client.doAPIRaw(ctx, "/contact/getWxContactList", nil)
 	if err != nil {
 		return nil, err
 	}
-	internalRes, err := a.client.doAPIRaw(ctx, "/contact/getWxWorkContactList", nil)
+	internalRes, err := rt.client.doAPIRaw(ctx, "/contact/getWxWorkContactList", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -558,8 +618,8 @@ func (a *app) searchContacts(ctx context.Context, query string) ([]map[string]an
 	return out, nil
 }
 
-func (a *app) listGroups(ctx context.Context) ([]map[string]any, error) {
-	res, err := a.client.doAPIRaw(ctx, "/room/getRoomList", nil)
+func (a *app) listGroups(ctx context.Context, rt *accountRuntime) ([]map[string]any, error) {
+	res, err := rt.client.doAPIRaw(ctx, "/room/getRoomList", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +630,7 @@ func (a *app) listGroups(ctx context.Context) ([]map[string]any, error) {
 	return extractItems(data, "roomList", "list", "rows", "data"), nil
 }
 
-func (a *app) parseMessage(ctx context.Context, msgType string, msgData map[string]any, raw map[string]any, resourceURI string) (parsedMessage, error) {
+func (a *app) parseMessage(ctx context.Context, rt *accountRuntime, msgType string, msgData map[string]any, raw map[string]any, resourceURI string) (parsedMessage, error) {
 	out := parsedMessage{
 		MessageType: msgType,
 		Raw:         raw,
@@ -594,7 +654,7 @@ func (a *app) parseMessage(ctx context.Context, msgType string, msgData map[stri
 		return out, nil
 	}
 
-	prepared := a.prepareMediaForAgent(ctx, int(anyToInt64(raw["msgType"])), msgType, msgData)
+	prepared := a.prepareMediaForAgent(ctx, rt, int(anyToInt64(raw["msgType"])), msgType, msgData)
 	if prepared.MessageType != "" {
 		out.MessageType = prepared.MessageType
 	}

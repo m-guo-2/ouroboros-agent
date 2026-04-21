@@ -302,7 +302,7 @@ func looksLikeProtectedDownloadURL(raw string) bool {
 	return strings.Contains(raw, "imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia")
 }
 
-func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackType string, msgData map[string]any) preparedMedia {
+func (a *app) prepareMediaForAgent(ctx context.Context, rt *accountRuntime, msgType int, fallbackType string, msgData map[string]any) preparedMedia {
 	classification, ok := classifyMediaMessage(msgType, fallbackType, msgData)
 	if !ok || classification.Kind == mediaKindUnknown {
 		return preparedMedia{
@@ -346,7 +346,7 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 		"method", plan.Method,
 	)
 
-	resolvedURL, err := a.executeMediaDownloadPlan(ctx, plan)
+	resolvedURL, err := a.executeMediaDownloadPlan(ctx, rt, plan)
 	if err != nil {
 		logger.Warn(ctx, "媒体处理失败",
 			"stage", "resolve",
@@ -406,11 +406,11 @@ func (a *app) prepareMediaForAgent(ctx context.Context, msgType int, fallbackTyp
 	}
 }
 
-func (a *app) executeMediaDownloadPlan(ctx context.Context, plan mediaDownloadPlan) (string, error) {
+func (a *app) executeMediaDownloadPlan(ctx context.Context, rt *accountRuntime, plan mediaDownloadPlan) (string, error) {
 	if plan.Method == "DIRECT" {
 		return anyToString(plan.Params["url"]), nil
 	}
-	res, err := a.client.doAPIRaw(ctx, plan.Method, plan.Params)
+	res, err := rt.client.doAPIRaw(ctx, plan.Method, plan.Params)
 	if err != nil {
 		return "", err
 	}

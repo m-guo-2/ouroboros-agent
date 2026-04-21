@@ -34,3 +34,43 @@
 <Card title="4.如何最快测试" > 
 平台提供了[在线登录](http://manager.qiweapi.com/loginRecord)，在网页界面就能运行登录，登陆成功后，复制guid及token参数，在线apifox请求测试即可，新用户未编写代码前可使用如上方式测试业务可行性。
 </Card>
+
+## Channel ↔ Agent 契约（多账号）
+
+`channel-qiwei` 对接 Agent 时遵循"账号对 Agent 透明"的契约：Agent 不需要知道底下具体是哪一个企微号，只需要把 `channelConversationId` 原样带回即可正确路由到原账号。
+
+### `channelConversationId`
+
+- 形态：`{rawId}@{shortHash}`
+  - `rawId`：`FromRoomID` 为群消息时为群 ID，否则为 `SenderID`。
+  - `shortHash`：账号 `guid` 的 SHA-256 前 5 字节再做 base32（无填充、小写）后形成的 8 字符后缀。
+- 单账号部署时向下兼容：不带 `@` 后缀的 `channelConversationId` 会落到默认（唯一）账号。
+- 多账号部署时不带后缀会报 `ErrAmbiguousAccount`，下游需要补 `account_id` 或补 `@shortHash`。
+
+### `channelIdentity`（incoming）
+
+每个 `/api/channels/incoming` 事件会额外携带一个展示用的身份快照，Agent 可直接渲染：
+
+```json
+{
+  "channelIdentity": {
+    "displayName": "主号运营",
+    "self": {
+      "userId": "wxid_xxx",
+      "name": "张三",
+      "alias": "@ops",
+      "corpName": "ACME"
+    }
+  }
+}
+```
+
+`channelIdentity` 仅供展示；**不得用于路由**。路由依据仍然是 `channelConversationId` / `account_id`。
+
+### 下行接口 `account_id` 支持
+
+`/api/qiwei/send`、`/api/qiwei/do`、`/api/qiwei/{module}/{action}`、facade 一族（`search_targets / list_or_get_conversations / parse_message / send_message / get_group_detail / get_contact_detail`）都接受可选 `account_id`。优先级：
+
+1. 请求体 `account_id` 显式指定。
+2. `channelConversationId` 末尾的 `@shortHash` 反查。
+3. 以上都没有，且进程里仅一个账号，走默认账号；多账号则报错。

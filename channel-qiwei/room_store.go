@@ -1,31 +1,37 @@
 package main
 
 import (
-	"bufio"
-	"os"
-	"path/filepath"
+	"context"
+	"database/sql"
 	"strings"
 	"sync"
+	"time"
 )
 
-// roomStore is a thread-safe, file-backed set of room IDs.
-// Used to detect whether the bot has seen a group before.
+// roomStore tracks which group rooms this qiwei account has seen.
+// Backed by qiwei_known_rooms (per-account) so that the same room seen by two
+// accounts is recorded independently (and each account can emit its own
+// group_joined event on first sight).
 type roomStore struct {
-	mu       sync.Mutex
-	rooms    map[string]bool
-	filePath string
+	db        *sql.DB
+	accountID string
+
+	mu    sync.Mutex
+	rooms map[string]bool
 }
 
-func newRoomStore(filePath string) *roomStore {
+func newRoomStore(db *sql.DB, accountID string) *roomStore {
 	rs := &roomStore{
-		rooms:    make(map[string]bool),
-		filePath: filePath,
+		db:        db,
+		accountID: accountID,
+		rooms:     make(map[string]bool),
 	}
-	rs.loadFromFile()
+	rs.loadFromDB()
 	return rs
 }
 
-// Add records a room ID. Returns true if the room was new (not previously known).
+// Add records a room ID. Returns true if this is the first time the account
+// sees this room.
 func (rs *roomStore) Add(roomID string) bool {
 	roomID = strings.TrimSpace(roomID)
 	if roomID == "" {
@@ -39,11 +45,12 @@ func (rs *roomStore) Add(roomID string) bool {
 		return false
 	}
 	rs.rooms[roomID] = true
-	rs.appendToFile(roomID)
+	rs.persist([]string{roomID})
 	return true
 }
 
-// Merge adds multiple room IDs in batch. New IDs are persisted to the file.
+// Merge records a batch of room IDs (typically from /room/getRoomList).
+// The in-memory map is updated and new IDs are persisted in a single statement.
 func (rs *roomStore) Merge(roomIDs []string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -58,40 +65,56 @@ func (rs *roomStore) Merge(roomIDs []string) {
 		newIDs = append(newIDs, id)
 	}
 	if len(newIDs) > 0 {
-		rs.appendLinesToFile(newIDs)
+		rs.persist(newIDs)
 	}
 }
 
-func (rs *roomStore) loadFromFile() {
-	f, err := os.Open(rs.filePath)
+func (rs *roomStore) loadFromDB() {
+	if rs.db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := rs.db.QueryContext(ctx,
+		`SELECT room_id FROM qiwei_known_rooms WHERE account_id = ?`, rs.accountID)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			rs.rooms[line] = true
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil && id != "" {
+			rs.rooms[id] = true
 		}
 	}
 }
 
-func (rs *roomStore) appendToFile(roomID string) {
-	rs.appendLinesToFile([]string{roomID})
-}
-
-func (rs *roomStore) appendLinesToFile(ids []string) {
-	if err := os.MkdirAll(filepath.Dir(rs.filePath), 0o755); err != nil {
+func (rs *roomStore) persist(ids []string) {
+	if rs.db == nil || len(ids) == 0 {
 		return
 	}
-	f, err := os.OpenFile(rs.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	now := time.Now().Unix()
+	tx, err := rs.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	for _, id := range ids {
-		_, _ = f.WriteString(id + "\n")
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT OR IGNORE INTO qiwei_known_rooms (account_id, room_id, created_at)
+		 VALUES (?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return
 	}
+	for _, id := range ids {
+		if _, err := stmt.ExecContext(ctx, rs.accountID, id, now); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return
+		}
+	}
+	_ = stmt.Close()
+	_ = tx.Commit()
 }

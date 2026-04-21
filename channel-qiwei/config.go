@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +23,31 @@ type Config struct {
 	LogDir      string `yaml:"log_dir"`
 	DataDir     string `yaml:"data_dir"`
 	HTTPTimeout int    `yaml:"http_timeout"`
+
+	// DBPath is the SQLite file holding the multi-account registry.
+	// Defaults to "{DataDir}/qiwei.db" when empty.
+	DBPath string `yaml:"db_path"`
+
+	// AdminToken gates the /api/qiwei/_admin/* endpoints. When empty the
+	// admin router is not mounted at all (a safer default than "any
+	// caller wins").
+	AdminToken string `yaml:"admin_token"`
+
+	// ProfileSyncInterval is how often background goroutines refresh each
+	// account's identity snapshot. Defaults to 6h when zero.
+	ProfileSyncInterval time.Duration `yaml:"profile_sync_interval"`
+
+	// ContactSyncInterval is the full-sync cadence for contact/room snapshots.
+	// Defaults to 6h when zero.
+	ContactSyncInterval time.Duration `yaml:"contact_sync_interval"`
+
+	// ContactSyncEnabled controls whether the periodic full sync loop runs.
+	// Event-driven enqueue remains available even when this is false.
+	ContactSyncEnabled bool `yaml:"contact_sync_enabled"`
+
+	// GatewayToken gates the /api/qiwei/gateway/* endpoints. Empty means the
+	// gateway HTTP API is not mounted.
+	GatewayToken string `yaml:"gateway_token"`
 
 	Agent AgentConfig `yaml:"agent"`
 	Volc  VolcConfig  `yaml:"volc"`
@@ -70,13 +97,13 @@ type VolcSpeechConfig struct {
 }
 
 type OSSConfig struct {
-	Endpoint     string `yaml:"endpoint"`
-	Bucket       string `yaml:"bucket"`
-	AccessKey    string `yaml:"access_key"`
-	SecretKey    string `yaml:"secret_key"`
-	Region       string `yaml:"region"`
-	Prefix       string `yaml:"prefix"`
-	UseSSL       bool   `yaml:"use_ssl"`
+	Endpoint      string `yaml:"endpoint"`
+	Bucket        string `yaml:"bucket"`
+	AccessKey     string `yaml:"access_key"`
+	SecretKey     string `yaml:"secret_key"`
+	Region        string `yaml:"region"`
+	Prefix        string `yaml:"prefix"`
+	UseSSL        bool   `yaml:"use_ssl"`
 	PublicBaseURL string `yaml:"public_base_url"`
 }
 
@@ -114,11 +141,14 @@ func LoadConfig() Config {
 
 func configDefaults() Config {
 	return Config{
-		APIBaseURL:  "http://manager.qiweapi.com/qiwe",
-		Port:        "2000",
-		LogLevel:    "info",
-		DataDir:     "./data",
-		HTTPTimeout: 25,
+		APIBaseURL:          "http://manager.qiweapi.com/qiwe",
+		Port:                "2000",
+		LogLevel:            "info",
+		DataDir:             "./data",
+		HTTPTimeout:         25,
+		ProfileSyncInterval: 6 * time.Hour,
+		ContactSyncInterval: 6 * time.Hour,
+		ContactSyncEnabled:  true,
 		Agent: AgentConfig{
 			Enabled:   true,
 			ServerURL: "http://localhost:1997",
@@ -139,6 +169,15 @@ func configDefaults() Config {
 func (c *Config) flatten() {
 	c.APIBaseURL = strings.TrimRight(c.APIBaseURL, "/")
 	c.LogLevel = strings.ToLower(c.LogLevel)
+	if strings.TrimSpace(c.DBPath) == "" {
+		c.DBPath = filepath.Join(c.DataDir, "qiwei.db")
+	}
+	if c.ProfileSyncInterval <= 0 {
+		c.ProfileSyncInterval = 6 * time.Hour
+	}
+	if c.ContactSyncInterval <= 0 {
+		c.ContactSyncInterval = 6 * time.Hour
+	}
 
 	c.AgentEnabled = c.Agent.Enabled
 	c.AgentServer = strings.TrimRight(c.Agent.ServerURL, "/")
@@ -159,9 +198,13 @@ func (c *Config) flatten() {
 	c.OSSPublicBaseURL = strings.TrimRight(c.OSS.PublicBaseURL, "/")
 }
 
+// Validate enforces the minimum platform-level config. With multi-account
+// support the historical requirement "top-level guid/token must be set" is
+// gone: an empty YAML is fine as long as at least one account exists in the
+// DB (checked separately by the runtime at boot).
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.APIBaseURL) == "" || strings.TrimSpace(c.Token) == "" || strings.TrimSpace(c.GUID) == "" {
-		return ErrInvalidConfig
+	if strings.TrimSpace(c.APIBaseURL) == "" {
+		return fmt.Errorf("%w: api_base_url is required", ErrInvalidConfig)
 	}
 	return nil
 }

@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
-	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"channel-qiwei/internal/modules"
@@ -14,38 +14,68 @@ import (
 	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
 )
 
+// app is the long-lived process state. Everything that depends on a specific
+// qiwei account lives on *accountRuntime; app keeps only per-process
+// resources (HTTP clients, storage, module registry, DB, account registry).
 type app struct {
 	cfg           Config
-	client        *qiweiClient
 	http          *http.Client
 	recognizer    recognizer
 	storage       sharedoss.Storage
 	storageConfig sharedoss.Config
-	registry      modules.Registry
-	dedupe        *ttlSet
-	nameCache     *ttlCache
-	roomStore     *roomStore
+	modules       modules.Registry
 
-	selfUserID       string
-	contactsMu       sync.Mutex
-	contactsLoadedAt time.Time
+	db *sql.DB
+
+	// registry holds the current *accountRegistry; we swap the pointer on
+	// hot reload so the running request handlers always observe a
+	// consistent snapshot.
+	registry atomic.Pointer[accountRegistry]
+
+	// unknownGuids buffers callback events for guids that are not (yet)
+	// in the registry; the admin API exposes this for operators to
+	// discover "forgot to register" situations.
+	unknownGuids *unknownGuidBuffer
+
+	contactSync *contactSyncer
+
+	gatewayRefreshLimiter *ttlSet
 }
 
-func newApp(cfg Config) *app {
+func newApp(cfg Config, db *sql.DB) *app {
 	logger.Init(cfg.LogDir, "channel-qiwei")
 	storageRuntime := newObjectStorage(cfg.OSS)
-	return &app{
-		cfg:           cfg,
-		client:        newQiweiClient(cfg),
-		http:          logger.NewClient("http-download", time.Duration(cfg.RequestTimout)*time.Second),
-		recognizer:    newVolcengineRecognizer(cfg),
-		storage:       storageRuntime.store,
-		storageConfig: storageRuntime.cfg,
-		registry:      modules.BuildRegistry(),
-		dedupe:        newTTLSet(5 * time.Minute),
-		nameCache:     newTTLCache(10 * time.Minute),
-		roomStore:     newRoomStore(filepath.Join(cfg.DataDir, "known_rooms.txt")),
+	a := &app{
+		cfg:                   cfg,
+		http:                  logger.NewClient("http-download", time.Duration(cfg.RequestTimout)*time.Second),
+		recognizer:            newVolcengineRecognizer(cfg),
+		storage:               storageRuntime.store,
+		storageConfig:         storageRuntime.cfg,
+		modules:               modules.BuildRegistry(),
+		db:                    db,
+		unknownGuids:          newUnknownGuidBuffer(200),
+		gatewayRefreshLimiter: newTTLSet(30 * time.Second),
 	}
+	a.contactSync = newContactSyncer(a)
+	a.registry.Store(newAccountRegistry())
+	return a
+}
+
+// currentRegistry returns the currently active registry snapshot. Hot paths
+// call this on every request; it's cheap because of atomic.Pointer.
+func (a *app) currentRegistry() *accountRegistry {
+	return a.registry.Load()
+}
+
+// reloadRegistry rebuilds the registry from the DB and atomically swaps the
+// pointer. Safe to call concurrently with in-flight requests.
+func (a *app) reloadRegistry(ctx context.Context) error {
+	reg, err := loadRegistry(ctx, a.db, a.cfg)
+	if err != nil {
+		return err
+	}
+	a.registry.Store(reg)
+	return nil
 }
 
 func (a *app) routes() http.Handler {
@@ -61,6 +91,17 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/qiwei/do", a.handleDoAPI)
 	mux.HandleFunc("/api/qiwei/get_group_detail", a.handleGetGroupDetail)
 	mux.HandleFunc("/api/qiwei/get_contact_detail", a.handleGetContactDetail)
+
+	// Admin endpoints are mounted unconditionally; the auth middleware
+	// returns 404 when cfg.AdminToken is empty so operators can't
+	// accidentally enumerate a disabled admin API. Registering here
+	// (even for empty tokens) also prevents the /api/qiwei/ catch-all
+	// below from swallowing these paths.
+	a.registerAdminRoutes(mux)
+	a.registerGatewayRoutes(mux)
+
+	// Module action catch-all must be registered last so the specific
+	// handlers above take priority.
 	mux.HandleFunc("/api/qiwei/", a.handleModuleAction)
 
 	logMiddleware := logger.Middleware(logger.MiddlewareOptions{
@@ -78,26 +119,40 @@ func withJSONMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// preloadKnownRooms hydrates each account's roomStore from the qiwei
+// platform so restarts don't re-emit group_joined for groups the bot has
+// already been in.
 func (a *app) preloadKnownRooms(ctx context.Context) {
-	groups, err := a.listGroups(ctx)
+	for _, rt := range a.currentRegistry().All() {
+		a.preloadKnownRoomsFor(ctx, rt)
+	}
+}
+
+// preloadKnownRoomsFor pulls the current room list for one account and
+// merges it into that account's roomStore. Failures are logged and
+// swallowed: preload is an optimization, not a correctness requirement.
+func (a *app) preloadKnownRoomsFor(ctx context.Context, rt *accountRuntime) {
+	items, err := a.listGroups(ctx, rt)
 	if err != nil {
-		logger.Warn(ctx, "预加载群列表失败，已知群依赖文件持久化", "error", err.Error())
+		logger.Warn(ctx, "预加载群列表失败",
+			"tag", tagCallback,
+			"accountId", rt.AccountID(),
+			"error", err.Error(),
+		)
 		return
 	}
-	var roomIDs []string
-	for _, g := range groups {
-		rid := anyToString(g["roomId"])
-		if rid == "" {
-			rid = anyToString(g["id"])
-		}
-		if rid != "" && rid != "0" {
-			roomIDs = append(roomIDs, rid)
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if id := firstNonEmpty(anyToString(item["roomId"]), anyToString(item["id"])); id != "" {
+			ids = append(ids, id)
 		}
 	}
-	if len(roomIDs) > 0 {
-		a.roomStore.Merge(roomIDs)
-	}
-	logger.Business(ctx, "预加载群列表完成", "apiRooms", len(groups), "merged", len(roomIDs))
+	rt.roomStore.Merge(ids)
+	logger.Business(ctx, "预加载已知群",
+		"tag", tagCallback,
+		"accountId", rt.AccountID(),
+		"count", len(ids),
+	)
 }
 
 func (a *app) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -105,5 +160,6 @@ func (a *app) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"status":    "ok",
 		"service":   "channel-qiwei",
 		"timestamp": time.Now().Format(time.RFC3339),
+		"accounts":  a.currentRegistry().Count(),
 	})
 }

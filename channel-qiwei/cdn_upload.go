@@ -25,14 +25,15 @@ type cdnUploadResult struct {
 	Filename      string `json:"filename"`
 }
 
-func (a *app) cdnUploadByURL(ctx context.Context, fileURL, filename string, fileType int) (*cdnUploadResult, error) {
+func (a *app) cdnUploadByURL(ctx context.Context, rt *accountRuntime, fileURL, filename string, fileType int) (*cdnUploadResult, error) {
 	logger.Business(ctx, "CDN 上传开始",
+		"accountId", rt.AccountID(),
 		"fileUrl", fileURL,
 		"filename", filename,
 		"fileType", fileType,
 	)
 
-	res, err := a.client.doAPIRaw(ctx, "/cloud/cdnBigUploadByUrl", map[string]any{
+	res, err := rt.client.doAPIRaw(ctx, "/cloud/cdnBigUploadByUrl", map[string]any{
 		"fileUrl":  fileURL,
 		"filename": filename,
 		"fileType": fileType,
@@ -58,11 +59,11 @@ func (a *app) cdnUploadByURL(ctx context.Context, fileURL, filename string, file
 // for sending the media message. This is the correct two-step flow:
 //   1. Upload to CDN via /cloud/cdnBigUploadByUrl
 //   2. Send via /msg/send* with CDN-returned file params
-func (a *app) resolveMediaSendParams(ctx context.Context, messageType, toID, contentURL string, meta map[string]any) (string, map[string]any, error) {
+func (a *app) resolveMediaSendParams(ctx context.Context, rt *accountRuntime, messageType, toID, contentURL string, meta map[string]any) (string, map[string]any, error) {
 	filename := mediaFilename(messageType, contentURL, meta)
 	fileType := mediaFileType(messageType)
 
-	cdn, err := a.cdnUploadByURL(ctx, contentURL, filename, fileType)
+	cdn, err := a.cdnUploadByURL(ctx, rt, contentURL, filename, fileType)
 	if err != nil {
 		return "", nil, err
 	}
