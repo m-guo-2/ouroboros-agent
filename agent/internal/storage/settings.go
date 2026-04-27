@@ -10,17 +10,20 @@ import (
 // GetSettingValue reads a single settings entry by key.
 // Returns ("", nil) when the key does not exist.
 func GetSettingValue(key string) (string, error) {
-	var value string
-	err := DB.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	var value sql.NullString
+	err := DB.QueryRow("SELECT value FROM settings WHERE `key` = ?", key).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	return value, err
+	if err != nil {
+		return "", err
+	}
+	return value.String, nil
 }
 
 // GetAllSettings returns all key-value pairs in the settings table.
 func GetAllSettings() (map[string]string, error) {
-	rows, err := DB.Query("SELECT key, value FROM settings ORDER BY key")
+	rows, err := DB.Query("SELECT `key`, value FROM settings ORDER BY `key`")
 	if err != nil {
 		return nil, err
 	}
@@ -28,11 +31,12 @@ func GetAllSettings() (map[string]string, error) {
 
 	out := make(map[string]string)
 	for rows.Next() {
-		var k, v string
+		var k string
+		var v sql.NullString
 		if err := rows.Scan(&k, &v); err != nil {
 			return nil, err
 		}
-		out[k] = v
+		out[k] = v.String
 	}
 	return out, rows.Err()
 }
@@ -41,16 +45,16 @@ func GetAllSettings() (map[string]string, error) {
 func SetSettingValue(key, value string) error {
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
-		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = ?`,
-		key, value, now, now,
+		"INSERT INTO settings (`key`, value, updated_at) VALUES (?, ?, ?) AS new"+
+			" ON DUPLICATE KEY UPDATE value = new.value, updated_at = new.updated_at",
+		key, value, now,
 	)
 	return err
 }
 
 // DeleteSettingValue removes a setting by key. Returns true if a row was deleted.
 func DeleteSettingValue(key string) (bool, error) {
-	res, err := DB.Exec("DELETE FROM settings WHERE key = ?", key)
+	res, err := DB.Exec("DELETE FROM settings WHERE `key` = ?", key)
 	if err != nil {
 		return false, err
 	}
@@ -65,8 +69,8 @@ func SetMultipleSettings(kv map[string]string) error {
 		return err
 	}
 	stmt, err := tx.Prepare(
-		`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = ?`,
+		"INSERT INTO settings (`key`, value, updated_at) VALUES (?, ?, ?) AS new" +
+			" ON DUPLICATE KEY UPDATE value = new.value, updated_at = new.updated_at",
 	)
 	if err != nil {
 		tx.Rollback()
@@ -76,7 +80,7 @@ func SetMultipleSettings(kv map[string]string) error {
 
 	for k, v := range kv {
 		now := timeutil.NowMs()
-		if _, err := stmt.Exec(k, v, now, now); err != nil {
+		if _, err := stmt.Exec(k, v, now); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("set %q: %w", k, err)
 		}

@@ -8,20 +8,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 )
 
-// adminTestApp spins up an *app backed by a fresh on-disk SQLite database
-// with the admin token configured. It returns the app and its handler so
-// tests can talk to admin endpoints end-to-end.
+// adminTestApp spins up an *app backed by a fresh MySQL test database
+// (skipping the test if TEST_MYSQL_* env is not configured) with the admin
+// token configured. It returns the app and its handler so tests can talk to
+// admin endpoints end-to-end.
 func adminTestApp(t *testing.T, token string) (*app, http.Handler) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "qiwei.db")
-	db, err := OpenDB(dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	db := openTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 
 	cfg := Config{

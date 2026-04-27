@@ -11,17 +11,8 @@ import (
 
 func setupSkillTestDB(t *testing.T) func() {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "skills.db")
-	if err := Init(dbPath); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	return func() {
-		if DB != nil {
-			_ = DB.Close()
-			DB = nil
-		}
-	}
+	SetupTestDB(t)
+	return func() {}
 }
 
 func writeSkillFixture(t *testing.T, root string) {

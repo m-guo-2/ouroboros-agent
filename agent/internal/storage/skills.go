@@ -13,7 +13,10 @@ import (
 	"agent/internal/timeutil"
 )
 
-const skillSelectSQL = `SELECT id, name, COALESCE(description,''), enabled, COALESCE(metadata,'{}'), updated_at FROM skills`
+// skillSelectSQL keeps the live-only filter inside the base clause. Callers
+// append further WHERE conditions with " AND ...".
+const skillSelectBase = `SELECT id, name, COALESCE(description,''), enabled, COALESCE(metadata,'{}'), updated_at FROM skills`
+const skillSelectSQL = skillSelectBase + ` WHERE deleted_at = 0`
 
 // SkillRuntimeMetadata stores the local runtime copy details for a skill.
 type SkillRuntimeMetadata struct {
@@ -68,7 +71,7 @@ func RefreshSkills() error {
 
 // GetAllSkills returns all locally synchronized skills ordered by name.
 func GetAllSkills() ([]SkillRecord, error) {
-	rows, err := DB.Query(skillSelectSQL + ` ORDER BY name COLLATE NOCASE ASC`)
+	rows, err := DB.Query(skillSelectSQL + ` ORDER BY LOWER(name) ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +111,7 @@ func GetSkillByID(skillID string) (*SkillRecord, error) {
 
 // GetSkillByName returns the first skill with the given name.
 func GetSkillByName(name string) (*SkillRecord, error) {
-	row := DB.QueryRow(skillSelectSQL+` WHERE name = ? COLLATE NOCASE LIMIT 1`, name)
+	row := DB.QueryRow(skillSelectSQL+` AND LOWER(name) = LOWER(?) LIMIT 1`, name)
 	parsed, err := scanSkillRow(row.Scan)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -351,7 +354,7 @@ func skillRecordFromRow(row skillRow, includeReadme bool) SkillRecord {
 }
 
 func getSkillRowByID(skillID string) (*skillRow, error) {
-	row := DB.QueryRow(skillSelectSQL+` WHERE id = ?`, skillID)
+	row := DB.QueryRow(skillSelectSQL+` AND id = ?`, skillID)
 	parsed, err := scanSkillRow(row.Scan)
 	if err != nil {
 		return nil, err
@@ -419,20 +422,21 @@ func replaceSkillSnapshot(skills []github.SkillData) error {
 			enabled = 1
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO skills (id, name, description, enabled, metadata, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
-				name = excluded.name,
-				description = excluded.description,
-				enabled = excluded.enabled,
-				metadata = excluded.metadata,
-				updated_at = excluded.updated_at
+			INSERT INTO skills (id, name, description, enabled, metadata, created_at, updated_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 0) AS new
+			ON DUPLICATE KEY UPDATE
+				name        = new.name,
+				description = new.description,
+				enabled     = new.enabled,
+				metadata    = new.metadata,
+				updated_at  = new.updated_at,
+				deleted_at  = 0
 		`, skill.ID, skill.Name, skill.Description, enabled, string(metaBytes), now, now); err != nil {
 			return err
 		}
 	}
 
-	rows, err := tx.Query(`SELECT id FROM skills`)
+	rows, err := tx.Query(`SELECT id FROM skills WHERE deleted_at = 0`)
 	if err != nil {
 		return err
 	}
@@ -451,8 +455,11 @@ func replaceSkillSnapshot(skills []github.SkillData) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	// Stale skills are soft-deleted so existing agent bindings can survive a
+	// transient GitHub sync hiccup without losing history.
 	for _, id := range staleIDs {
-		if _, err := tx.Exec(`DELETE FROM skills WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`UPDATE skills SET deleted_at = ?, updated_at = ?
+			WHERE id = ? AND deleted_at = 0`, now, now, id); err != nil {
 			return err
 		}
 	}

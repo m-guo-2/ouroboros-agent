@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"channel-qiwei/internal/timeutil"
 )
 
 // roomStore tracks which group rooms this qiwei account has seen.
@@ -76,7 +78,8 @@ func (rs *roomStore) loadFromDB() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	rows, err := rs.db.QueryContext(ctx,
-		`SELECT room_id FROM qiwei_known_rooms WHERE account_id = ?`, rs.accountID)
+		`SELECT room_id FROM qiwei_known_rooms
+		 WHERE account_id = ? AND deleted_at = 0`, rs.accountID)
 	if err != nil {
 		return
 	}
@@ -96,13 +99,13 @@ func (rs *roomStore) persist(ids []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	tx, err := rs.db.BeginTx(ctx, nil)
 	if err != nil {
 		return
 	}
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT OR IGNORE INTO qiwei_known_rooms (account_id, room_id, created_at)
+		`INSERT IGNORE INTO qiwei_known_rooms (account_id, room_id, created_at)
 		 VALUES (?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()

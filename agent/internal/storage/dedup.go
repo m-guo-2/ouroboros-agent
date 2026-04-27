@@ -12,7 +12,7 @@ func IsProcessed(key string) bool {
 
 func MarkProcessed(key, channelType string) error {
 	_, err := DB.Exec(
-		`INSERT OR IGNORE INTO processed_messages (channel_message_id, channel_type, processed_at) VALUES (?, ?, ?)`,
+		`INSERT IGNORE INTO processed_messages (channel_message_id, channel_type, processed_at) VALUES (?, ?, ?)`,
 		key, channelType, timeutil.NowMs(),
 	)
 	return err

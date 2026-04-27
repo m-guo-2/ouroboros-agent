@@ -46,7 +46,8 @@ func main() {
 	emitBootstrap("配置加载完成",
 		"configPath", displayValue(cfg.ConfigPath, "<default-or-env>"),
 		"logDir", cfg.LogDir,
-		"dbPath", cfg.DBPath,
+		"mysqlHost", cfg.MySQL.Host,
+		"mysqlDatabase", cfg.MySQL.Database,
 		"port", cfg.Port,
 		"adminDist", displayValue(cfg.AdminDist, "<auto-detect>"),
 	)
@@ -59,7 +60,9 @@ func main() {
 		"pid", os.Getpid(),
 		"configPath", displayValue(cfg.ConfigPath, "<default-or-env>"),
 		"logDir", cfg.LogDir,
-		"dbPath", cfg.DBPath,
+		"mysqlHost", cfg.MySQL.Host,
+		"mysqlPort", cfg.MySQL.Port,
+		"mysqlDatabase", cfg.MySQL.Database,
 		"port", cfg.Port,
 		"adminDist", displayValue(cfg.AdminDist, "<auto-detect>"),
 		"githubRepo", cfg.GitHub.SkillsRepo,
@@ -81,13 +84,37 @@ func main() {
 		}
 	}
 
+	if strings.TrimSpace(cfg.DBPath) != "" {
+		logger.Warn(ctx, "忽略废弃的 AGENT_DB_PATH/DB_PATH 环境变量（SQLite 已下线，请改用 MYSQL_* 变量）",
+			"dbPath", cfg.DBPath)
+	}
+
 	stepAt := time.Now()
-	logger.Boundary(ctx, "开始初始化数据库", "path", cfg.DBPath)
-	if err := storage.Init(cfg.DBPath); err != nil {
-		logger.Error(ctx, "数据库初始化失败", "error", err.Error(), "path", cfg.DBPath)
+	mysqlCfg := storage.MySQLConfig{
+		Host:            cfg.MySQL.Host,
+		Port:            cfg.MySQL.Port,
+		User:            cfg.MySQL.User,
+		Password:        cfg.MySQL.Password,
+		Database:        cfg.MySQL.Database,
+		Params:          cfg.MySQL.Params,
+		MaxOpenConns:    cfg.MySQL.MaxOpenConns,
+		MaxIdleConns:    cfg.MySQL.MaxIdleConns,
+		ConnMaxLifetime: cfg.MySQL.ConnMaxLifetime,
+	}
+	logger.Boundary(ctx, "开始初始化 MySQL",
+		"host", cfg.MySQL.Host, "port", cfg.MySQL.Port, "database", cfg.MySQL.Database,
+	)
+	if err := storage.Init(mysqlCfg); err != nil {
+		logger.Error(ctx, "MySQL 初始化失败", "error", err.Error(), "database", cfg.MySQL.Database)
 		os.Exit(1)
 	}
-	logger.Boundary(ctx, "数据库初始化完成", "path", cfg.DBPath, "elapsed", time.Since(stepAt).String())
+	if err := storage.SeedDefaults(); err != nil {
+		logger.Error(ctx, "默认模型 seed 失败", "error", err.Error())
+		os.Exit(1)
+	}
+	logger.Boundary(ctx, "MySQL 初始化完成",
+		"database", cfg.MySQL.Database, "elapsed", time.Since(stepAt).String(),
+	)
 
 	// --- Session recovery: resume sessions interrupted by previous crash ---
 	stepAt = time.Now()

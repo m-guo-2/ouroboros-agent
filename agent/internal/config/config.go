@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,12 +18,28 @@ type Config struct {
 	Version    string `yaml:"version"`
 	ID         string `yaml:"id"`
 	LogDir     string `yaml:"log_dir"`
-	DBPath     string `yaml:"db_path"`
+	DBPath     string `yaml:"db_path"` // deprecated: SQLite path, kept for legacy env warning
 	AdminDist  string `yaml:"admin_dist"`
+	MySQL      MySQL  `yaml:"mysql"`
 	Qiwei      Qiwei  `yaml:"qiwei"`
 	GitHub     GitHub `yaml:"github"`
 	OSS        OSS    `yaml:"oss"`
 	ConfigPath string `yaml:"-"`
+}
+
+// MySQL holds connection parameters for the agent's MySQL database.
+// Credentials (host/port/user/password) are shared with other services
+// in the same deployment; Database is per-service.
+type MySQL struct {
+	Host            string `yaml:"host"`
+	Port            string `yaml:"port"`
+	User            string `yaml:"user"`
+	Password        string `yaml:"password"`
+	Database        string `yaml:"database"`
+	MaxOpenConns    int    `yaml:"max_open_conns"`
+	MaxIdleConns    int    `yaml:"max_idle_conns"`
+	ConnMaxLifetime string `yaml:"conn_max_lifetime"`
+	Params          string `yaml:"params"`
 }
 
 type Qiwei struct {
@@ -80,8 +97,17 @@ func defaults() Config {
 		Version:   "1.0.0",
 		ID:        "agent-instance",
 		LogDir:    filepath.Join("data", "logs"),
-		DBPath:    filepath.Join("data", "config.db"),
 		AdminDist: "",
+		MySQL: MySQL{
+			Host:            "127.0.0.1",
+			Port:            "3306",
+			User:            "root",
+			Database:        "moli_agent",
+			MaxOpenConns:    16,
+			MaxIdleConns:    8,
+			ConnMaxLifetime: "30m",
+			Params:          "charset=utf8mb4&collation=utf8mb4_bin&loc=UTC&multiStatements=true",
+		},
 		GitHub: GitHub{
 			Branch:     "main",
 			SkillsPath: "skills",
@@ -164,9 +190,27 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("PORT", &cfg.Port)
 	envStr("AGENT_APP_VERSION", &cfg.Version)
 	envStr("AGENT_ID", &cfg.ID)
-	envStr("DB_PATH", &cfg.DBPath)
+	envStr("DB_PATH", &cfg.DBPath) // legacy; warned at startup
+	envStr("AGENT_DB_PATH", &cfg.DBPath) // legacy; warned at startup
 	envStr("LOG_DIR", &cfg.LogDir)
 	envStr("ADMIN_DIST", &cfg.AdminDist)
+
+	envStr("MYSQL_HOST", &cfg.MySQL.Host)
+	envStr("MYSQL_PORT", &cfg.MySQL.Port)
+	envStr("MYSQL_USER", &cfg.MySQL.User)
+	envStr("MYSQL_PASSWORD", &cfg.MySQL.Password)
+	envStr("AGENT_MYSQL_DATABASE", &cfg.MySQL.Database)
+	envInt := func(key string, dst *int) {
+		if v := os.Getenv(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				*dst = n
+			}
+		}
+	}
+	envInt("AGENT_MYSQL_MAX_OPEN_CONNS", &cfg.MySQL.MaxOpenConns)
+	envInt("AGENT_MYSQL_MAX_IDLE_CONNS", &cfg.MySQL.MaxIdleConns)
+	envStr("AGENT_MYSQL_CONN_MAX_LIFETIME", &cfg.MySQL.ConnMaxLifetime)
+	envStr("AGENT_MYSQL_PARAMS", &cfg.MySQL.Params)
 
 	envStr("GITHUB_TOKEN", &cfg.GitHub.Token)
 	envStr("GITHUB_SKILLS_REPO", &cfg.GitHub.SkillsRepo)

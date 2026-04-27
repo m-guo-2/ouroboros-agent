@@ -61,7 +61,7 @@ func GetActiveSessionSkills(sessionID string) ([]string, error) {
 	rows, err := DB.Query(
 		`SELECT skill_id FROM session_active_skills
 		 WHERE session_id = ?
-		 ORDER BY activation_order ASC, created_at ASC, rowid ASC`,
+		 ORDER BY activation_order ASC, created_at ASC, id ASC`,
 		sessionID,
 	)
 	if err != nil {

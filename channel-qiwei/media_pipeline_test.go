@@ -382,16 +382,13 @@ func newTestApp(t *testing.T, transcript string) *app {
 	return app
 }
 
-// newTestAppWithCfg wires up an in-memory SQLite and pre-registers a
-// single test account so the registry has a default runtime. Tests that
-// need the runtime explicitly can call testRuntime(t, app).
+// newTestAppWithCfg wires up the MySQL test database (skipping the test
+// when TEST_MYSQL_* is not configured) and pre-registers a single test
+// account so the registry has a default runtime. Tests that need the
+// runtime explicitly can call testRuntime(t, app).
 func newTestAppWithCfg(t *testing.T, cfg Config) *app {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "qiwei.db")
-	db, err := OpenDB(dbPath)
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
+	db := openTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 
 	repo := newAccountRepo(db)

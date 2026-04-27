@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"channel-qiwei/internal/timeutil"
 )
 
 type ContactGateway struct {
@@ -151,7 +153,7 @@ func (g *ContactGateway) ResolveExternalUserID(ctx context.Context, userID strin
 		return openID, err
 	}
 	contact.ExternalUserID = openID
-	contact.LastSyncedAt = time.Now().Unix()
+	contact.LastSyncedAt = timeutil.NowMs()
 	contact.UpdatedAt = contact.LastSyncedAt
 	if g.repo != nil {
 		if err := g.repo.UpsertContact(ctx, contact); err != nil {

@@ -7,9 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	logger "github.com/m-guo-2/ouroboros-agent/shared/logger"
+
+	"channel-qiwei/internal/timeutil"
 )
 
 const maxStoredJSONBytes = 64 * 1024
@@ -97,8 +98,10 @@ type contactRepo struct {
 
 func newContactRepo(db *sql.DB) *contactRepo { return &contactRepo{db: db} }
 
+// Column lists used for scan calls. follow_user_json is synthesized from the
+// split qiwei_contact_followers table and appended after the DB scan.
 const contactColumns = `account_id, user_id, external_user_id, source, nickname, real_name,
-	alias, remark, avatar_url, gender, corp_id, corp_name, follow_user_json, raw_json,
+	alias, remark, avatar_url, gender, corp_id, corp_name, raw_json,
 	first_seen_at, last_synced_at, updated_at`
 
 const roomColumns = `account_id, room_id, name, announcement, notice, owner_user_id,
@@ -114,7 +117,7 @@ func scanContact(scanner interface{ Scan(dest ...any) error }) (Contact, error) 
 	err := scanner.Scan(
 		&c.AccountID, &c.UserID, &c.ExternalUserID, &c.Source, &c.Nickname, &c.RealName,
 		&c.Alias, &c.Remark, &c.AvatarURL, &c.Gender, &c.CorpID, &c.CorpName,
-		&c.FollowUserJSON, &c.RawJSON, &c.FirstSeenAt, &c.LastSyncedAt, &c.UpdatedAt,
+		&c.RawJSON, &c.FirstSeenAt, &c.LastSyncedAt, &c.UpdatedAt,
 	)
 	return c, err
 }
@@ -162,7 +165,7 @@ func (r *contactRepo) UpsertContact(ctx context.Context, c Contact) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	if c.FirstSeenAt == 0 {
 		c.FirstSeenAt = now
 	}
@@ -172,49 +175,147 @@ func (r *contactRepo) UpsertContact(ctx context.Context, c Contact) error {
 	if c.UpdatedAt == 0 {
 		c.UpdatedAt = now
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO qiwei_contacts (
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO qiwei_contacts (
 		account_id, user_id, external_user_id, source, nickname, real_name, alias, remark,
-		avatar_url, gender, corp_id, corp_name, follow_user_json, raw_json,
-		first_seen_at, last_synced_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(account_id, user_id) DO UPDATE SET
-		external_user_id = excluded.external_user_id,
-		source = excluded.source,
-		nickname = excluded.nickname,
-		real_name = excluded.real_name,
-		alias = excluded.alias,
-		remark = excluded.remark,
-		avatar_url = excluded.avatar_url,
-		gender = excluded.gender,
-		corp_id = excluded.corp_id,
-		corp_name = excluded.corp_name,
-		follow_user_json = excluded.follow_user_json,
-		raw_json = excluded.raw_json,
-		last_synced_at = excluded.last_synced_at,
-		updated_at = excluded.updated_at`,
+		avatar_url, gender, corp_id, corp_name, raw_json,
+		first_seen_at, last_synced_at, updated_at, deleted_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) AS new
+	ON DUPLICATE KEY UPDATE
+		external_user_id = new.external_user_id,
+		source           = new.source,
+		nickname         = new.nickname,
+		real_name        = new.real_name,
+		alias            = new.alias,
+		remark           = new.remark,
+		avatar_url       = new.avatar_url,
+		gender           = new.gender,
+		corp_id          = new.corp_id,
+		corp_name        = new.corp_name,
+		raw_json         = new.raw_json,
+		last_synced_at   = new.last_synced_at,
+		updated_at       = new.updated_at,
+		deleted_at       = 0`,
 		c.AccountID, c.UserID, c.ExternalUserID, c.Source, c.Nickname, c.RealName, c.Alias, c.Remark,
-		c.AvatarURL, c.Gender, c.CorpID, c.CorpName, followJSON, rawJSON,
+		c.AvatarURL, c.Gender, c.CorpID, c.CorpName, rawJSON,
 		c.FirstSeenAt, c.LastSyncedAt, c.UpdatedAt,
+	); err != nil {
+		return err
+	}
+
+	if err := replaceContactFollowers(ctx, tx, c.AccountID, c.UserID, followJSON, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// replaceContactFollowers rewrites the qiwei_contact_followers rows for one
+// contact inside the caller's transaction. Empty / "[]" input wipes all
+// follower rows; any other JSON array of strings is re-inserted in order.
+func replaceContactFollowers(ctx context.Context, tx *sql.Tx, accountID, userID, followJSON string, now int64) error {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM qiwei_contact_followers WHERE account_id = ? AND user_id = ?`,
+		accountID, userID,
+	); err != nil {
+		return err
+	}
+	followJSON = strings.TrimSpace(followJSON)
+	if followJSON == "" || followJSON == "[]" {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(followJSON), &ids); err != nil {
+		// Tolerate legacy object format: [{ "userid": "...", ... }, ...]
+		var objs []map[string]any
+		if err2 := json.Unmarshal([]byte(followJSON), &objs); err2 != nil {
+			return fmt.Errorf("parse follow_user_json: %w", err)
+		}
+		for _, o := range objs {
+			for _, k := range []string{"userid", "UserID", "user_id", "id"} {
+				if v, ok := o[k].(string); ok && v != "" {
+					ids = append(ids, v)
+					break
+				}
+			}
+		}
+	}
+	for i, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT IGNORE INTO qiwei_contact_followers
+			 (account_id, user_id, follow_user_id, position, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+			accountID, userID, id, i, now,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadContactFollowers assembles the follow_user_json field for one contact
+// from its qiwei_contact_followers rows.
+func (r *contactRepo) loadContactFollowers(ctx context.Context, accountID, userID string) (string, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT follow_user_id FROM qiwei_contact_followers
+		 WHERE account_id = ? AND user_id = ? ORDER BY position ASC`,
+		accountID, userID,
 	)
-	return err
+	if err != nil {
+		return "[]", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "[]", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "[]", err
+	}
+	if len(ids) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return "[]", err
+	}
+	return string(b), nil
 }
 
 func (r *contactRepo) GetContact(ctx context.Context, accountID, userID string) (Contact, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+contactColumns+` FROM qiwei_contacts WHERE account_id = ? AND user_id = ?`,
+		`SELECT `+contactColumns+` FROM qiwei_contacts
+		 WHERE account_id = ? AND user_id = ? AND deleted_at = 0`,
 		accountID, userID,
 	)
 	c, err := scanContact(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contact{}, ErrContactNotFound
 	}
-	return c, err
+	if err != nil {
+		return Contact{}, err
+	}
+	c.FollowUserJSON, _ = r.loadContactFollowers(ctx, c.AccountID, c.UserID)
+	return c, nil
 }
 
 func (r *contactRepo) GetContactByExternalUserID(ctx context.Context, accountID, externalUserID string) (Contact, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+contactColumns+` FROM qiwei_contacts
-		 WHERE account_id = ? AND external_user_id = ?
+		 WHERE account_id = ? AND external_user_id = ? AND deleted_at = 0
 		 ORDER BY last_synced_at DESC, updated_at DESC
 		 LIMIT 1`,
 		accountID, externalUserID,
@@ -223,7 +324,11 @@ func (r *contactRepo) GetContactByExternalUserID(ctx context.Context, accountID,
 	if errors.Is(err, sql.ErrNoRows) {
 		return Contact{}, ErrContactNotFound
 	}
-	return c, err
+	if err != nil {
+		return Contact{}, err
+	}
+	c.FollowUserJSON, _ = r.loadContactFollowers(ctx, c.AccountID, c.UserID)
+	return c, nil
 }
 
 func (r *contactRepo) SearchContacts(ctx context.Context, accountID, query string, limit int) ([]Contact, error) {
@@ -232,7 +337,7 @@ func (r *contactRepo) SearchContacts(ctx context.Context, accountID, query strin
 	}
 	pattern := "%" + strings.TrimSpace(query) + "%"
 	rows, err := r.db.QueryContext(ctx, `SELECT `+contactColumns+` FROM qiwei_contacts
-		WHERE account_id = ? AND (
+		WHERE account_id = ? AND deleted_at = 0 AND (
 			user_id LIKE ? OR external_user_id LIKE ? OR nickname LIKE ? OR real_name LIKE ? OR alias LIKE ? OR remark LIKE ?
 		)
 		ORDER BY updated_at DESC, user_id ASC
@@ -251,7 +356,14 @@ func (r *contactRepo) SearchContacts(ctx context.Context, accountID, query strin
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Populate follow_user_json for each hit (typically short results).
+	for i := range out {
+		out[i].FollowUserJSON, _ = r.loadContactFollowers(ctx, out[i].AccountID, out[i].UserID)
+	}
+	return out, nil
 }
 
 func (r *contactRepo) UpsertRoom(ctx context.Context, room Room) error {
@@ -264,7 +376,7 @@ func (r *contactRepo) UpsertRoom(ctx context.Context, room Room) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	if room.FirstSeenAt == 0 {
 		room.FirstSeenAt = now
 	}
@@ -276,18 +388,19 @@ func (r *contactRepo) UpsertRoom(ctx context.Context, room Room) error {
 	}
 	_, err = r.db.ExecContext(ctx, `INSERT INTO qiwei_rooms (
 		account_id, room_id, name, announcement, notice, owner_user_id, member_count,
-		qr_code_url, raw_json, first_seen_at, last_synced_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(account_id, room_id) DO UPDATE SET
-		name = excluded.name,
-		announcement = excluded.announcement,
-		notice = excluded.notice,
-		owner_user_id = excluded.owner_user_id,
-		member_count = excluded.member_count,
-		qr_code_url = excluded.qr_code_url,
-		raw_json = excluded.raw_json,
-		last_synced_at = excluded.last_synced_at,
-		updated_at = excluded.updated_at`,
+		qr_code_url, raw_json, first_seen_at, last_synced_at, updated_at, deleted_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) AS new
+	ON DUPLICATE KEY UPDATE
+		name           = new.name,
+		announcement   = new.announcement,
+		notice         = new.notice,
+		owner_user_id  = new.owner_user_id,
+		member_count   = new.member_count,
+		qr_code_url    = new.qr_code_url,
+		raw_json       = new.raw_json,
+		last_synced_at = new.last_synced_at,
+		updated_at     = new.updated_at,
+		deleted_at     = 0`,
 		room.AccountID, room.RoomID, room.Name, room.Announcement, room.Notice, room.OwnerUserID,
 		room.MemberCount, room.QRCodeURL, rawJSON, room.FirstSeenAt, room.LastSyncedAt, room.UpdatedAt,
 	)
@@ -296,7 +409,8 @@ func (r *contactRepo) UpsertRoom(ctx context.Context, room Room) error {
 
 func (r *contactRepo) GetRoom(ctx context.Context, accountID, roomID string) (Room, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+roomColumns+` FROM qiwei_rooms WHERE account_id = ? AND room_id = ?`,
+		`SELECT `+roomColumns+` FROM qiwei_rooms
+		 WHERE account_id = ? AND room_id = ? AND deleted_at = 0`,
 		accountID, roomID,
 	)
 	room, err := scanRoom(row)
@@ -323,13 +437,13 @@ func (r *contactRepo) ReplaceRoomMembers(ctx context.Context, accountID, roomID 
 		return tx.Commit()
 	}
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO qiwei_room_members (
-		account_id, room_id, user_id, display_name, role, joined_at, last_seen_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+		account_id, room_id, user_id, display_name, role, joined_at, last_seen_at, deleted_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	for _, member := range members {
 		if strings.TrimSpace(member.UserID) == "" {
 			continue
@@ -360,7 +474,7 @@ func (r *contactRepo) DeleteRoomMember(ctx context.Context, accountID, roomID, u
 func (r *contactRepo) ListRoomMembers(ctx context.Context, accountID, roomID string) ([]RoomMember, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT `+roomMemberColumns+` FROM qiwei_room_members
-		 WHERE account_id = ? AND room_id = ?
+		 WHERE account_id = ? AND room_id = ? AND deleted_at = 0
 		 ORDER BY role DESC, last_seen_at DESC, user_id ASC`,
 		accountID, roomID,
 	)
@@ -389,7 +503,7 @@ func (r *contactRepo) UpsertIdentityLink(ctx context.Context, link IdentityLink)
 	if err != nil {
 		return IdentityLinkUpsertResult{}, err
 	}
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	existing, err := r.ResolveIdentityLink(ctx, link.DownstreamSystem, link.DownstreamID)
 	if err != nil && !errors.Is(err, ErrIdentityLinkNotFound) {
 		return IdentityLinkUpsertResult{}, err
@@ -397,8 +511,8 @@ func (r *contactRepo) UpsertIdentityLink(ctx context.Context, link IdentityLink)
 	if errors.Is(err, ErrIdentityLinkNotFound) {
 		res, err := r.db.ExecContext(ctx, `INSERT INTO qiwei_identity_links (
 			account_id, user_id, external_user_id, downstream_system, downstream_id,
-			downstream_meta_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			downstream_meta_json, created_at, updated_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 			link.AccountID, link.UserID, link.ExternalUserID, link.DownstreamSystem, link.DownstreamID,
 			metaJSON, now, now,
 		)
@@ -415,7 +529,7 @@ func (r *contactRepo) UpsertIdentityLink(ctx context.Context, link IdentityLink)
 
 	_, err = r.db.ExecContext(ctx, `UPDATE qiwei_identity_links SET
 		account_id = ?, user_id = ?, external_user_id = ?, downstream_meta_json = ?, updated_at = ?
-		WHERE id = ?`,
+		WHERE id = ? AND deleted_at = 0`,
 		link.AccountID, link.UserID, link.ExternalUserID, metaJSON, now, existing.ID,
 	)
 	if err != nil {
@@ -437,7 +551,7 @@ func (r *contactRepo) UpsertIdentityLink(ctx context.Context, link IdentityLink)
 func (r *contactRepo) ResolveIdentityLink(ctx context.Context, downstreamSystem, downstreamID string) (IdentityLink, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT `+identityLinkColumns+` FROM qiwei_identity_links
-		 WHERE downstream_system = ? AND downstream_id = ?`,
+		 WHERE downstream_system = ? AND downstream_id = ? AND deleted_at = 0`,
 		downstreamSystem, downstreamID,
 	)
 	link, err := scanIdentityLink(row)
@@ -449,7 +563,7 @@ func (r *contactRepo) ResolveIdentityLink(ctx context.Context, downstreamSystem,
 
 func (r *contactRepo) ListIdentityLinksForContact(ctx context.Context, accountID, userID, externalUserID string) ([]IdentityLink, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+identityLinkColumns+` FROM qiwei_identity_links
-		WHERE account_id = ? AND (user_id = ? OR external_user_id = ?)
+		WHERE account_id = ? AND deleted_at = 0 AND (user_id = ? OR external_user_id = ?)
 		ORDER BY updated_at DESC, id DESC`,
 		accountID, userID, externalUserID,
 	)
@@ -474,10 +588,10 @@ func (r *contactRepo) CountByAccount(ctx context.Context, accountID string) (Con
 		dst *int64
 		sql string
 	}{
-		{&counts.Contacts, `SELECT COUNT(*) FROM qiwei_contacts WHERE account_id = ?`},
-		{&counts.Rooms, `SELECT COUNT(*) FROM qiwei_rooms WHERE account_id = ?`},
-		{&counts.RoomMembers, `SELECT COUNT(*) FROM qiwei_room_members WHERE account_id = ?`},
-		{&counts.IdentityLinks, `SELECT COUNT(*) FROM qiwei_identity_links WHERE account_id = ?`},
+		{&counts.Contacts, `SELECT COUNT(*) FROM qiwei_contacts WHERE account_id = ? AND deleted_at = 0`},
+		{&counts.Rooms, `SELECT COUNT(*) FROM qiwei_rooms WHERE account_id = ? AND deleted_at = 0`},
+		{&counts.RoomMembers, `SELECT COUNT(*) FROM qiwei_room_members WHERE account_id = ? AND deleted_at = 0`},
+		{&counts.IdentityLinks, `SELECT COUNT(*) FROM qiwei_identity_links WHERE account_id = ? AND deleted_at = 0`},
 	}
 	for _, q := range queries {
 		if err := r.db.QueryRowContext(ctx, q.sql, accountID).Scan(q.dst); err != nil {

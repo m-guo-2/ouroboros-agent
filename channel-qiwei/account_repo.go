@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
+
+	"channel-qiwei/internal/timeutil"
 )
 
 // Account mirrors one row of the qiwei_accounts table.
@@ -61,10 +62,13 @@ func scanAccount(scanner interface {
 	return a, err
 }
 
-// ListAccounts returns every account row, ordered by created_at ascending.
+// ListAccounts returns every live account row, ordered by created_at ascending.
+// Soft-deleted rows (deleted_at != 0) are filtered out.
 func (r *accountRepo) ListAccounts(ctx context.Context) ([]Account, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+accountColumns+` FROM qiwei_accounts ORDER BY created_at ASC, id ASC`)
+		`SELECT `+accountColumns+` FROM qiwei_accounts
+		 WHERE deleted_at = 0
+		 ORDER BY created_at ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +86,8 @@ func (r *accountRepo) ListAccounts(ctx context.Context) ([]Account, error) {
 
 func (r *accountRepo) GetAccount(ctx context.Context, id string) (Account, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+accountColumns+` FROM qiwei_accounts WHERE id = ?`, id)
+		`SELECT `+accountColumns+` FROM qiwei_accounts
+		 WHERE id = ? AND deleted_at = 0`, id)
 	a, err := scanAccount(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrAccountNotFound
@@ -92,7 +97,8 @@ func (r *accountRepo) GetAccount(ctx context.Context, id string) (Account, error
 
 func (r *accountRepo) GetAccountByGUID(ctx context.Context, guid string) (Account, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT `+accountColumns+` FROM qiwei_accounts WHERE guid = ?`, guid)
+		`SELECT `+accountColumns+` FROM qiwei_accounts
+		 WHERE guid = ? AND deleted_at = 0`, guid)
 	a, err := scanAccount(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrAccountNotFound
@@ -108,7 +114,7 @@ func (r *accountRepo) CreateAccount(ctx context.Context, a Account) (Account, er
 	if a.GUID == "" || a.Token == "" {
 		return Account{}, fmt.Errorf("guid and token are required")
 	}
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	if a.ID == "" {
 		a.ID = "qw_" + deriveShortHash(a.GUID)
 	}
@@ -126,8 +132,8 @@ func (r *accountRepo) CreateAccount(ctx context.Context, a Account) (Account, er
 	_, err := r.db.ExecContext(ctx, `INSERT INTO qiwei_accounts (
 		id, guid, token, short_hash, display_name, agent_id, enabled,
 		self_user_id, self_name, self_alias, self_avatar_url, self_corp_name, self_synced_at,
-		meta_json, notes, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		meta_json, notes, created_at, updated_at, deleted_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		a.ID, a.GUID, a.Token, a.ShortHash, a.DisplayName, a.AgentID, boolToInt(a.Enabled),
 		a.SelfUserID, a.SelfName, a.SelfAlias, a.SelfAvatarURL, a.SelfCorpName, a.SelfSyncedAt,
 		a.MetaJSON, a.Notes, a.CreatedAt, a.UpdatedAt,
@@ -151,7 +157,7 @@ type AccountPatch struct {
 
 func (r *accountRepo) UpdateAccount(ctx context.Context, id string, patch AccountPatch) (Account, error) {
 	sets := []string{"updated_at = ?"}
-	args := []any{time.Now().Unix()}
+	args := []any{timeutil.NowMs()}
 
 	if patch.Token != nil {
 		sets = append(sets, "token = ?")
@@ -180,7 +186,8 @@ func (r *accountRepo) UpdateAccount(ctx context.Context, id string, patch Accoun
 
 	args = append(args, id)
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE qiwei_accounts SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+		`UPDATE qiwei_accounts SET `+strings.Join(sets, ", ")+`
+		 WHERE id = ? AND deleted_at = 0`, args...)
 	if err != nil {
 		return Account{}, err
 	}
@@ -191,11 +198,14 @@ func (r *accountRepo) UpdateAccount(ctx context.Context, id string, patch Accoun
 	return r.GetAccount(ctx, id)
 }
 
-// SoftDeleteAccount flips enabled to 0 (keeping history / session links).
+// SoftDeleteAccount marks the row as deleted (deleted_at=now) and also flips
+// enabled=0 for backwards-compatibility with code still gating on enabled.
 func (r *accountRepo) SoftDeleteAccount(ctx context.Context, id string) error {
+	now := timeutil.NowMs()
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE qiwei_accounts SET enabled = 0, updated_at = ? WHERE id = ?`,
-		time.Now().Unix(), id,
+		`UPDATE qiwei_accounts SET enabled = 0, deleted_at = ?, updated_at = ?
+		 WHERE id = ? AND deleted_at = 0`,
+		now, now, id,
 	)
 	if err != nil {
 		return err
@@ -206,8 +216,9 @@ func (r *accountRepo) SoftDeleteAccount(ctx context.Context, id string) error {
 	return nil
 }
 
-// HardDeleteAccount drops the row and its qiwei_known_rooms entries.
-func (r *accountRepo) HardDeleteAccount(ctx context.Context, id string) error {
+// PurgeAccount irreversibly removes the account row and its known-room
+// tracking entries. Callers should prefer SoftDeleteAccount.
+func (r *accountRepo) PurgeAccount(ctx context.Context, id string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -227,6 +238,12 @@ func (r *accountRepo) HardDeleteAccount(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
+// HardDeleteAccount is retained as an alias for PurgeAccount to avoid churning
+// any admin tooling that still references the old name.
+func (r *accountRepo) HardDeleteAccount(ctx context.Context, id string) error {
+	return r.PurgeAccount(ctx, id)
+}
+
 // ProfileUpdate carries the identity snapshot fetched from /user/getProfile.
 type ProfileUpdate struct {
 	SelfUserID    string
@@ -237,11 +254,11 @@ type ProfileUpdate struct {
 }
 
 func (r *accountRepo) UpdateProfile(ctx context.Context, id string, p ProfileUpdate) error {
-	now := time.Now().Unix()
+	now := timeutil.NowMs()
 	res, err := r.db.ExecContext(ctx, `UPDATE qiwei_accounts SET
 		self_user_id = ?, self_name = ?, self_alias = ?, self_avatar_url = ?,
 		self_corp_name = ?, self_synced_at = ?, updated_at = ?
-		WHERE id = ?`,
+		WHERE id = ? AND deleted_at = 0`,
 		p.SelfUserID, p.SelfName, p.SelfAlias, p.SelfAvatarURL,
 		p.SelfCorpName, now, now, id,
 	)

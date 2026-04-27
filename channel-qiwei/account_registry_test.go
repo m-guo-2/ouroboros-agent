@@ -2,17 +2,13 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
 
 func TestLoadRegistryOnlyIncludesEnabledAccounts(t *testing.T) {
-	db, err := OpenDB(filepath.Join(t.TempDir(), "qiwei.db"))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	db := openTestDB(t)
 	defer db.Close()
 	repo := newAccountRepo(db)
 	ctx := context.Background()

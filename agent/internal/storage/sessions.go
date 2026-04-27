@@ -58,14 +58,14 @@ const sessionSelectSQL = `
 
 // GetSession retrieves a session by its ID.
 func GetSession(sessionID string) (*SessionData, error) {
-	row := DB.QueryRow(sessionSelectSQL+" WHERE id = ?", sessionID)
+	row := DB.QueryRow(sessionSelectSQL+" WHERE id = ? AND deleted_at = 0", sessionID)
 	return scanSession(row)
 }
 
 // FindSessionByKey finds the most-recent session for a given agent + session key.
 func FindSessionByKey(agentID, sessionKey string) (*SessionData, error) {
 	row := DB.QueryRow(
-		sessionSelectSQL+" WHERE agent_id = ? AND session_key = ? ORDER BY created_at DESC LIMIT 1",
+		sessionSelectSQL+" WHERE agent_id = ? AND session_key = ? AND deleted_at = 0 ORDER BY created_at DESC LIMIT 1",
 		agentID, sessionKey,
 	)
 	return scanSession(row)
@@ -75,7 +75,7 @@ func FindSessionByKey(agentID, sessionKey string) (*SessionData, error) {
 // Used as legacy fallback for sessions created before session_key was introduced.
 func FindSessionByConversationID(channelConversationID, agentID string) (*SessionData, error) {
 	row := DB.QueryRow(
-		sessionSelectSQL+" WHERE channel_conversation_id = ? AND agent_id = ? ORDER BY created_at DESC LIMIT 1",
+		sessionSelectSQL+" WHERE channel_conversation_id = ? AND agent_id = ? AND deleted_at = 0 ORDER BY created_at DESC LIMIT 1",
 		channelConversationID, agentID,
 	)
 	return scanSession(row)
@@ -171,9 +171,8 @@ func ListSessions(agentID, userID, channel, status, search string, limit int, be
 		clauses = append(clauses, "updated_at < ?")
 		args = append(args, beforeUpdatedAt)
 	}
-	if len(clauses) > 0 {
-		query += " WHERE " + joinClauses(clauses)
-	}
+	clauses = append(clauses, "deleted_at = 0")
+	query += " WHERE " + joinClauses(clauses)
 	query += " ORDER BY updated_at DESC LIMIT ?"
 	args = append(args, limit)
 
@@ -222,10 +221,53 @@ func joinClauses(parts []string) string {
 	return result
 }
 
-// DeleteSession removes a session row by ID.
+// DeleteSession soft-deletes a session by ID. The messages log is kept for
+// auditability; use PurgeSession for irreversible physical removal.
 func DeleteSession(sessionID string) error {
-	_, err := DB.Exec("DELETE FROM agent_sessions WHERE id = ?", sessionID)
+	now := timeutil.NowMs()
+	_, err := DB.Exec(`UPDATE agent_sessions SET deleted_at = ?, updated_at = ?
+		WHERE id = ? AND deleted_at = 0`, now, now, sessionID)
 	return err
+}
+
+// PurgeSession irreversibly removes a session and all its messages. Only
+// invoked by explicit admin tooling.
+func PurgeSession(sessionID string) error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteSessionChildren(tx, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM agent_sessions WHERE id = ?`, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func deleteSessionChildren(tx *sql.Tx, sessionID string) error {
+	for _, stmt := range []string{
+		`DELETE mtc FROM message_tool_calls mtc
+		 JOIN messages m ON m.id = mtc.message_id WHERE m.session_id = ?`,
+		`DELETE ma FROM message_attachments ma
+		 JOIN messages m ON m.id = ma.message_id WHERE m.session_id = ?`,
+		`DELETE ccam FROM context_compaction_archived_messages ccam
+		 JOIN context_compaction_archives cca ON cca.id = ccam.archive_id
+		 WHERE cca.session_id = ?`,
+		`DELETE FROM context_compaction_archives WHERE session_id = ?`,
+		`DELETE FROM context_compactions WHERE session_id = ?`,
+		`DELETE FROM session_events WHERE session_id = ?`,
+		`DELETE FROM session_facts WHERE session_id = ?`,
+		`DELETE FROM session_active_skills WHERE session_id = ?`,
+		`DELETE FROM messages WHERE session_id = ?`,
+	} {
+		if _, err := tx.Exec(stmt, sessionID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateSessionContextAndCursor atomically persists both the conversation

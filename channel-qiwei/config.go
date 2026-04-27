@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,9 +25,14 @@ type Config struct {
 	DataDir     string `yaml:"data_dir"`
 	HTTPTimeout int    `yaml:"http_timeout"`
 
-	// DBPath is the SQLite file holding the multi-account registry.
-	// Defaults to "{DataDir}/qiwei.db" when empty.
+	// DBPath is the legacy SQLite file path. Retained solely to warn at
+	// startup when the old environment variable is still set. The active
+	// persistence backend is MySQL (see MySQL below).
 	DBPath string `yaml:"db_path"`
+
+	// MySQL connection parameters. Credentials are shared with other
+	// services in the same deployment; Database is per-service.
+	MySQL MySQLSection `yaml:"mysql"`
 
 	// AdminToken gates the /api/qiwei/_admin/* endpoints. When empty the
 	// admin router is not mounted at all (a safer default than "any
@@ -96,6 +102,18 @@ type VolcSpeechConfig struct {
 	QueryURL   string `yaml:"query_url"`
 }
 
+type MySQLSection struct {
+	Host            string `yaml:"host"`
+	Port            string `yaml:"port"`
+	User            string `yaml:"user"`
+	Password        string `yaml:"password"`
+	Database        string `yaml:"database"`
+	MaxOpenConns    int    `yaml:"max_open_conns"`
+	MaxIdleConns    int    `yaml:"max_idle_conns"`
+	ConnMaxLifetime string `yaml:"conn_max_lifetime"`
+	Params          string `yaml:"params"`
+}
+
 type OSSConfig struct {
 	Endpoint      string `yaml:"endpoint"`
 	Bucket        string `yaml:"bucket"`
@@ -135,8 +153,38 @@ func LoadConfig() Config {
 		}
 	}
 
+	applyQiweiEnv(&cfg)
 	cfg.flatten()
 	return cfg
+}
+
+// applyQiweiEnv lets environment variables override YAML values. Only
+// non-empty env vars take effect so YAML remains the default source.
+func applyQiweiEnv(cfg *Config) {
+	envStr := func(key string, dst *string) {
+		if v := os.Getenv(key); v != "" {
+			*dst = v
+		}
+	}
+	envInt := func(key string, dst *int) {
+		if v := os.Getenv(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				*dst = n
+			}
+		}
+	}
+
+	envStr("QIWEI_DB_PATH", &cfg.DBPath) // legacy; warned at startup
+
+	envStr("MYSQL_HOST", &cfg.MySQL.Host)
+	envStr("MYSQL_PORT", &cfg.MySQL.Port)
+	envStr("MYSQL_USER", &cfg.MySQL.User)
+	envStr("MYSQL_PASSWORD", &cfg.MySQL.Password)
+	envStr("QIWEI_MYSQL_DATABASE", &cfg.MySQL.Database)
+	envInt("QIWEI_MYSQL_MAX_OPEN_CONNS", &cfg.MySQL.MaxOpenConns)
+	envInt("QIWEI_MYSQL_MAX_IDLE_CONNS", &cfg.MySQL.MaxIdleConns)
+	envStr("QIWEI_MYSQL_CONN_MAX_LIFETIME", &cfg.MySQL.ConnMaxLifetime)
+	envStr("QIWEI_MYSQL_PARAMS", &cfg.MySQL.Params)
 }
 
 func configDefaults() Config {
@@ -149,6 +197,16 @@ func configDefaults() Config {
 		ProfileSyncInterval: 6 * time.Hour,
 		ContactSyncInterval: 6 * time.Hour,
 		ContactSyncEnabled:  true,
+		MySQL: MySQLSection{
+			Host:            "127.0.0.1",
+			Port:            "3306",
+			User:            "root",
+			Database:        "moli_qiwei",
+			MaxOpenConns:    16,
+			MaxIdleConns:    8,
+			ConnMaxLifetime: "30m",
+			Params:          "charset=utf8mb4&collation=utf8mb4_bin&loc=UTC&multiStatements=true",
+		},
 		Agent: AgentConfig{
 			Enabled:   true,
 			ServerURL: "http://localhost:1997",

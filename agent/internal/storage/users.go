@@ -13,7 +13,8 @@ import (
 func ResolveUser(channelType, channelUserID, displayName string) (string, bool, error) {
 	var userID string
 	err := DB.QueryRow(
-		`SELECT user_id FROM user_channels WHERE channel_type = ? AND channel_user_id = ?`,
+		`SELECT user_id FROM user_channels
+		 WHERE channel_type = ? AND channel_user_id = ? AND deleted_at = 0`,
 		channelType, channelUserID,
 	).Scan(&userID)
 
@@ -36,14 +37,17 @@ func ResolveUser(channelType, channelUserID, displayName string) (string, bool, 
 
 	now := timeutil.NowMs()
 	if _, err = DB.Exec(
-		`INSERT OR IGNORE INTO users (id, name, type, created_at, updated_at) VALUES (?, ?, 'human', ?, ?)`,
+		`INSERT IGNORE INTO users (id, name, type, metadata, created_at, updated_at)
+		 VALUES (?, ?, 'human', '{}', ?, ?)`,
 		userID, name, now, now,
 	); err != nil {
 		return "", false, fmt.Errorf("insert user: %w", err)
 	}
 
 	if _, err = DB.Exec(
-		`INSERT OR IGNORE INTO user_channels (user_id, channel_type, channel_user_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT IGNORE INTO user_channels
+		 (user_id, channel_type, channel_user_id, display_name, channel_meta, created_at)
+		 VALUES (?, ?, ?, ?, '{}', ?)`,
 		userID, channelType, channelUserID, displayName, now,
 	); err != nil {
 		return "", false, fmt.Errorf("insert user_channel: %w", err)

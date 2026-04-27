@@ -3,19 +3,14 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
-// newTestRepo opens a fresh on-disk SQLite in the test's tempdir and returns
-// a repo + its db (so tests can close / inspect directly when needed).
+// newTestRepo opens a fresh MySQL test database (or skips the test when
+// TEST_MYSQL_* env is not configured) and returns a repo bound to it.
 func newTestRepo(t *testing.T) *accountRepo {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "qiwei.db")
-	db, err := OpenDB(dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	db := openTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 	return newAccountRepo(db)
 }

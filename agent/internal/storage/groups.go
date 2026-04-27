@@ -3,7 +3,8 @@ package storage
 import (
 	"crypto/rand"
 	"fmt"
-	"time"
+
+	"agent/internal/timeutil"
 )
 
 // ChannelGroup represents a group chat reported by a channel adapter.
@@ -28,16 +29,17 @@ func UpsertChannelGroup(agentID, channel, channelGroupID, groupName, status stri
 	if status == "" {
 		status = "active"
 	}
-	now := time.Now().UnixMilli()
+	now := timeutil.NowMs()
 	id := fmt.Sprintf("cg-%x%d", randGroupBytes(6), now%1e6)
 
 	_, err := DB.Exec(`
-		INSERT INTO channel_groups (id, agent_id, channel, channel_group_id, group_name, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(agent_id, channel, channel_group_id) DO UPDATE SET
-			group_name = CASE WHEN excluded.group_name != '' THEN excluded.group_name ELSE channel_groups.group_name END,
-			status = excluded.status,
-			updated_at = excluded.updated_at
+		INSERT INTO channel_groups
+			(id, agent_id, channel, channel_group_id, group_name, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?) AS new
+		ON DUPLICATE KEY UPDATE
+			group_name = CASE WHEN new.group_name <> '' THEN new.group_name ELSE channel_groups.group_name END,
+			status     = new.status,
+			updated_at = new.updated_at
 	`, id, agentID, channel, channelGroupID, groupName, status, now, now)
 	return err
 }
@@ -47,7 +49,7 @@ func GetChannelGroup(agentID, channel, channelGroupID string) (*ChannelGroup, er
 	row := DB.QueryRow(`
 		SELECT id, agent_id, channel, channel_group_id, group_name, status, created_at, updated_at
 		FROM channel_groups
-		WHERE agent_id = ? AND channel = ? AND channel_group_id = ?
+		WHERE agent_id = ? AND channel = ? AND channel_group_id = ? AND deleted_at = 0
 	`, agentID, channel, channelGroupID)
 
 	var g ChannelGroup
@@ -61,7 +63,7 @@ func GetChannelGroup(agentID, channel, channelGroupID string) (*ChannelGroup, er
 // ListChannelGroups returns all groups for a given agent, optionally filtered by channel.
 func ListChannelGroups(agentID, channel string) ([]ChannelGroup, error) {
 	query := `SELECT id, agent_id, channel, channel_group_id, group_name, status, created_at, updated_at
-		FROM channel_groups WHERE agent_id = ?`
+		FROM channel_groups WHERE agent_id = ? AND deleted_at = 0`
 	args := []any{agentID}
 	if channel != "" {
 		query += ` AND channel = ?`

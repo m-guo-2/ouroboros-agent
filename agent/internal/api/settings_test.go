@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"agent/internal/storage"
@@ -84,8 +83,5 @@ func TestHandleSettingsPutPersistsTavilyValues(t *testing.T) {
 
 func initSettingsTestDB(t *testing.T) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "settings-test.sqlite")
-	if err := storage.Init(dbPath); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	storage.SetupTestDB(t)
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,9 +22,13 @@ func main() {
 
 	ctx := context.Background()
 
-	db, err := OpenDB(cfg.DBPath)
+	if p := strings.TrimSpace(os.Getenv("QIWEI_DB_PATH")); p != "" {
+		logger.Warn(ctx, "QIWEI_DB_PATH set but ignored; using MySQL", "path", p)
+	}
+
+	db, err := OpenMySQL(cfg.MySQL)
 	if err != nil {
-		fmt.Println("open qiwei.db failed:", err.Error())
+		fmt.Println("open qiwei mysql failed:", err.Error())
 		os.Exit(1)
 	}
 	defer db.Close()

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -136,8 +135,5 @@ func TestTavilySearchToolUpstreamFailure(t *testing.T) {
 
 func initTavilyTestDB(t *testing.T) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "agent-test.sqlite")
-	if err := storage.Init(dbPath); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
+	storage.SetupTestDB(t)
 }

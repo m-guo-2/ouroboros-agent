@@ -14,7 +14,7 @@ func GetUserByID(userID string) (*UserRecord, error) {
 	var u UserRecord
 	err := DB.QueryRow(
 		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), created_at
-		 FROM users WHERE id = ?`, userID,
+		 FROM users WHERE id = ? AND deleted_at = 0`, userID,
 	).Scan(&u.ID, &u.Name, &u.Type, &u.AvatarURL, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -25,7 +25,7 @@ func GetUserByID(userID string) (*UserRecord, error) {
 func GetAllUsers() ([]UserRecord, error) {
 	rows, err := DB.Query(
 		`SELECT id, COALESCE(name,''), COALESCE(type,'human'), COALESCE(avatar_url,''), created_at
-		 FROM users ORDER BY created_at DESC`)
+		 FROM users WHERE deleted_at = 0 ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}

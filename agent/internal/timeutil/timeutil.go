@@ -7,8 +7,10 @@ import (
 
 var CST = time.FixedZone("CST", 8*3600)
 
+// NowMs returns the current wall clock as UTC epoch milliseconds. This
+// is the canonical "now" for any *_at column stored as BIGINT.
 func NowMs() int64 {
-	return time.Now().UnixMilli()
+	return time.Now().UTC().UnixMilli()
 }
 
 func FormatCST(ms int64) string {

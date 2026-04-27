@@ -8,6 +8,8 @@ import (
 	"agent/internal/types"
 )
 
+// CompactionData is the header for one compaction run. The archived messages
+// themselves live in context_compaction_archives / context_compaction_archived_messages.
 type CompactionData struct {
 	ID                   int64  `json:"id"`
 	SessionID            string `json:"sessionId"`
@@ -81,16 +83,59 @@ func ListCompactions(sessionID string) ([]CompactionData, error) {
 	return out, rows.Err()
 }
 
+// SaveCompactionArchive persists an archive header plus one row per archived
+// message into the split schema. Everything happens inside a single txn so the
+// parent archive only becomes visible once its child rows are in place.
 func SaveCompactionArchive(compactionID int64, sessionID string, messages []types.AgentMessage) error {
-	data, err := json.Marshal(messages)
+	now := timeutil.NowMs()
+
+	tx, err := DB.Begin()
 	if err != nil {
-		return fmt.Errorf("marshal archived messages: %w", err)
+		return err
 	}
-	_, err = DB.Exec(
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
 		`INSERT INTO context_compaction_archives
-		 (session_id, compaction_id, archived_messages, message_count, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		sessionID, compactionID, string(data), len(messages), timeutil.NowMs(),
+		 (session_id, compaction_id, message_count, created_at)
+		 VALUES (?, ?, ?, ?)`,
+		sessionID, compactionID, len(messages), now,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("insert compaction archive header: %w", err)
+	}
+	archiveID, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("last insert id: %w", err)
+	}
+
+	for i, msg := range messages {
+		content, err := encodeAgentMessageContent(msg)
+		if err != nil {
+			return fmt.Errorf("marshal archived message %d: %w", i, err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO context_compaction_archived_messages
+			 (archive_id, seq, original_message_id, role, content, message_type, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			archiveID, i, 0, msg.Role, content, "text", now,
+		); err != nil {
+			return fmt.Errorf("insert archived message %d: %w", i, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// encodeAgentMessageContent renders the message's content blocks as JSON so
+// the split schema keeps round-trip fidelity for non-trivial block sequences.
+// Simple pure-text messages collapse to their plain text for readability.
+func encodeAgentMessageContent(m types.AgentMessage) (string, error) {
+	if len(m.Content) == 1 && m.Content[0].Type == "text" {
+		return m.Content[0].Text, nil
+	}
+	b, err := json.Marshal(m.Content)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

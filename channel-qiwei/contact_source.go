@@ -245,7 +245,7 @@ func cloneMap(in map[string]any) map[string]any {
 }
 
 func contactFromSnapshot(accountID string, snapshot ContactSnapshot, now time.Time) Contact {
-	ts := now.Unix()
+	ts := now.UTC().UnixMilli()
 	return Contact{
 		AccountID:      strings.TrimSpace(accountID),
 		UserID:         strings.TrimSpace(snapshot.UserID),
@@ -268,7 +268,7 @@ func contactFromSnapshot(accountID string, snapshot ContactSnapshot, now time.Ti
 }
 
 func roomFromSnapshot(accountID string, snapshot RoomSnapshot, now time.Time) Room {
-	ts := now.Unix()
+	ts := now.UTC().UnixMilli()
 	return Room{
 		AccountID:    strings.TrimSpace(accountID),
 		RoomID:       strings.TrimSpace(snapshot.RoomID),
@@ -287,7 +287,7 @@ func roomFromSnapshot(accountID string, snapshot RoomSnapshot, now time.Time) Ro
 
 func roomMembersFromSnapshot(accountID string, snapshot RoomSnapshot, now time.Time) []RoomMember {
 	out := make([]RoomMember, 0, len(snapshot.Members))
-	ts := now.Unix()
+	ts := now.UTC().UnixMilli()
 	for _, member := range snapshot.Members {
 		if strings.TrimSpace(member.UserID) == "" {
 			continue

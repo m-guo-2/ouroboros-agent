@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"path/filepath"
 	"testing"
 
 	"agent/internal/types"
@@ -9,17 +8,8 @@ import (
 
 func setupCompactionsTestDB(t *testing.T) func() {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "compactions_test.db")
-	if err := Init(dbPath); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	return func() {
-		if DB != nil {
-			_ = DB.Close()
-			DB = nil
-		}
-	}
+	SetupTestDB(t)
+	return func() {} // global DB is reused across tests; reset handled by SetupTestDB
 }
 
 func TestSaveCompactionReturnsID(t *testing.T) {

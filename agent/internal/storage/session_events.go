@@ -48,7 +48,7 @@ func HasSessionEventsAfter(sessionID string, afterSeq int64) (bool, error) {
 
 func GetProcessingSessionsWithPendingEvents() ([]SessionData, error) {
 	rows, err := DB.Query(
-		sessionSelectSQL + ` WHERE execution_status = 'processing'`,
+		sessionSelectSQL + ` WHERE execution_status = 'processing' AND deleted_at = 0`,
 	)
 	if err != nil {
 		return nil, err
@@ -58,11 +58,11 @@ func GetProcessingSessionsWithPendingEvents() ([]SessionData, error) {
 	var sessions []SessionData
 	for rows.Next() {
 		var sd SessionData
-		var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, ctx sql.NullString
+		var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, mode, ctx sql.NullString
 		if err := rows.Scan(
 			&sd.ID, &sd.Title, &agentID, &userID, &sourceChannel,
 			&sessionKey, &channelConvID, &channelName, &workDir,
-			&sd.ExecutionStatus, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+			&sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 		); err != nil {
 			return nil, err
 		}
@@ -73,6 +73,10 @@ func GetProcessingSessionsWithPendingEvents() ([]SessionData, error) {
 		sd.ChannelConversationID = channelConvID.String
 		sd.ChannelName = channelName.String
 		sd.WorkDir = workDir.String
+		sd.Mode = mode.String
+		if sd.Mode == "" {
+			sd.Mode = "normal"
+		}
 		sd.Context = ctx.String
 		sessions = append(sessions, sd)
 	}

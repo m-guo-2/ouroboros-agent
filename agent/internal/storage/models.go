@@ -54,7 +54,7 @@ func GetAllModels() ([]ModelResponse, error) {
 	rows, err := DB.Query(`SELECT id, name, provider, enabled,
 		CASE WHEN api_key IS NULL OR api_key = '' THEN 0 ELSE 1 END,
 		COALESCE(base_url,''), model, COALESCE(max_tokens, 4096), COALESCE(temperature, 0.7)
-		FROM models ORDER BY name`)
+		FROM models WHERE deleted_at = 0 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,6 @@ func GetAllModels() ([]ModelResponse, error) {
 			return nil, err
 		}
 		m.APIKey = ""
-		m.Enabled = m.Enabled
 		res := modelToResponse(m)
 		res.HasAPIKey = hasKey == 1
 		res.Configured = res.HasAPIKey
@@ -84,7 +83,7 @@ func GetModelByID(id string) (*ModelResponse, error) {
 	err := DB.QueryRow(`SELECT id, name, provider, enabled,
 		CASE WHEN api_key IS NULL OR api_key = '' THEN 0 ELSE 1 END,
 		COALESCE(base_url,''), model, COALESCE(max_tokens, 4096), COALESCE(temperature, 0.7)
-		FROM models WHERE id = ?`, id).Scan(
+		FROM models WHERE id = ? AND deleted_at = 0`, id).Scan(
 		&m.ID, &m.Name, &m.Provider, &m.Enabled, &hasKey, &m.BaseURL, &m.Model, &m.MaxTokens, &m.Temperature,
 	)
 	if err == sql.ErrNoRows {
@@ -103,7 +102,8 @@ func GetModelByID(id string) (*ModelResponse, error) {
 func GetEnabledModels() ([]ModelResponse, error) {
 	rows, err := DB.Query(`SELECT id, name, provider, enabled,
 		COALESCE(base_url,''), model, COALESCE(max_tokens, 4096), COALESCE(temperature, 0.7)
-		FROM models WHERE enabled = 1 AND api_key IS NOT NULL AND api_key != '' ORDER BY name`)
+		FROM models WHERE enabled = 1 AND deleted_at = 0
+		AND api_key IS NOT NULL AND api_key != '' ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func GetModelByIDWithAPIKey(id string) (*ModelRecord, error) {
 	var enabled int
 	err := DB.QueryRow(`SELECT id, name, provider, enabled, COALESCE(api_key,''),
 		COALESCE(base_url,''), model, COALESCE(max_tokens, 4096), COALESCE(temperature, 0.7)
-		FROM models WHERE id = ?`, id).Scan(
+		FROM models WHERE id = ? AND deleted_at = 0`, id).Scan(
 		&m.ID, &m.Name, &m.Provider, &enabled, &m.APIKey, &m.BaseURL, &m.Model, &m.MaxTokens, &m.Temperature,
 	)
 	if err == sql.ErrNoRows {
@@ -188,7 +188,7 @@ func UpdateModel(id string, updates map[string]interface{}) (*ModelResponse, err
 		}
 		sb += p
 	}
-	if _, err := DB.Exec("UPDATE models SET "+sb+" WHERE id = ?", args...); err != nil {
+	if _, err := DB.Exec("UPDATE models SET "+sb+" WHERE id = ? AND deleted_at = 0", args...); err != nil {
 		return nil, err
 	}
 	return GetModelByID(id)

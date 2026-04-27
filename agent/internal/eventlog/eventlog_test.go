@@ -2,8 +2,6 @@ package eventlog
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"agent/internal/storage"
@@ -11,18 +9,8 @@ import (
 
 func setupTestDB(t *testing.T) func() {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	if err := storage.Init(dbPath); err != nil {
-		t.Fatalf("init db: %v", err)
-	}
-	return func() {
-		if storage.DB != nil {
-			storage.DB.Close()
-			storage.DB = nil
-		}
-		os.RemoveAll(dir)
-	}
+	storage.SetupTestDB(t)
+	return func() {}
 }
 
 func saveTestMessage(t *testing.T, sessionID, content string) int64 {
