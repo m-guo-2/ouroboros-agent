@@ -60,6 +60,8 @@ type channelIdentity struct {
 
 type incomingMessage struct {
 	Channel                 string               `json:"channel"`
+	ChannelAccountID        string               `json:"channelAccountId,omitempty"`
+	ChannelAccountShortHash string               `json:"channelAccountShortHash,omitempty"`
 	ChannelUserID           string               `json:"channelUserId"`
 	ChannelMessageID        string               `json:"channelMessageId"`
 	ChannelConversationID   string               `json:"channelConversationId,omitempty"`

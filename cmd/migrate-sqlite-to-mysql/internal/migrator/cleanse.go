@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // parseTextTimestampMs parses any of the SQLite TEXT timestamp formats
@@ -141,6 +142,17 @@ func defaultJSONObject(s string) string {
 		return "{}"
 	}
 	return s
+}
+
+// cleanTextFields coerces legacy SQLite text into valid UTF-8 so MySQL
+// utf8mb4 columns do not reject rows that contain historical mojibake bytes.
+func cleanTextFields(fields ...*string) {
+	for _, field := range fields {
+		if field == nil || utf8.ValidString(*field) {
+			continue
+		}
+		*field = strings.ToValidUTF8(*field, "\uFFFD")
+	}
 }
 
 // countToolUseBlocks counts how many "tool_use" blocks exist in a

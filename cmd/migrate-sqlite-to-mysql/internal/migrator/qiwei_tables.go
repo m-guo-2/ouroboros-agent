@@ -29,33 +29,52 @@ func qiweiAccountsTable() tableMigration {
 		source: "qiwei_accounts", target: "qiwei_accounts",
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT id, COALESCE(guid, ''),
-				       COALESCE(token, ''),
-				       COALESCE(display_name, ''),
-				       COALESCE(enabled, 1),
-				       COALESCE(meta_json, '{}'),
-				       COALESCE(notes, ''),
-				       COALESCE(last_synced_at, 0),
-				       COALESCE(created_at, 0), COALESCE(updated_at, 0)
-				FROM qiwei_accounts`)
+					SELECT id, COALESCE(guid, ''),
+					       COALESCE(token, ''),
+					       COALESCE(short_hash, ''),
+					       COALESCE(display_name, ''),
+					       COALESCE(agent_id, ''),
+					       COALESCE(enabled, 1),
+					       COALESCE(self_user_id, ''),
+					       COALESCE(self_name, ''),
+					       COALESCE(self_alias, ''),
+					       COALESCE(self_avatar_url, ''),
+					       COALESCE(self_corp_name, ''),
+					       COALESCE(self_synced_at, 0),
+					       COALESCE(meta_json, '{}'),
+					       COALESCE(notes, ''),
+					       COALESCE(created_at, 0), COALESCE(updated_at, 0)
+					FROM qiwei_accounts`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, _ map[string]int64) (int64, error) {
-			var id, guid, token, name, meta, notes string
-			var enabled, lastSyncedAt, createdAt, updatedAt int64
-			if err := row.Scan(&id, &guid, &token, &name, &enabled, &meta, &notes, &lastSyncedAt, &createdAt, &updatedAt); err != nil {
+			var id, guid, token, shortHash, name, agentID string
+			var selfUserID, selfName, selfAlias, selfAvatarURL, selfCorpName string
+			var meta, notes string
+			var enabled, selfSyncedAt, createdAt, updatedAt int64
+			if err := row.Scan(
+				&id, &guid, &token, &shortHash, &name, &agentID, &enabled,
+				&selfUserID, &selfName, &selfAlias, &selfAvatarURL, &selfCorpName,
+				&selfSyncedAt, &meta, &notes, &createdAt, &updatedAt,
+			); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&id, &guid, &token, &shortHash, &name, &agentID,
+				&selfUserID, &selfName, &selfAlias, &selfAvatarURL, &selfCorpName,
+				&meta, &notes)
 			meta = defaultJSONObject(meta)
 			// Legacy rows stored unix seconds; the new schema is ms.
-			lastSyncedAt = secToMs(lastSyncedAt)
+			selfSyncedAt = secToMs(selfSyncedAt)
 			createdAt = secToMs(createdAt)
 			updatedAt = secToMs(updatedAt)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_accounts
-				(id, guid, token, display_name, enabled, meta_json, notes,
-				 last_synced_at, created_at, updated_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-				id, guid, token, name, enabled, meta, notes, lastSyncedAt, createdAt, updatedAt); err != nil {
+					INSERT INTO qiwei_accounts
+					(id, guid, token, short_hash, display_name, agent_id, enabled,
+					 self_user_id, self_name, self_alias, self_avatar_url, self_corp_name,
+					 self_synced_at, meta_json, notes, created_at, updated_at, deleted_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				id, guid, token, shortHash, name, agentID, enabled,
+				selfUserID, selfName, selfAlias, selfAvatarURL, selfCorpName,
+				selfSyncedAt, meta, notes, createdAt, updatedAt); err != nil {
 				return 0, err
 			}
 			return 1, nil
@@ -70,49 +89,57 @@ func qiweiContactsTable() tableMigration {
 		children: children,
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT account_id, user_id,
-				       COALESCE(external_user_id, ''),
-				       COALESCE(source, ''),
-				       COALESCE(nickname, ''),
-				       COALESCE(remark, ''),
-				       COALESCE(name, ''),
-				       COALESCE(corp_name, ''),
-				       COALESCE(position, ''),
-				       COALESCE(mobile, ''),
-				       COALESCE(avatar, ''),
-				       COALESCE(gender, 0),
-				       COALESCE(follow_user_json, '[]'),
-				       COALESCE(raw_json, '{}'),
-				       COALESCE(last_synced_at, 0),
-				       COALESCE(created_at, 0), COALESCE(updated_at, 0)
-				FROM qiwei_contacts`)
+					SELECT account_id, user_id,
+					       COALESCE(external_user_id, ''),
+					       COALESCE(source, ''),
+					       COALESCE(nickname, ''),
+					       COALESCE(real_name, ''),
+					       COALESCE(alias, ''),
+					       COALESCE(remark, ''),
+					       COALESCE(avatar_url, ''),
+					       COALESCE(gender, ''),
+					       COALESCE(corp_id, ''),
+					       COALESCE(corp_name, ''),
+					       COALESCE(follow_user_json, '[]'),
+					       COALESCE(raw_json, '{}'),
+					       COALESCE(first_seen_at, 0),
+					       COALESCE(last_synced_at, 0),
+					       COALESCE(updated_at, 0)
+					FROM qiwei_contacts`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, childCounts map[string]int64) (int64, error) {
-			var accountID, userID, externalID, source, nickname, remark, name, corp, position, mobile, avatar string
-			var gender int64
+			var accountID, userID, externalID, source, nickname, realName, alias, remark string
+			var avatarURL, gender, corpID, corpName string
 			var followers, rawJSON string
-			var lastSyncedAt, createdAt, updatedAt int64
-			if err := row.Scan(&accountID, &userID, &externalID, &source, &nickname, &remark, &name, &corp, &position, &mobile, &avatar, &gender, &followers, &rawJSON, &lastSyncedAt, &createdAt, &updatedAt); err != nil {
+			var firstSeenAt, lastSyncedAt, updatedAt int64
+			if err := row.Scan(
+				&accountID, &userID, &externalID, &source, &nickname, &realName,
+				&alias, &remark, &avatarURL, &gender, &corpID, &corpName,
+				&followers, &rawJSON, &firstSeenAt, &lastSyncedAt, &updatedAt,
+			); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&accountID, &userID, &externalID, &source, &nickname,
+				&realName, &alias, &remark, &avatarURL, &gender, &corpID, &corpName,
+				&followers, &rawJSON)
 			rawJSON = defaultJSONObject(rawJSON)
+			firstSeenAt = secToMs(firstSeenAt)
 			lastSyncedAt = secToMs(lastSyncedAt)
-			createdAt = secToMs(createdAt)
 			updatedAt = secToMs(updatedAt)
 
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_contacts
-				(account_id, user_id, external_user_id, source, nickname, remark,
-				 name, corp_name, position, mobile, avatar, gender, raw_json,
-				 last_synced_at, created_at, updated_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-				accountID, userID, externalID, source, nickname, remark, name, corp,
-				position, mobile, avatar, gender, rawJSON,
-				lastSyncedAt, createdAt, updatedAt); err != nil {
+					INSERT INTO qiwei_contacts
+					(account_id, user_id, external_user_id, source, nickname, real_name,
+					 alias, remark, avatar_url, gender, corp_id, corp_name, raw_json,
+					 first_seen_at, last_synced_at, updated_at, deleted_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				accountID, userID, externalID, source, nickname, realName,
+				alias, remark, avatarURL, gender, corpID, corpName, rawJSON,
+				firstSeenAt, lastSyncedAt, updatedAt); err != nil {
 				return 0, err
 			}
 
-			n, err := insertContactFollowers(ctx, tx, accountID, userID, followers, createdAt)
+			n, err := insertContactFollowers(ctx, tx, accountID, userID, followers, firstSeenAt)
 			if err != nil {
 				return 0, err
 			}
@@ -144,34 +171,42 @@ func qiweiRoomsTable() tableMigration {
 		source: "qiwei_rooms", target: "qiwei_rooms",
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT account_id, room_id,
-				       COALESCE(name, ''),
-				       COALESCE(owner_id, ''),
-				       COALESCE(announcement, ''),
-				       COALESCE(notice, ''),
-				       COALESCE(member_count, 0),
-				       COALESCE(raw_json, '{}'),
-				       COALESCE(last_synced_at, 0),
-				       COALESCE(created_at, 0), COALESCE(updated_at, 0)
-				FROM qiwei_rooms`)
+					SELECT account_id, room_id,
+					       COALESCE(name, ''),
+					       COALESCE(announcement, ''),
+					       COALESCE(notice, ''),
+					       COALESCE(owner_user_id, ''),
+					       COALESCE(member_count, 0),
+					       COALESCE(qr_code_url, ''),
+					       COALESCE(raw_json, '{}'),
+					       COALESCE(first_seen_at, 0),
+					       COALESCE(last_synced_at, 0),
+					       COALESCE(updated_at, 0)
+					FROM qiwei_rooms`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, _ map[string]int64) (int64, error) {
-			var accountID, roomID, name, owner, announcement, notice, raw string
-			var memberCount, lastSyncedAt, createdAt, updatedAt int64
-			if err := row.Scan(&accountID, &roomID, &name, &owner, &announcement, &notice, &memberCount, &raw, &lastSyncedAt, &createdAt, &updatedAt); err != nil {
+			var accountID, roomID, name, announcement, notice, ownerUserID, qrCodeURL, raw string
+			var memberCount, firstSeenAt, lastSyncedAt, updatedAt int64
+			if err := row.Scan(
+				&accountID, &roomID, &name, &announcement, &notice, &ownerUserID,
+				&memberCount, &qrCodeURL, &raw, &firstSeenAt, &lastSyncedAt, &updatedAt,
+			); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&accountID, &roomID, &name, &announcement, &notice,
+				&ownerUserID, &qrCodeURL, &raw)
 			raw = defaultJSONObject(raw)
+			firstSeenAt = secToMs(firstSeenAt)
 			lastSyncedAt = secToMs(lastSyncedAt)
-			createdAt = secToMs(createdAt)
 			updatedAt = secToMs(updatedAt)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_rooms
-				(account_id, room_id, name, owner_id, announcement, notice,
-				 member_count, raw_json, last_synced_at, created_at, updated_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-				accountID, roomID, name, owner, announcement, notice,
-				memberCount, raw, lastSyncedAt, createdAt, updatedAt); err != nil {
+					INSERT INTO qiwei_rooms
+					(account_id, room_id, name, announcement, notice, owner_user_id,
+					 member_count, qr_code_url, raw_json, first_seen_at, last_synced_at,
+					 updated_at, deleted_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				accountID, roomID, name, announcement, notice, ownerUserID,
+				memberCount, qrCodeURL, raw, firstSeenAt, lastSyncedAt, updatedAt); err != nil {
 				return 0, err
 			}
 			return 1, nil
@@ -184,28 +219,28 @@ func qiweiRoomMembersTable() tableMigration {
 		source: "qiwei_room_members", target: "qiwei_room_members",
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT account_id, room_id, member_id,
-				       COALESCE(name, ''),
-				       COALESCE(role, ''),
-				       COALESCE(joined_at, 0),
-				       COALESCE(created_at, 0), COALESCE(updated_at, 0)
-				FROM qiwei_room_members`)
+					SELECT account_id, room_id, user_id,
+					       COALESCE(display_name, ''),
+					       COALESCE(role, ''),
+					       COALESCE(joined_at, 0),
+					       COALESCE(last_seen_at, 0)
+					FROM qiwei_room_members`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, _ map[string]int64) (int64, error) {
-			var accountID, roomID, memberID, name, role string
-			var joinedAt, createdAt, updatedAt int64
-			if err := row.Scan(&accountID, &roomID, &memberID, &name, &role, &joinedAt, &createdAt, &updatedAt); err != nil {
+			var accountID, roomID, userID, displayName, role string
+			var joinedAt, lastSeenAt int64
+			if err := row.Scan(&accountID, &roomID, &userID, &displayName, &role, &joinedAt, &lastSeenAt); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&accountID, &roomID, &userID, &displayName, &role)
 			joinedAt = secToMs(joinedAt)
-			createdAt = secToMs(createdAt)
-			updatedAt = secToMs(updatedAt)
+			lastSeenAt = secToMs(lastSeenAt)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_room_members
-				(account_id, room_id, member_id, name, role, joined_at,
-				 created_at, updated_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-				accountID, roomID, memberID, name, role, joinedAt, createdAt, updatedAt); err != nil {
+					INSERT INTO qiwei_room_members
+					(account_id, room_id, user_id, display_name, role, joined_at,
+					 last_seen_at, deleted_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+				accountID, roomID, userID, displayName, role, joinedAt, lastSeenAt); err != nil {
 				return 0, err
 			}
 			return 1, nil
@@ -218,27 +253,32 @@ func qiweiIdentityLinksTable() tableMigration {
 		source: "qiwei_identity_links", target: "qiwei_identity_links",
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT account_id, contact_user_id, downstream_channel,
-				       downstream_user_id,
-				       COALESCE(downstream_meta_json, '{}'),
-				       COALESCE(created_at, 0), COALESCE(updated_at, 0)
-				FROM qiwei_identity_links`)
+					SELECT id, COALESCE(account_id, ''),
+					       COALESCE(user_id, ''),
+					       COALESCE(external_user_id, ''),
+					       downstream_system,
+					       downstream_id,
+					       COALESCE(downstream_meta_json, '{}'),
+					       COALESCE(created_at, 0), COALESCE(updated_at, 0)
+					FROM qiwei_identity_links`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, _ map[string]int64) (int64, error) {
-			var accountID, contactUserID, downstreamChannel, downstreamUserID, meta string
+			var id int64
+			var accountID, userID, externalUserID, downstreamSystem, downstreamID, meta string
 			var createdAt, updatedAt int64
-			if err := row.Scan(&accountID, &contactUserID, &downstreamChannel, &downstreamUserID, &meta, &createdAt, &updatedAt); err != nil {
+			if err := row.Scan(&id, &accountID, &userID, &externalUserID, &downstreamSystem, &downstreamID, &meta, &createdAt, &updatedAt); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&accountID, &userID, &externalUserID, &downstreamSystem, &downstreamID, &meta)
 			meta = defaultJSONObject(meta)
 			createdAt = secToMs(createdAt)
 			updatedAt = secToMs(updatedAt)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_identity_links
-				(account_id, contact_user_id, downstream_channel, downstream_user_id,
-				 downstream_meta_json, created_at, updated_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-				accountID, contactUserID, downstreamChannel, downstreamUserID, meta,
+					INSERT INTO qiwei_identity_links
+					(id, account_id, user_id, external_user_id, downstream_system,
+					 downstream_id, downstream_meta_json, created_at, updated_at, deleted_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				id, accountID, userID, externalUserID, downstreamSystem, downstreamID, meta,
 				createdAt, updatedAt); err != nil {
 				return 0, err
 			}
@@ -252,9 +292,9 @@ func qiweiKnownRoomsTable() tableMigration {
 		source: "qiwei_known_rooms", target: "qiwei_known_rooms",
 		selectAt: func(ctx context.Context, db *sql.DB) (*sql.Rows, error) {
 			return db.QueryContext(ctx, `
-				SELECT account_id, room_id,
-				       COALESCE(first_seen_at, 0)
-				FROM qiwei_known_rooms`)
+					SELECT account_id, room_id,
+					       COALESCE(created_at, 0)
+					FROM qiwei_known_rooms`)
 		},
 		migrate: func(ctx context.Context, tx *sql.Tx, row *sql.Rows, _ map[string]int64) (int64, error) {
 			var accountID, roomID string
@@ -262,11 +302,12 @@ func qiweiKnownRoomsTable() tableMigration {
 			if err := row.Scan(&accountID, &roomID, &firstSeenAt); err != nil {
 				return 0, err
 			}
+			cleanTextFields(&accountID, &roomID)
 			firstSeenAt = secToMs(firstSeenAt)
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO qiwei_known_rooms
-				(account_id, room_id, first_seen_at, deleted_at)
-				VALUES (?, ?, ?, 0)`,
+					INSERT INTO qiwei_known_rooms
+					(account_id, room_id, created_at, deleted_at)
+					VALUES (?, ?, ?, 0)`,
 				accountID, roomID, firstSeenAt); err != nil {
 				return 0, err
 			}
@@ -296,25 +337,33 @@ func insertContactFollowers(ctx context.Context, tx *sql.Tx, accountID, userID, 
 	if raw == "" || raw == "null" || raw == "[]" {
 		return 0, nil
 	}
-	var arr []map[string]any
+	raw = strings.ToValidUTF8(raw, "\uFFFD")
+	var arr []any
 	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
 		return 0, fmt.Errorf("contact %s/%s follow_user_json: %w", accountID, userID, err)
 	}
 	for i, item := range arr {
-		followerID, _ := item["userid"].(string)
-		if followerID == "" {
-			followerID, _ = item["userId"].(string)
+		var followerID string
+		switch v := item.(type) {
+		case string:
+			followerID = v
+		case map[string]any:
+			followerID, _ = v["userid"].(string)
+			if followerID == "" {
+				followerID, _ = v["userId"].(string)
+			}
+			if followerID == "" {
+				followerID, _ = v["follow_user_id"].(string)
+			}
 		}
-		remark, _ := item["remark"].(string)
-		desc, _ := item["description"].(string)
-		payload, _ := json.Marshal(item)
+		if followerID == "" {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO qiwei_contact_followers
-			(account_id, contact_user_id, follower_user_id, remark, description,
-			 raw_json, position, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			accountID, userID, followerID, remark, desc,
-			defaultJSONObject(string(payload)), i, createdAt); err != nil {
+				INSERT INTO qiwei_contact_followers
+				(account_id, user_id, follow_user_id, position, created_at)
+				VALUES (?, ?, ?, ?, ?)`,
+			accountID, userID, followerID, i, createdAt); err != nil {
 			return 0, err
 		}
 	}

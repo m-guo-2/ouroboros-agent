@@ -345,6 +345,8 @@ func (a *app) handleNormalMessage(ctx context.Context, rt *accountRuntime, msg q
 	}
 	in := incomingMessage{
 		Channel:                 "qiwei",
+		ChannelAccountID:        rt.AccountID(),
+		ChannelAccountShortHash: rt.ShortHash(),
 		ChannelUserID:           msg.SenderID,
 		ChannelMessageID:        msg.MsgSvrID,
 		ChannelConversationID:   encodeConversationID(replyToID, rt.ShortHash()),

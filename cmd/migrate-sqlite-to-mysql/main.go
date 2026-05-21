@@ -76,22 +76,34 @@ func run(args []string) error {
 	start := time.Now()
 	switch scopeNorm {
 	case "agent":
+		if *mysqlDSN == "" {
+			*mysqlDSN = os.Getenv("MYSQL_DSN")
+		}
 		if *sqlitePath == "" || *mysqlDSN == "" {
-			return errors.New("--sqlite and --mysql-dsn are required for --scope=agent")
+			return errors.New("--sqlite and --mysql-dsn (or MYSQL_DSN) are required for --scope=agent")
 		}
 		if err := migrator.RunAgent(ctx, *sqlitePath, *mysqlDSN, opts); err != nil {
 			return fmt.Errorf("agent: %w", err)
 		}
 	case "qiwei":
+		if *mysqlDSN == "" {
+			*mysqlDSN = os.Getenv("MYSQL_DSN")
+		}
 		if *sqlitePath == "" || *mysqlDSN == "" {
-			return errors.New("--sqlite and --mysql-dsn are required for --scope=qiwei")
+			return errors.New("--sqlite and --mysql-dsn (or MYSQL_DSN) are required for --scope=qiwei")
 		}
 		if err := migrator.RunQiwei(ctx, *sqlitePath, *mysqlDSN, opts); err != nil {
 			return fmt.Errorf("qiwei: %w", err)
 		}
 	case "all":
+		if *mysqlDSNAgent == "" {
+			*mysqlDSNAgent = os.Getenv("MYSQL_DSN_AGENT")
+		}
+		if *mysqlDSNQiwei == "" {
+			*mysqlDSNQiwei = os.Getenv("MYSQL_DSN_QIWEI")
+		}
 		if *sqliteAgent == "" || *sqliteQiwei == "" || *mysqlDSNAgent == "" || *mysqlDSNQiwei == "" {
-			return errors.New("--sqlite-agent, --sqlite-qiwei, --mysql-dsn-agent, --mysql-dsn-qiwei are required for --scope=all")
+			return errors.New("--sqlite-agent, --sqlite-qiwei, --mysql-dsn-agent (or MYSQL_DSN_AGENT), --mysql-dsn-qiwei (or MYSQL_DSN_QIWEI) are required for --scope=all")
 		}
 		if err := migrator.RunAgent(ctx, *sqliteAgent, *mysqlDSNAgent, opts); err != nil {
 			return fmt.Errorf("agent: %w", err)

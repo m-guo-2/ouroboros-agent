@@ -560,7 +560,7 @@ func extensionFromFileNameExt(value string) string {
 }
 
 func decodeMaybeBase64(raw string) string {
-	raw = strings.TrimSpace(raw)
+	raw = strings.TrimSpace(validUTF8Text(raw))
 	if raw == "" {
 		return ""
 	}
@@ -568,7 +568,7 @@ func decodeMaybeBase64(raw string) string {
 	if err != nil {
 		return raw
 	}
-	trimmed := strings.TrimSpace(string(decoded))
+	trimmed := strings.TrimSpace(validUTF8Text(string(decoded)))
 	if trimmed == "" {
 		return raw
 	}

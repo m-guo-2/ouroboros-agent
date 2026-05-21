@@ -31,6 +31,7 @@ This directory contains a production-oriented deployment bundle for running the 
 ## Files
 
 - `install.sh`: build artifacts and install binaries, config, systemd, nginx templates
+- `supervisor-release.md`: current supervisor-based production release flow
 - `bootstrap.sh`: seed SQLite settings and create or update a default agent
 - `env/*.example`: environment-file templates
 - `systemd/*.service`: systemd unit templates

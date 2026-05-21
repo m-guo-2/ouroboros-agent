@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"agent/internal/logger"
@@ -18,6 +19,8 @@ import (
 // IncomingMessage is the normalised payload sent by a channel adapter.
 type IncomingMessage struct {
 	Channel                 string                   `json:"channel"`
+	ChannelAccountID        string                   `json:"channelAccountId,omitempty"`
+	ChannelAccountShortHash string                   `json:"channelAccountShortHash,omitempty"`
 	ChannelUserID           string                   `json:"channelUserId"`
 	ChannelMessageID        string                   `json:"channelMessageId"`
 	ChannelConversationID   string                   `json:"channelConversationId,omitempty"`
@@ -50,9 +53,12 @@ type DispatchResult struct {
 //  6. Enqueue to runner (direct function call, no HTTP)
 func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	// 1. Deduplication.
-	dedupeKey := msg.ChannelMessageID
+	dedupeKey := resolveDedupeKey(msg)
+	if dedupeKey == "" {
+		dedupeKey = msg.ChannelMessageID
+	}
 	if msg.AgentID != "" {
-		dedupeKey = msg.ChannelMessageID + ":" + msg.AgentID
+		dedupeKey += ":" + msg.AgentID
 	}
 	if storage.IsProcessed(dedupeKey) {
 		logger.Detail(ctx, "重复消息跳过", "dedupeKey", dedupeKey)
@@ -61,7 +67,8 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	_ = storage.MarkProcessed(dedupeKey, msg.Channel)
 
 	// 2. Resolve (or create) shadow user.
-	userID, isNew, err := storage.ResolveUser(msg.Channel, msg.ChannelUserID, msg.SenderName)
+	userKey := resolveChannelUserKey(msg)
+	userID, isNew, err := storage.ResolveUser(msg.Channel, userKey, msg.SenderName)
 	if err != nil {
 		logger.Error(ctx, "用户解析失败", "error", err.Error())
 		return DispatchResult{Success: false, Error: "user resolution failed"}
@@ -275,9 +282,58 @@ func HandleIncoming(w http.ResponseWriter, r *http.Request) {
 func resolveSessionKey(msg IncomingMessage) string {
 	uniqueID := msg.ChannelConversationID
 	if uniqueID == "" {
-		uniqueID = msg.ChannelUserID
+		uniqueID = resolveChannelUserKey(msg)
 	}
 	return msg.Channel + ":" + uniqueID
+}
+
+func resolveDedupeKey(msg IncomingMessage) string {
+	msgID := strings.TrimSpace(msg.ChannelMessageID)
+	if msgID == "" {
+		return ""
+	}
+	if scope := resolveChannelAccountScope(msg); scope != "" {
+		return msg.Channel + ":" + scope + ":" + msgID
+	}
+	return msgID
+}
+
+func resolveChannelUserKey(msg IncomingMessage) string {
+	userID := strings.TrimSpace(msg.ChannelUserID)
+	if userID == "" {
+		return ""
+	}
+	if scope := resolveChannelAccountScope(msg); scope != "" {
+		return scope + ":" + userID
+	}
+	return userID
+}
+
+func resolveChannelAccountScope(msg IncomingMessage) string {
+	accountID := strings.TrimSpace(msg.ChannelAccountID)
+	if accountID != "" {
+		return "account:" + accountID
+	}
+	shortHash := strings.TrimSpace(msg.ChannelAccountShortHash)
+	if shortHash == "" {
+		_, shortHash = splitConversationShortHash(msg.ChannelConversationID)
+	}
+	if shortHash != "" {
+		return "accountHash:" + shortHash
+	}
+	return ""
+}
+
+func splitConversationShortHash(conversationID string) (rawID, shortHash string) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return "", ""
+	}
+	idx := strings.LastIndex(conversationID, "@")
+	if idx < 0 {
+		return conversationID, ""
+	}
+	return conversationID[:idx], conversationID[idx+1:]
 }
 
 func newID() string {

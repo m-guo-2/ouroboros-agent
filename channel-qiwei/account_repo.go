@@ -259,8 +259,8 @@ func (r *accountRepo) UpdateProfile(ctx context.Context, id string, p ProfileUpd
 		self_user_id = ?, self_name = ?, self_alias = ?, self_avatar_url = ?,
 		self_corp_name = ?, self_synced_at = ?, updated_at = ?
 		WHERE id = ? AND deleted_at = 0`,
-		p.SelfUserID, p.SelfName, p.SelfAlias, p.SelfAvatarURL,
-		p.SelfCorpName, now, now, id,
+		validUTF8Text(p.SelfUserID), validUTF8Text(p.SelfName), validUTF8Text(p.SelfAlias), validUTF8Text(p.SelfAvatarURL),
+		validUTF8Text(p.SelfCorpName), now, now, id,
 	)
 	if err != nil {
 		return err
