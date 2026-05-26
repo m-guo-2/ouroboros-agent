@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from "react"
 import { useTimeAgoTick } from "@/hooks/use-time-ago-tick"
-import { Zap, Bot, MessageSquare, Copy, ArrowDown, CheckCircle2, Circle, XCircle, Inbox, Timer, CornerDownRight } from "lucide-react"
+import { Zap, Bot, MessageSquare, Copy, ArrowDown, CheckCircle2, Circle, XCircle, Inbox, Timer, CornerDownRight, ArrowRight, MessageCircleReply } from "lucide-react"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { cn, timeAgo, absoluteTime, copyToClipboard } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
@@ -88,10 +88,15 @@ export function ConversationTimeline({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4">
         <div className="flex items-center gap-2">
-          <Inbox className="h-4 w-4 text-slate-500" />
-          <span className="text-sm font-semibold text-slate-900">消息队列</span>
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-white">
+            <Inbox className="h-4 w-4" />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-slate-900">事件台账</div>
+            <div className="text-[11px] text-slate-400">按消息处理结果归档，不再按聊天气泡展示</div>
+          </div>
         </div>
         <span className="text-[12px] text-slate-400">{exchanges.length} 次交互</span>
       </div>
@@ -146,102 +151,102 @@ export function ConversationTimeline({
 
               <div
                 className={cn(
-                  "group/exchange cursor-pointer rounded-lg border bg-white transition-all",
-                  isSelected ? "border-brand-300 shadow-sm ring-2 ring-brand-100" : "border-slate-200 hover:border-slate-300 hover:shadow-sm"
+                  "group/exchange cursor-pointer overflow-hidden rounded-xl border bg-white transition-all",
+                  outcomeAccent(outcome),
+                  isSelected ? "border-slate-900 shadow-md ring-2 ring-slate-300" : "border-slate-200 hover:border-slate-400 hover:shadow-sm"
                 )}
                 onClick={() => onSelectExchange(exchange.exchangeIndex)}
               >
-                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <div className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md", initiatorStyle.bgClass)}>
-                      <Zap className={cn("h-3.5 w-3.5", initiatorStyle.className)} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={cn("text-xs font-semibold", initiatorStyle.className)}>{initiatorStyle.label}</span>
+                <div className="grid grid-cols-[116px_minmax(0,1fr)]">
+                  <div className="border-r border-slate-100 bg-slate-50 px-3 py-3">
+                    <OutcomeBadge outcome={outcome} hasLifecycle={messageLifecycle.length > 0} />
+                    <div className="mt-3 space-y-1 text-[11px] text-slate-500">
+                      <div className="flex items-center gap-1.5">
+                        <Timer className="h-3 w-3" />
+                        <span>#{exchange.exchangeIndex + 1}</span>
+                      </div>
                       {exchange.userMessage.createdAt && (
-                        <span className="text-[11px] text-slate-400" title={absoluteTime(exchange.userMessage.createdAt)}>{timeAgo(exchange.userMessage.createdAt)}</span>
+                        <div title={absoluteTime(exchange.userMessage.createdAt)}>{timeAgo(exchange.userMessage.createdAt)}</div>
                       )}
+                      <div>{toolCalls} 工具 · {errors} 错误</div>
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md", initiatorStyle.bgClass)}>
+                          <Zap className={cn("h-3.5 w-3.5", initiatorStyle.className)} />
+                        </span>
+                        <span className={cn("text-xs font-semibold", initiatorStyle.className)}>{initiatorStyle.label}</span>
+                        {exchange.traceId && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">trace</span>}
+                      </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.userMessage.content || "") }}
                         className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all shrink-0"
-                        title="复制"
+                        title="复制收到内容"
                       >
                         <Copy className="h-3 w-3" />
                       </button>
-                      </div>
-                      <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-400">
-                        <Timer className="h-3 w-3" />
-                        <span>#{exchange.exchangeIndex + 1}</span>
-                        {toolCalls > 0 && <span>· {toolCalls} 工具</span>}
-                        {errors > 0 && <span className="text-red-600">· {errors} 错误</span>}
-                      </div>
                     </div>
-                  </div>
-                  <OutcomeBadge outcome={outcome} hasLifecycle={messageLifecycle.length > 0} />
-                </div>
 
-                <div className="space-y-3 px-4 py-3">
-                  <div>
-                    <div className="mb-1.5 text-[11px] font-medium text-slate-400">收到的内容</div>
-                    <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-950 whitespace-pre-wrap">
+                    <div className="px-4 py-3">
+                      <p className="line-clamp-4 text-sm leading-relaxed text-slate-950 whitespace-pre-wrap">
                       {exchange.userMessage.content || "(无内容)"}
-                    </p>
+                      </p>
+                    </div>
+
+                    <div className="border-t border-slate-100 px-4 py-3">
+                      {messageLifecycle.length > 0 ? (
+                        <LifecycleStatusBar events={messageLifecycle} />
+                      ) : (
+                        <div className="flex items-center gap-2 text-[12px] text-slate-400">
+                          <Circle className="h-3.5 w-3.5" />
+                          无新版消息流记录
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+                      {exchange.assistantMessage ? (
+                        <div>
+                          <div className="mb-1.5 flex items-center gap-2">
+                            <MessageCircleReply className="h-3.5 w-3.5 text-emerald-600" />
+                            <span className="text-[11px] font-semibold text-emerald-700">已产生回复</span>
+                            {exchange.assistantMessage.createdAt && (
+                              <span className="text-[11px] text-slate-400" title={absoluteTime(exchange.assistantMessage.createdAt)}>{timeAgo(exchange.assistantMessage.createdAt)}</span>
+                            )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.assistantMessage!.content || "") }}
+                              className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-white transition-all shrink-0"
+                              title="复制回复"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="line-clamp-3 text-sm text-slate-700">
+                            <MarkdownContent content={exchange.assistantMessage.content} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={cn(
+                          "flex items-center gap-2 text-[12px] font-medium",
+                          isRunning ? "text-brand-700" : "text-amber-700"
+                        )}>
+                          <Bot className={cn("h-3.5 w-3.5", isRunning && "animate-pulse")} />
+                          {isRunning ? "正在生成回复" : "没有助手回复，点击查看原因"}
+                        </div>
+                      )}
+                      {exchange.traceId && (
+                        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+                          <CornerDownRight className="h-3.5 w-3.5" />
+                          <span>{isSelected ? "右侧正在查看" : "点击定位到右侧处理链路"}</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </div>
+                      )}
+                    </div>
                   </div>
-
-                  {messageLifecycle.length > 0 ? (
-                    <LifecycleStatusBar events={messageLifecycle} />
-                  ) : (
-                    <div className="flex items-center gap-2 rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-400">
-                      <Circle className="h-3.5 w-3.5" />
-                      这条消息没有消息流记录，通常是旧数据或未进入新版生命周期采集
-                    </div>
-                  )}
-
-                  {exchange.traceId && (
-                    <div className={cn(
-                      "flex items-center gap-2 rounded-md px-3 py-2 text-[12px]",
-                      isRunning ? "bg-brand-50 text-brand-700"
-                        : errors > 0 ? "bg-red-50 text-red-700"
-                        : "bg-slate-100 text-slate-500"
-                    )}>
-                      {isRunning && <span className="h-1.5 w-1.5 rounded-full bg-brand-500 animate-live-pulse" />}
-                      <CornerDownRight className="h-3.5 w-3.5" />
-                      <span className="font-medium">
-                        {isRunning ? "处理中，右侧看实时执行" : isSelected ? "右侧正在查看这次处理" : "点击查看处理详情"}
-                      </span>
-                    </div>
-                  )}
-
-                  {exchange.assistantMessage ? (
-                    <div>
-                      <div className="mb-1.5 flex items-center gap-2">
-                        <Bot className="h-3.5 w-3.5 text-slate-500" />
-                        <span className="text-[11px] font-medium text-slate-500">回复内容</span>
-                        {exchange.assistantMessage.createdAt && (
-                          <span className="text-[11px] text-slate-400" title={absoluteTime(exchange.assistantMessage.createdAt)}>{timeAgo(exchange.assistantMessage.createdAt)}</span>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.assistantMessage!.content || "") }}
-                          className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all shrink-0"
-                          title="复制"
-                        >
-                          <Copy className="h-3 w-3" />
-                        </button>
-                      </div>
-                      <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800">
-                        <MarkdownContent content={exchange.assistantMessage.content} />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={cn(
-                      "rounded-md border px-3 py-2 text-[12px]",
-                      isRunning ? "border-brand-200 bg-brand-50 text-brand-700" : "border-amber-200 bg-amber-50 text-amber-700"
-                    )}>
-                      {isRunning ? "正在生成回复" : "这次交互没有助手回复；右侧查看消息流或执行流确认原因"}
-                    </div>
-                  )}
-                  </div>
+                </div>
               </div>
             </div>
           )
@@ -334,8 +339,15 @@ function OutcomeBadge({ outcome, hasLifecycle }: { outcome: ExchangeOutcome; has
 
   const [label, className] = config[outcome]
   return (
-    <span className={cn("shrink-0 rounded-full border px-2 py-1 text-[11px] font-semibold", className)}>
+    <span className={cn("inline-flex shrink-0 rounded-full border px-2 py-1 text-[11px] font-semibold", className)}>
       {label}
     </span>
   )
+}
+
+function outcomeAccent(outcome: ExchangeOutcome) {
+  if (outcome === "replied") return "border-l-4 border-l-emerald-500"
+  if (outcome === "no_reply" || outcome === "running") return "border-l-4 border-l-amber-500"
+  if (outcome === "send_failed" || outcome === "failed") return "border-l-4 border-l-red-500"
+  return "border-l-4 border-l-slate-300"
 }
