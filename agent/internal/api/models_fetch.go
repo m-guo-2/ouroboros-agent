@@ -21,12 +21,11 @@ type availableModel struct {
 }
 
 func fetchAvailableModels(provider, apiKey, baseURL string) ([]availableModel, error) {
-	_ = baseURL // most providers use official endpoints; volcengine uses the configured base URL
 	switch strings.ToLower(provider) {
 	case "claude", "anthropic":
 		return fetchClaudeModels(apiKey)
 	case "openai":
-		return fetchOpenAIModels(apiKey)
+		return fetchOpenAIModels(apiKey, baseURL)
 	case "kimi", "moonshot":
 		return fetchKimiModels(apiKey)
 	case "glm", "zhipu":
@@ -75,8 +74,11 @@ func fetchClaudeModels(apiKey string) ([]availableModel, error) {
 	return out, nil
 }
 
-func fetchOpenAIModels(apiKey string) ([]availableModel, error) {
-	base := "https://api.openai.com/v1"
+func fetchOpenAIModels(apiKey, baseURL string) ([]availableModel, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
 	req, _ := http.NewRequest(http.MethodGet, base+"/models", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := modelFetchClient.Do(req)
@@ -97,7 +99,7 @@ func fetchOpenAIModels(apiKey string) ([]availableModel, error) {
 	}
 	var out []availableModel
 	for _, m := range data.Data {
-		if strings.Contains(m.ID, "gpt") || strings.Contains(m.ID, "o1") || strings.Contains(m.ID, "o3") {
+		if strings.Contains(m.ID, "gpt") || strings.Contains(m.ID, "o1") || strings.Contains(m.ID, "o3") || baseURL != "" {
 			out = append(out, availableModel{ID: m.ID, Name: m.ID, Provider: "openai"})
 		}
 	}
