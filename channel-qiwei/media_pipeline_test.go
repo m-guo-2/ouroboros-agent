@@ -654,7 +654,15 @@ func TestGroupEventReportsToAgentServer(t *testing.T) {
 	if received["eventType"] != "member_removed" {
 		t.Errorf("expected eventType=member_removed, got %v", received["eventType"])
 	}
-	if received["channelGroupId"] != "room-123" {
-		t.Errorf("expected channelGroupId=room-123, got %v", received["channelGroupId"])
+	rt := testRuntime(t, app)
+	wantGroupID := encodeConversationID("room-123", rt.ShortHash())
+	if received["channelGroupId"] != wantGroupID {
+		t.Errorf("expected channelGroupId=%s, got %v", wantGroupID, received["channelGroupId"])
+	}
+	if received["channelAccountId"] != rt.AccountID() {
+		t.Errorf("expected channelAccountId=%s, got %v", rt.AccountID(), received["channelAccountId"])
+	}
+	if received["channelAccountShortHash"] != rt.ShortHash() {
+		t.Errorf("expected channelAccountShortHash=%s, got %v", rt.ShortHash(), received["channelAccountShortHash"])
 	}
 }

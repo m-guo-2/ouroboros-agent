@@ -96,15 +96,23 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	}
 
 	// Legacy fallback: match by channelConversationId when session_key was absent.
+	// Older Qiwei sessions used a raw room/user id before multi-account suffixes
+	// were introduced, so also try the raw part of "{rawId}@{shortHash}".
 	if session == nil && msg.ChannelConversationID != "" {
 		session, _ = storage.FindSessionByConversationID(msg.ChannelConversationID, agentCfg.ID)
+		if session == nil {
+			rawID, shortHash := splitConversationShortHash(msg.ChannelConversationID)
+			if shortHash != "" && rawID != "" {
+				session, _ = storage.FindSessionByConversationID(rawID, agentCfg.ID)
+			}
+		}
 		if session != nil {
-			// Back-fill missing fields on the legacy session.
+			// Back-fill stale/missing fields on the legacy session.
 			patch := map[string]string{}
-			if session.SessionKey == "" {
+			if session.SessionKey != sessionKey {
 				patch["sessionKey"] = sessionKey
 			}
-			if session.ChannelConversationID == "" {
+			if session.ChannelConversationID != msg.ChannelConversationID {
 				patch["channelConversationId"] = msg.ChannelConversationID
 			}
 			if len(patch) > 0 {
@@ -171,9 +179,21 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"traceEvent", "start",
 		"agentId", agentCfg.ID, "userId", userID,
 		"channel", msg.Channel, "sessionId", session.ID)
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId":        session.ID,
+		"traceId":          traceID,
+		"channelMessageId": msg.ChannelMessageID,
+		"stage":            "dispatch_accepted",
+		"summary":          "消息进入 agent 派发流程",
+		"payload": map[string]any{
+			"channel":     msg.Channel,
+			"messageType": msg.MessageType,
+			"senderName":  msg.SenderName,
+		},
+	})
 
 	// 5. Persist the incoming user message and append to session event log.
-	savedMsg, _ := storage.SaveMessage(map[string]interface{}{
+	savedMsg, saveErr := storage.SaveMessage(map[string]interface{}{
 		"sessionId":        session.ID,
 		"role":             "user",
 		"content":          msg.Content,
@@ -187,11 +207,54 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		"attachments":      msg.Attachments,
 		"channelMeta":      msg.ChannelMeta,
 	})
-	var msgID int64
-	if savedMsg != nil {
-		msgID = savedMsg.ID
-		_ = storage.AppendSessionEvent(session.ID, msgID)
+	if saveErr != nil || savedMsg == nil {
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId":        session.ID,
+			"traceId":          traceID,
+			"channelMessageId": msg.ChannelMessageID,
+			"stage":            "message_saved",
+			"status":           "failed",
+			"summary":          "消息入库失败",
+			"payload":          map[string]any{"error": fmt.Sprint(saveErr)},
+		})
+		return DispatchResult{Success: false, Error: "message save failed"}
 	}
+	var msgID int64
+	msgID = savedMsg.ID
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId":        session.ID,
+		"messageId":        msgID,
+		"traceId":          traceID,
+		"channelMessageId": msg.ChannelMessageID,
+		"stage":            "message_saved",
+		"summary":          "消息已保存",
+		"payload": map[string]any{
+			"content":       msg.Content,
+			"messageType":   msg.MessageType,
+			"attachmentNum": len(msg.Attachments),
+		},
+	})
+	if err := storage.AppendSessionEvent(session.ID, msgID); err != nil {
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId":        session.ID,
+			"messageId":        msgID,
+			"traceId":          traceID,
+			"channelMessageId": msg.ChannelMessageID,
+			"stage":            "session_event_appended",
+			"status":           "failed",
+			"summary":          "消息事件追加失败",
+			"payload":          map[string]any{"error": err.Error()},
+		})
+		return DispatchResult{Success: false, Error: "session event append failed"}
+	}
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId":        session.ID,
+		"messageId":        msgID,
+		"traceId":          traceID,
+		"channelMessageId": msg.ChannelMessageID,
+		"stage":            "session_event_appended",
+		"summary":          "消息已进入待处理事件流",
+	})
 
 	// 6. Update session to processing and enqueue.
 	_ = storage.UpdateSession(session.ID, map[string]interface{}{
@@ -216,11 +279,29 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	})
 	if enqueueErr != nil {
 		logger.Error(dispatchCtx, "入队失败", "error", enqueueErr.Error())
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId":        session.ID,
+			"messageId":        msgID,
+			"traceId":          traceID,
+			"channelMessageId": msg.ChannelMessageID,
+			"stage":            "worker_notified",
+			"status":           "failed",
+			"summary":          "worker 通知失败",
+			"payload":          map[string]any{"error": enqueueErr.Error()},
+		})
 		_ = storage.UpdateSession(session.ID, map[string]interface{}{
 			"executionStatus": "interrupted",
 		})
 		return DispatchResult{Success: false, Error: enqueueErr.Error()}
 	}
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId":        session.ID,
+		"messageId":        msgID,
+		"traceId":          traceID,
+		"channelMessageId": msg.ChannelMessageID,
+		"stage":            "worker_notified",
+		"summary":          "worker 已收到处理通知",
+	})
 
 	return DispatchResult{Success: true, SessionID: session.ID, UserID: userID}
 }

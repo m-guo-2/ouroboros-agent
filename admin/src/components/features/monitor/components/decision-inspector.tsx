@@ -3,7 +3,7 @@ import { PanelRightClose, Archive, RefreshCw, ChevronRight, AlertCircle, Chevron
 import { cn } from "@/lib/utils"
 import { useQuery } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
-import type { ExecutionTrace } from "@/api/types"
+import type { ExecutionTrace, MessageLifecycleEvent } from "@/api/types"
 import { splitIntoRounds } from "../lib/build-timeline"
 import { TraceStatsBar } from "./trace-stats-bar"
 import { RoundDetail } from "./round-detail"
@@ -67,8 +67,10 @@ export function TraceContent({ trace, isRunning, onViewSubagentTrace, defaultExp
   )
 }
 
-export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRefreshTrace, isRefreshingTrace }: {
+export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessageId, isSessionProcessing, onCollapse, onRefreshTrace, isRefreshingTrace }: {
   trace: ExecutionTrace | null
+  lifecycleEvents?: MessageLifecycleEvent[]
+  selectedMessageId?: number
   isSessionProcessing?: boolean
   onCollapse: () => void
   onRefreshTrace?: () => void
@@ -77,6 +79,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
   const [subagentStack, setSubagentStack] = useState<Array<{ traceId: string; name: string }>>([])
   const [expandAll, setExpandAll] = useState<boolean | null>(null)
   const [expandKey, setExpandKey] = useState(0)
+  const [tab, setTab] = useState<"lifecycle" | "execution">("lifecycle")
 
   const currentSubagent = subagentStack.length > 0 ? subagentStack[subagentStack.length - 1] : null
 
@@ -108,8 +111,13 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
   }, [])
 
   const isRunning = trace?.status === "running" && !!isSessionProcessing
+  const visibleLifecycleEvents = lifecycleEvents.filter((event) => {
+    if (selectedMessageId) return event.messageId === selectedMessageId || (!!trace?.id && event.traceId === trace.id)
+    if (trace?.id) return event.traceId === trace.id
+    return true
+  })
 
-  if (!trace) {
+  if (!trace && visibleLifecycleEvents.length === 0) {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
@@ -119,7 +127,7 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center text-center px-6">
-          <p className="text-sm text-slate-400">点击对话中的 Agent 回复，查看完整决策过程</p>
+          <p className="text-sm text-slate-400">点击一条消息，查看消息流和执行过程</p>
         </div>
       </div>
     )
@@ -183,8 +191,33 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
         </div>
       )}
 
+      {subagentStack.length === 0 && (
+        <div className="flex gap-1 border-b border-slate-200 px-4 pt-2 bg-white shrink-0">
+          <button
+            onClick={() => setTab("lifecycle")}
+            className={cn(
+              "px-3 py-1.5 text-[11px] font-medium border-b-2 transition-colors",
+              tab === "lifecycle" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"
+            )}
+          >
+            消息流
+          </button>
+          <button
+            onClick={() => setTab("execution")}
+            className={cn(
+              "px-3 py-1.5 text-[11px] font-medium border-b-2 transition-colors",
+              tab === "execution" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"
+            )}
+          >
+            执行流
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {currentSubagent ? (
+        {!currentSubagent && tab === "lifecycle" ? (
+          <LifecycleEventList events={visibleLifecycleEvents} />
+        ) : currentSubagent ? (
           isLoadingSubagent ? (
             <div className="flex items-center justify-center h-32 text-sm text-slate-400">
               加载 Subagent 执行记录...
@@ -197,10 +230,61 @@ export function DecisionInspector({ trace, isSessionProcessing, onCollapse, onRe
           ) : (
             <TraceContent trace={subagentTrace} isRunning={false} onViewSubagentTrace={handleViewSubagentTrace} defaultExpanded={expandAll ?? undefined} expandKey={expandKey} />
           )
-        ) : (
+        ) : trace ? (
           <TraceContent trace={trace} isRunning={isRunning} onViewSubagentTrace={handleViewSubagentTrace} defaultExpanded={expandAll ?? undefined} expandKey={expandKey} />
+        ) : (
+          <div className="text-sm text-slate-400 text-center py-12">暂无执行流记录</div>
         )}
       </div>
+    </div>
+  )
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  dispatch_accepted: "派发接收",
+  message_saved: "消息入库",
+  session_event_appended: "进入队列",
+  worker_notified: "通知 worker",
+  worker_started: "worker 启动",
+  event_drained: "事件消费",
+  context_built: "进入上下文",
+  outbound_send_requested: "请求发送",
+  outbound_send_completed: "发送完成",
+  processed_completed: "处理完成",
+}
+
+function LifecycleEventList({ events }: { events: MessageLifecycleEvent[] }) {
+  if (events.length === 0) {
+    return <div className="text-sm text-slate-400 text-center py-12">暂无消息流记录</div>
+  }
+  return (
+    <div className="space-y-2">
+      {events.map((event) => (
+        <div
+          key={event.id}
+          className={cn(
+            "rounded-md border px-3 py-2 text-[12px]",
+            event.status === "failed" ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"
+          )}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className={cn("font-medium", event.status === "failed" ? "text-red-700" : "text-slate-800")}>
+              {STAGE_LABELS[event.stage] ?? event.stage}
+            </span>
+            {event.outcome && (
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
+                {event.outcome === "replied" ? "已回复" : event.outcome === "no_reply" ? "未回复" : event.outcome}
+              </span>
+            )}
+          </div>
+          {event.summary && <p className="mt-1 text-slate-500">{event.summary}</p>}
+          {event.payload && Object.keys(event.payload).length > 0 && (
+            <pre className="mt-2 max-h-36 overflow-auto rounded bg-slate-50 p-2 text-[11px] text-slate-600">
+              {JSON.stringify(event.payload, null, 2)}
+            </pre>
+          )}
+        </div>
+      ))}
     </div>
   )
 }

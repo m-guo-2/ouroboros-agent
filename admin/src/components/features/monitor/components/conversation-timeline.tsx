@@ -1,12 +1,12 @@
 import { useRef, useEffect, useMemo, useState } from "react"
 import { useTimeAgoTick } from "@/hooks/use-time-ago-tick"
-import { Zap, Bot, MessageSquare, Copy, ArrowDown } from "lucide-react"
+import { Zap, Bot, MessageSquare, Copy, ArrowDown, CheckCircle2, Circle, XCircle } from "lucide-react"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { cn, timeAgo, absoluteTime, copyToClipboard } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
 import { CompactionEvent } from "./compaction-event"
 import { ExchangeSkeleton } from "./exchange-skeleton"
-import type { CompactionData, ExecutionTrace } from "@/api/types"
+import type { CompactionData, ExecutionTrace, MessageLifecycleEvent } from "@/api/types"
 
 interface Props {
   exchanges: MessageExchange[]
@@ -14,6 +14,7 @@ interface Props {
   isProcessing: boolean
   activeTraceId?: string
   selectedTrace?: ExecutionTrace | null
+  lifecycleEvents?: MessageLifecycleEvent[]
   selectedExchangeIndex: number | null
   onSelectExchange: (index: number) => void
   isLoadingMessages: boolean
@@ -24,7 +25,7 @@ interface Props {
 
 export function ConversationTimeline({
   exchanges, compactions, isProcessing,
-  activeTraceId, selectedTrace, selectedExchangeIndex, onSelectExchange, isLoadingMessages,
+  activeTraceId, selectedTrace, selectedExchangeIndex, lifecycleEvents = [], onSelectExchange, isLoadingMessages,
   hasMoreMessages, onLoadMoreMessages, isLoadingMoreMessages,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -52,6 +53,17 @@ export function ConversationTimeline({
     [...compactions].sort((a, b) => a.createdAt - b.createdAt),
     [compactions]
   )
+
+  const lifecycleByMessage = useMemo(() => {
+    const map = new Map<number, MessageLifecycleEvent[]>()
+    for (const event of lifecycleEvents) {
+      if (!event.messageId) continue
+      const items = map.get(event.messageId) ?? []
+      items.push(event)
+      map.set(event.messageId, items)
+    }
+    return map
+  }, [lifecycleEvents])
 
   if (isLoadingMessages) {
     return (
@@ -107,6 +119,7 @@ export function ConversationTimeline({
           const steps = trace?.steps ?? []
           const toolCalls = steps.filter(s => s.type === "tool_call").length
           const errors = steps.filter(s => s.type === "error" || (s.type === "tool_result" && s.toolSuccess === false)).length
+          const messageLifecycle = exchange.userMessage.id ? lifecycleByMessage.get(exchange.userMessage.id) ?? [] : []
 
           const initiator = exchange.userMessage.initiator
           const initiatorStyle = !initiator || initiator === "user"
@@ -175,6 +188,10 @@ export function ConversationTimeline({
                   </div>
                 )}
 
+                {messageLifecycle.length > 0 && (
+                  <LifecycleStatusBar events={messageLifecycle} />
+                )}
+
                 {/* Assistant message */}
                 {exchange.assistantMessage && (
                   <div className="flex gap-3 px-5 py-3">
@@ -226,6 +243,53 @@ export function ConversationTimeline({
         <ArrowDown className="h-4 w-4" />
       </button>
     )}
+    </div>
+  )
+}
+
+const STATUS_STEPS = [
+  { stage: "message_saved", label: "入库" },
+  { stage: "session_event_appended", label: "入队" },
+  { stage: "event_drained", label: "消费" },
+  { stage: "context_built", label: "上下文" },
+  { stage: "processed_completed", label: "完成" },
+]
+
+function LifecycleStatusBar({ events }: { events: MessageLifecycleEvent[] }) {
+  const byStage = new Map<string, MessageLifecycleEvent>()
+  for (const event of events) byStage.set(event.stage, event)
+  const done = byStage.get("processed_completed")
+  const outcomeLabel = done?.outcome === "replied"
+    ? "已回复"
+    : done?.outcome === "no_reply"
+    ? "未回复"
+    : done?.outcome === "send_failed"
+    ? "发送失败"
+    : done?.outcome || ""
+
+  return (
+    <div className="mx-5 mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+      {STATUS_STEPS.map((step) => {
+        const event = byStage.get(step.stage)
+        const failed = event?.status === "failed"
+        const Icon = failed ? XCircle : event ? CheckCircle2 : Circle
+        return (
+          <span
+            key={step.stage}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md border px-2 py-1",
+              failed
+                ? "border-red-200 bg-red-50 text-red-700"
+                : event
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                : "border-slate-200 bg-white text-slate-400"
+            )}
+          >
+            <Icon className="h-3 w-3" />
+            {step.stage === "processed_completed" && outcomeLabel ? outcomeLabel : step.label}
+          </span>
+        )
+      })}
     </div>
   )
 }

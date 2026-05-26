@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
 import { Activity, MessageSquare, Brain, Clock, GitBranch, PanelRight, RefreshCw } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
-import { useSession, useSessionMessages, useDeleteSession } from "@/hooks/use-sessions"
+import { useSession, useSessionMessages, useDeleteSession, useSessionLifecycleEvents } from "@/hooks/use-sessions"
 import { useMonitorSearchParams } from "@/hooks/use-monitor-search-params"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
@@ -118,6 +118,7 @@ export function MonitorPage() {
   }, [effectiveSessionId, sessions, messages.length])
 
   const { data: compactions = [] } = useSessionCompactions(effectiveSessionId)
+  const { data: lifecycleEvents = [] } = useSessionLifecycleEvents(effectiveSessionId ?? undefined, { isProcessing: !!isProcessing })
 
   const { data: factsForTabCount } = useSessionFacts(effectiveSessionId, true)
   const { data: delayedTasksForTabCount } = useSessionDelayedTasks(effectiveSessionId, undefined, true)
@@ -166,6 +167,7 @@ export function MonitorPage() {
   }, [effectiveExchangeIndex, exchanges])
 
   const selectedTraceId = selectedExchange?.traceId
+  const selectedMessageId = selectedExchange?.userMessage.id
 
   const {
     data: selectedTrace = null,
@@ -290,6 +292,7 @@ export function MonitorPage() {
                 isProcessing={!!isProcessing}
                 activeTraceId={activeTraceId}
                 selectedTrace={selectedTrace}
+                lifecycleEvents={lifecycleEvents}
                 selectedExchangeIndex={effectiveExchangeIndex}
                 onSelectExchange={handleSelectExchange}
                 isLoadingMessages={isLoadingMessages}
@@ -329,6 +332,8 @@ export function MonitorPage() {
           <DecisionInspector
             key={selectedTrace?.id ?? "empty-trace"}
             trace={selectedTrace}
+            lifecycleEvents={lifecycleEvents}
+            selectedMessageId={selectedMessageId}
             isSessionProcessing={isProcessing}
             onCollapse={() => setInspectorOpen(false)}
             onRefreshTrace={handleRefreshTrace}

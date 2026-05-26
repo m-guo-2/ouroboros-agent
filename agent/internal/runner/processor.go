@@ -827,7 +827,46 @@ func mergeEventsToMessage(events []eventlog.Event) types.AgentMessage {
 	}
 }
 
-func processSession(ctx context.Context, worker *SessionWorker) error {
+func recordLifecycleForEvents(events []eventlog.Event, stage, summary string) {
+	for _, ev := range events {
+		if ev.Message == nil {
+			continue
+		}
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId":        ev.Message.SessionID,
+			"messageId":        ev.Message.ID,
+			"traceId":          ev.Message.TraceID,
+			"channelMessageId": ev.Message.ChannelMessageID,
+			"stage":            stage,
+			"summary":          summary,
+		})
+	}
+}
+
+func lifecycleMessageIDs(events []eventlog.Event) []int64 {
+	ids := make([]int64, 0, len(events))
+	for _, ev := range events {
+		if ev.Message != nil && ev.Message.ID > 0 {
+			ids = append(ids, ev.Message.ID)
+		}
+	}
+	return ids
+}
+
+func recordProcessedLifecycle(sessionID, traceID string, messageIDs []int64, outcome string) {
+	for _, id := range messageIDs {
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId": sessionID,
+			"messageId": id,
+			"traceId":   traceID,
+			"stage":     "processed_completed",
+			"outcome":   outcome,
+			"summary":   "消息处理完成",
+		})
+	}
+}
+
+func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	sessionData, err := storage.GetSession(worker.SessionID)
 	if err != nil || sessionData == nil {
 		return fmt.Errorf("session not found: %s", worker.SessionID)
@@ -840,6 +879,13 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 	if len(events) == 0 {
 		return nil
 	}
+	recordLifecycleForEvents(events, "event_drained", "worker 已消费消息事件")
+	processedMessageIDs := lifecycleMessageIDs(events)
+	defer func() {
+		if err != nil {
+			recordProcessedLifecycle(worker.SessionID, "", processedMessageIDs, "failed")
+		}
+	}()
 
 	// Restore session mode from DB.
 	if types.SessionMode(sessionData.Mode) == types.SessionModePlan {
@@ -1409,6 +1455,7 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 
 	initialUserMsg := mergeEventsToMessage(events)
 	messages := append(historyMessages, initialUserMsg)
+	recordLifecycleForEvents(events, "context_built", "消息已进入本轮上下文")
 
 	registerSubagentTools(
 		registry,
@@ -1577,10 +1624,19 @@ func processSession(ctx context.Context, worker *SessionWorker) error {
 		if err != nil || len(moreEvents) == 0 {
 			break
 		}
+		recordLifecycleForEvents(moreEvents, "event_drained", "worker 已消费补充消息事件")
+		recordLifecycleForEvents(moreEvents, "context_built", "补充消息已进入后续上下文")
+		processedMessageIDs = append(processedMessageIDs, lifecycleMessageIDs(moreEvents)...)
 		messages = append(messages, mergeEventsToMessage(moreEvents))
 		logger.Business(ctx, "会话继续处理",
 			"traceEvent", "session_continue", "newEventCount", len(moreEvents))
 	}
+
+	outcome := "no_reply"
+	if storage.HasSuccessfulLifecycleEvent(worker.SessionID, traceID, "outbound_send_completed") {
+		outcome = "replied"
+	}
+	recordProcessedLifecycle(worker.SessionID, traceID, processedMessageIDs, outcome)
 
 	return nil
 }

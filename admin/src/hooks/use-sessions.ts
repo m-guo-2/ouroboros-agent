@@ -1,7 +1,7 @@
 import { useMemo } from "react"
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { sessionsApi } from "@/api/sessions"
-import type { AgentSession, MessageData } from "@/api/types"
+import type { AgentSession, MessageData, MessageLifecycleEvent } from "@/api/types"
 
 const MESSAGES_PAGE_SIZE = 50
 
@@ -55,6 +55,21 @@ export function useSessionMessages(
   )
 
   return { ...query, messages }
+}
+
+export function useSessionLifecycleEvents(
+  sessionId: string | undefined,
+  opts?: { isProcessing?: boolean },
+) {
+  return useQuery<MessageLifecycleEvent[]>({
+    queryKey: ["sessions", sessionId, "lifecycle-events"],
+    queryFn: async () => {
+      const res = await sessionsApi.getLifecycleEvents(sessionId!)
+      return res.data ?? []
+    },
+    enabled: !!sessionId,
+    refetchInterval: opts?.isProcessing ? 3000 : false,
+  })
 }
 
 export function useDeleteSession() {

@@ -259,6 +259,7 @@ func deleteSessionChildren(tx *sql.Tx, sessionID string) error {
 		`DELETE FROM context_compaction_archives WHERE session_id = ?`,
 		`DELETE FROM context_compactions WHERE session_id = ?`,
 		`DELETE FROM session_events WHERE session_id = ?`,
+		`DELETE FROM message_lifecycle_events WHERE session_id = ?`,
 		`DELETE FROM session_facts WHERE session_id = ?`,
 		`DELETE FROM session_active_skills WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,

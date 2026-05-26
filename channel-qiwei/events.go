@@ -833,20 +833,24 @@ func parseChangedMemberList(raw any) []string {
 
 func (a *app) reportGroupEvent(ctx context.Context, rt *accountRuntime, eventType, channelGroupID, groupName string, eventPayload map[string]any) error {
 	agentID := a.cfg.AgentID
+	reportedGroupID := channelGroupID
 	if rt != nil {
 		if id := rt.AgentID(); id != "" {
 			agentID = id
 		}
+		reportedGroupID = encodeConversationID(channelGroupID, rt.ShortHash())
 	}
 	payload := map[string]any{
 		"channel":        "qiwei",
 		"agentId":        agentID,
-		"channelGroupId": channelGroupID,
+		"channelGroupId": reportedGroupID,
 		"eventType":      eventType,
 		"groupName":      groupName,
 	}
 	if rt != nil {
 		payload["channelIdentity"] = rt.channelIdentity()
+		payload["channelAccountId"] = rt.AccountID()
+		payload["channelAccountShortHash"] = rt.ShortHash()
 	}
 	if len(eventPayload) > 0 {
 		payload["payload"] = eventPayload

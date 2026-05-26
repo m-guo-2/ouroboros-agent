@@ -94,6 +94,11 @@ func drainWorker(worker *SessionWorker) {
 		ctx := logger.WithTrace(baseCtx, fmt.Sprintf("drain-%d", time.Now().UnixNano()), worker.SessionID)
 
 		logger.Business(ctx, "开始处理会话事件")
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId": worker.SessionID,
+			"stage":     "worker_started",
+			"summary":   "会话 worker 开始处理事件",
+		})
 
 		_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{
 			"executionStatus": "processing",
@@ -195,6 +200,16 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 
 	traceCtx := logger.WithTrace(ctx, traceID, sessionID)
 	logger.Boundary(traceCtx, "事件通知", "agentId", req.AgentID, "channel", req.Channel)
+	if req.MessageID > 0 {
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId":        sessionID,
+			"messageId":        req.MessageID,
+			"traceId":          traceID,
+			"channelMessageId": req.ChannelMessageID,
+			"stage":            "worker_notified",
+			"summary":          "runner 已接收处理通知",
+		})
+	}
 
 	logger.Business(traceCtx, "trace 开始",
 		"traceEvent", "start", "agentId", req.AgentID, "userId", req.UserID, "channel", req.Channel)

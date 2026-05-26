@@ -73,6 +73,9 @@ func DeleteSessionMessages(sessionID string) error {
 		 JOIN messages m ON m.id = ma.message_id WHERE m.session_id = ?`, sessionID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM message_lifecycle_events WHERE session_id = ?`, sessionID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM messages WHERE session_id = ?`, sessionID); err != nil {
 		return err
 	}

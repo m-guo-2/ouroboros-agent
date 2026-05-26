@@ -13,12 +13,14 @@ import (
 
 // GroupEvent is the payload sent by a channel adapter to report group lifecycle events.
 type GroupEvent struct {
-	Channel        string         `json:"channel"`
-	AgentID        string         `json:"agentId"`
-	ChannelGroupID string         `json:"channelGroupId"`
-	EventType      string         `json:"eventType"`
-	GroupName      string         `json:"groupName,omitempty"`
-	Payload        map[string]any `json:"payload,omitempty"`
+	Channel                 string         `json:"channel"`
+	AgentID                 string         `json:"agentId"`
+	ChannelAccountID        string         `json:"channelAccountId,omitempty"`
+	ChannelAccountShortHash string         `json:"channelAccountShortHash,omitempty"`
+	ChannelGroupID          string         `json:"channelGroupId"`
+	EventType               string         `json:"eventType"`
+	GroupName               string         `json:"groupName,omitempty"`
+	Payload                 map[string]any `json:"payload,omitempty"`
 }
 
 var validGroupEventTypes = map[string]bool{

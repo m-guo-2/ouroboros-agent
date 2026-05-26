@@ -93,11 +93,26 @@ export interface MessageData {
   content: string
   messageType?: string
   channel?: string
+  channelMessageId?: string
   traceId?: string
   initiator?: string
   senderName?: string
   senderId?: string
   createdAt?: number
+}
+
+export interface MessageLifecycleEvent {
+  id: number
+  sessionId: string
+  messageId?: number
+  traceId?: string
+  channelMessageId?: string
+  stage: string
+  status: "success" | "failed" | string
+  outcome?: "replied" | "no_reply" | "send_failed" | string
+  summary?: string
+  payload?: Record<string, unknown>
+  createdAt: number
 }
 
 // ===== Skills =====

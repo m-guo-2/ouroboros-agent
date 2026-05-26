@@ -83,6 +83,17 @@ func SendToChannel(msg OutgoingMessage) error {
 	if msg.MessageType == "" {
 		msg.MessageType = "text"
 	}
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId": msg.SessionID,
+		"traceId":   msg.TraceID,
+		"stage":     "outbound_send_requested",
+		"summary":   "准备发送渠道回复",
+		"payload": map[string]any{
+			"channel":     msg.Channel,
+			"messageType": msg.MessageType,
+			"content":     msg.Content,
+		},
+	})
 
 	now := timeutil.NowMs()
 	// Best-effort DB write — never block the send on a DB error.
@@ -100,8 +111,26 @@ func SendToChannel(msg OutgoingMessage) error {
 	if msgID > 0 {
 		if err != nil {
 			_, _ = storage.DB.Exec(`UPDATE messages SET status = 'failed' WHERE id = ?`, msgID)
+			_ = storage.SaveLifecycleEvent(map[string]any{
+				"sessionId": msg.SessionID,
+				"messageId": msgID,
+				"traceId":   msg.TraceID,
+				"stage":     "outbound_send_completed",
+				"status":    "failed",
+				"outcome":   "send_failed",
+				"summary":   "渠道发送失败",
+				"payload":   map[string]any{"error": err.Error()},
+			})
 		} else {
 			_, _ = storage.DB.Exec(`UPDATE messages SET status = 'sent' WHERE id = ?`, msgID)
+			_ = storage.SaveLifecycleEvent(map[string]any{
+				"sessionId": msg.SessionID,
+				"messageId": msgID,
+				"traceId":   msg.TraceID,
+				"stage":     "outbound_send_completed",
+				"outcome":   "replied",
+				"summary":   "渠道发送成功",
+			})
 		}
 	}
 	if err != nil {

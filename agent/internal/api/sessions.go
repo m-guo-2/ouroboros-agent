@@ -39,6 +39,10 @@ func handleSessionsWithID(w http.ResponseWriter, r *http.Request) {
 		getSessionMessages(w, r, id)
 		return
 	}
+	if sub == "lifecycle-events" {
+		getSessionLifecycleEvents(w, r, id)
+		return
+	}
 	if sub == "compactions" {
 		getSessionCompactions(w, r, id)
 		return
@@ -66,6 +70,22 @@ func handleSessionsWithID(w http.ResponseWriter, r *http.Request) {
 	default:
 		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func getSessionLifecycleEvents(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	events, err := storage.ListLifecycleEvents(id)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if events == nil {
+		events = []storage.MessageLifecycleEvent{}
+	}
+	ok(w, events)
 }
 
 func listSessions(w http.ResponseWriter, r *http.Request) {
