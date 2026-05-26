@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react"
-import { PanelRightClose, Archive, RefreshCw, ChevronRight, AlertCircle, ChevronsDown, ChevronsUp } from "lucide-react"
+import { PanelRightClose, Archive, RefreshCw, ChevronRight, AlertCircle, ChevronsDown, ChevronsUp, Route, ListChecks } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useQuery } from "@tanstack/react-query"
 import { tracesApi } from "@/api/traces"
@@ -120,14 +120,21 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
   if (!trace && visibleLifecycleEvents.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
-          <h3 className="text-sm font-semibold text-slate-900">决策详情</h3>
+        <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 shrink-0">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-slate-500" />
+            <h3 className="text-sm font-semibold text-slate-900">处理详情</h3>
+          </div>
           <button onClick={onCollapse} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
             <PanelRightClose className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 flex items-center justify-center text-center px-6">
-          <p className="text-sm text-slate-400">点击一条消息，查看消息流和执行过程</p>
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="max-w-sm rounded-lg border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-center">
+            <ListChecks className="mx-auto mb-3 h-7 w-7 text-slate-300" />
+            <p className="text-sm font-medium text-slate-700">还没有选中可追踪的处理</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">点击左侧消息卡片后，这里会显示消息流和执行流；旧消息可能没有新版消息流记录。</p>
+          </div>
         </div>
       </div>
     )
@@ -135,8 +142,11 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white shrink-0">
-        <h3 className="text-sm font-semibold text-slate-900">决策详情</h3>
+      <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 shrink-0">
+        <div className="flex items-center gap-2">
+          <Route className="h-4 w-4 text-slate-500" />
+          <h3 className="text-sm font-semibold text-slate-900">处理详情</h3>
+        </div>
         <div className="flex items-center gap-1">
           {onRefreshTrace && subagentStack.length === 0 && (
             <button
@@ -192,12 +202,14 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
       )}
 
       {subagentStack.length === 0 && (
-        <div className="flex gap-1 border-b border-slate-200 px-4 pt-2 bg-white shrink-0">
+        <div className="border-b border-slate-200 bg-white px-4 py-3 shrink-0">
+          <InspectorSummary trace={trace} events={visibleLifecycleEvents} />
+          <div className="mt-3 flex gap-1">
           <button
             onClick={() => setTab("lifecycle")}
             className={cn(
-              "px-3 py-1.5 text-[11px] font-medium border-b-2 transition-colors",
-              tab === "lifecycle" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"
+              "rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors",
+              tab === "lifecycle" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:text-slate-700"
             )}
           >
             消息流
@@ -205,18 +217,19 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
           <button
             onClick={() => setTab("execution")}
             className={cn(
-              "px-3 py-1.5 text-[11px] font-medium border-b-2 transition-colors",
-              tab === "execution" ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"
+              "rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors",
+              tab === "execution" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:text-slate-700"
             )}
           >
             执行流
           </button>
+          </div>
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {!currentSubagent && tab === "lifecycle" ? (
-          <LifecycleEventList events={visibleLifecycleEvents} />
+          <LifecycleEventList events={visibleLifecycleEvents} hasTrace={!!trace} onSwitchToExecution={() => setTab("execution")} />
         ) : currentSubagent ? (
           isLoadingSubagent ? (
             <div className="flex items-center justify-center h-32 text-sm text-slate-400">
@@ -253,9 +266,65 @@ const STAGE_LABELS: Record<string, string> = {
   processed_completed: "处理完成",
 }
 
-function LifecycleEventList({ events }: { events: MessageLifecycleEvent[] }) {
+function InspectorSummary({ trace, events }: { trace: ExecutionTrace | null; events: MessageLifecycleEvent[] }) {
+  const failed = events.some((event) => event.status === "failed")
+  const completed = [...events].reverse().find((event) => event.stage === "processed_completed")
+  const outcome = completed?.outcome
+  const traceStatus = trace?.status
+
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <SummaryCell label="消息流" value={events.length > 0 ? `${events.length} 条` : "无记录"} tone={events.length > 0 ? "green" : "muted"} />
+      <SummaryCell label="执行流" value={trace ? traceStatus || "可查看" : "无记录"} tone={trace ? "green" : "muted"} />
+      <SummaryCell
+        label="结果"
+        value={failed ? "失败" : outcome === "replied" ? "已回复" : outcome === "no_reply" ? "未回复" : outcome === "send_failed" ? "发送失败" : trace?.status === "running" ? "处理中" : "待确认"}
+        tone={failed || outcome === "send_failed" ? "red" : outcome === "no_reply" ? "amber" : outcome || trace ? "green" : "muted"}
+      />
+    </div>
+  )
+}
+
+function SummaryCell({ label, value, tone }: { label: string; value: string; tone: "muted" | "green" | "amber" | "red" }) {
+  return (
+    <div className={cn(
+      "rounded-md border px-2 py-2",
+      tone === "green" && "border-emerald-200 bg-emerald-50",
+      tone === "amber" && "border-amber-200 bg-amber-50",
+      tone === "red" && "border-red-200 bg-red-50",
+      tone === "muted" && "border-slate-200 bg-slate-50"
+    )}>
+      <div className="text-[10px] text-slate-400">{label}</div>
+      <div className={cn(
+        "mt-0.5 truncate text-[12px] font-semibold",
+        tone === "green" && "text-emerald-700",
+        tone === "amber" && "text-amber-700",
+        tone === "red" && "text-red-700",
+        tone === "muted" && "text-slate-500"
+      )}>{value}</div>
+    </div>
+  )
+}
+
+function LifecycleEventList({ events, hasTrace, onSwitchToExecution }: { events: MessageLifecycleEvent[]; hasTrace: boolean; onSwitchToExecution: () => void }) {
   if (events.length === 0) {
-    return <div className="text-sm text-slate-400 text-center py-12">暂无消息流记录</div>
+    return (
+      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
+        <AlertCircle className="mx-auto mb-2 h-6 w-6 text-slate-300" />
+        <p className="text-sm font-medium text-slate-700">暂无消息流记录</p>
+        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+          这通常代表旧数据还没有生命周期采集，不等于没有收到消息。
+        </p>
+        {hasTrace && (
+          <button
+            onClick={onSwitchToExecution}
+            className="mt-3 rounded-md bg-slate-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-slate-800"
+          >
+            查看执行流
+          </button>
+        )}
+      </div>
+    )
   }
   return (
     <div className="space-y-2">

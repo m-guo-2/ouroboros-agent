@@ -201,9 +201,18 @@ export function MonitorPage() {
   }, [selectedTraceId, refetchSelectedTrace])
 
   const isRefreshingMessages = isFetchingSession || isFetchingMessages
+  const lifecycleEventCount = lifecycleEvents.length
+  const currentOutcome = useMemo(() => {
+    const completed = [...lifecycleEvents].reverse().find((event) => event.stage === "processed_completed")
+    if (!completed?.outcome) return null
+    if (completed.outcome === "replied") return "最近已回复"
+    if (completed.outcome === "no_reply") return "最近未回复"
+    if (completed.outcome === "send_failed") return "最近发送失败"
+    return completed.outcome
+  }, [lifecycleEvents])
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-[#f6f8fb]">
       <SessionList
         sessions={sessions}
         isLoading={isLoading}
@@ -220,23 +229,25 @@ export function MonitorPage() {
         error={sessionsError}
       />
 
-      <div className="flex-1 bg-slate-50 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0">
         {effectiveSessionId ? (
           <>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-white shrink-0">
+            <div className="shrink-0 border-b border-slate-200 bg-white">
+              <div className="flex items-start justify-between gap-4 px-6 py-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-slate-900 truncate">
+                  <h2 className="truncate text-base font-semibold text-slate-950">
                     {session?.channelName || session?.title || `会话 ${effectiveSessionId.slice(0, 8)}`}
                   </h2>
                   {isProcessing && <span className="h-2 w-2 rounded-full bg-green-500 animate-live-pulse" />}
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {totalMessageCount} 条消息
-                  {messages.length < totalMessageCount && ` (已加载 ${messages.length})`}
-                  {" · "}{exchanges.length} 次交互
-                  {compactions.length > 0 && ` · ${compactions.length} 次压缩`}
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-slate-500">
+                  <MetricPill label="消息" value={`${totalMessageCount}${messages.length < totalMessageCount ? ` / 已加载 ${messages.length}` : ""}`} />
+                  <MetricPill label="交互" value={String(exchanges.length)} />
+                  <MetricPill label="消息流" value={String(lifecycleEventCount)} tone={lifecycleEventCount > 0 ? "green" : "muted"} />
+                  {compactions.length > 0 && <MetricPill label="压缩" value={String(compactions.length)} tone="amber" />}
+                  {currentOutcome && <MetricPill label="状态" value={currentOutcome} tone={currentOutcome.includes("失败") ? "red" : currentOutcome.includes("未回复") ? "amber" : "green"} />}
+                </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 {urlState.tab === "conversation" && (
@@ -250,15 +261,19 @@ export function MonitorPage() {
                   </button>
                 )}
                 {!inspectorOpen && (
-                  <button onClick={() => setInspectorOpen(true)}
-                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600">
+                  <button
+                    onClick={() => setInspectorOpen(true)}
+                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+                    title="打开处理详情"
+                  >
                     <PanelRight className="h-4 w-4" />
                   </button>
                 )}
               </div>
             </div>
+            </div>
 
-            <div className="flex items-center gap-0.5 px-5 py-1.5 border-b border-slate-200 bg-white shrink-0">
+            <div className="flex items-center gap-1 border-b border-slate-200 bg-white px-6 py-2 shrink-0">
               {TABS.map((tab) => {
                 const Icon = tab.icon
                 const count = tabCounts[tab.id]
@@ -286,20 +301,41 @@ export function MonitorPage() {
             </div>
 
             {urlState.tab === "conversation" && (
-              <ConversationTimeline
-                exchanges={exchanges}
-                compactions={compactions}
-                isProcessing={!!isProcessing}
-                activeTraceId={activeTraceId}
-                selectedTrace={selectedTrace}
-                lifecycleEvents={lifecycleEvents}
-                selectedExchangeIndex={effectiveExchangeIndex}
-                onSelectExchange={handleSelectExchange}
-                isLoadingMessages={isLoadingMessages}
-                hasMoreMessages={!!hasMoreMessages}
-                onLoadMoreMessages={() => void fetchMoreMessages()}
-                isLoadingMoreMessages={isFetchingMoreMessages}
-              />
+              <div className={cn(
+                "grid min-h-0 flex-1 gap-4 p-4",
+                inspectorOpen ? "grid-cols-1 xl:grid-cols-[minmax(420px,0.92fr)_minmax(460px,1.08fr)]" : "grid-cols-1"
+              )}>
+                <div className="min-h-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                  <ConversationTimeline
+                    exchanges={exchanges}
+                    compactions={compactions}
+                    isProcessing={!!isProcessing}
+                    activeTraceId={activeTraceId}
+                    selectedTrace={selectedTrace}
+                    lifecycleEvents={lifecycleEvents}
+                    selectedExchangeIndex={effectiveExchangeIndex}
+                    onSelectExchange={handleSelectExchange}
+                    isLoadingMessages={isLoadingMessages}
+                    hasMoreMessages={!!hasMoreMessages}
+                    onLoadMoreMessages={() => void fetchMoreMessages()}
+                    isLoadingMoreMessages={isFetchingMoreMessages}
+                  />
+                </div>
+                {inspectorOpen && (
+                  <div className="min-h-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <DecisionInspector
+                      key={selectedTrace?.id ?? "empty-trace"}
+                      trace={selectedTrace}
+                      lifecycleEvents={lifecycleEvents}
+                      selectedMessageId={selectedMessageId}
+                      isSessionProcessing={isProcessing}
+                      onCollapse={() => setInspectorOpen(false)}
+                      onRefreshTrace={handleRefreshTrace}
+                      isRefreshingTrace={isFetchingSelectedTrace}
+                    />
+                  </div>
+                )}
+              </div>
             )}
             {urlState.tab === "memory" && (
               <SessionMemoryPanel sessionId={effectiveSessionId} enabled={urlState.tab === "memory"} />
@@ -327,21 +363,6 @@ export function MonitorPage() {
         )}
       </div>
 
-      {inspectorOpen && effectiveSessionId && (
-        <div className="w-[420px] shrink-0 border-l border-slate-200 bg-white">
-          <DecisionInspector
-            key={selectedTrace?.id ?? "empty-trace"}
-            trace={selectedTrace}
-            lifecycleEvents={lifecycleEvents}
-            selectedMessageId={selectedMessageId}
-            isSessionProcessing={isProcessing}
-            onCollapse={() => setInspectorOpen(false)}
-            onRefreshTrace={handleRefreshTrace}
-            isRefreshingTrace={isFetchingSelectedTrace}
-          />
-        </div>
-      )}
-
       <DeleteSessionDialog
         open={!!deleteTargetId}
         onOpenChange={(open) => { if (!open) setDeleteTargetId(null) }}
@@ -349,5 +370,20 @@ export function MonitorPage() {
         onConfirm={confirmDeleteSession}
       />
     </div>
+  )
+}
+
+function MetricPill({ label, value, tone = "muted" }: { label: string; value: string; tone?: "muted" | "green" | "amber" | "red" }) {
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-md border px-2 py-1",
+      tone === "green" && "border-emerald-200 bg-emerald-50 text-emerald-700",
+      tone === "amber" && "border-amber-200 bg-amber-50 text-amber-700",
+      tone === "red" && "border-red-200 bg-red-50 text-red-700",
+      tone === "muted" && "border-slate-200 bg-slate-50 text-slate-500"
+    )}>
+      <span className="text-slate-400">{label}</span>
+      <span className="font-medium">{value}</span>
+    </span>
   )
 }

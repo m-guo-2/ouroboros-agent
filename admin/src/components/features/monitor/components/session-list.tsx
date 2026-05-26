@@ -66,7 +66,7 @@ export function SessionList({
   }
 
   return (
-    <div className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white" data-time-ago-tick={timeAgoTick}>
+    <div className="flex w-[280px] shrink-0 flex-col border-r border-slate-200 bg-white" data-time-ago-tick={timeAgoTick}>
       <div className="shrink-0 border-b border-slate-100 p-3">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-semibold text-slate-900">会话</h2>
