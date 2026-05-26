@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react"
-import { Activity, MessageSquare, Brain, Clock, GitBranch, PanelRight, RefreshCw, Radio, Inbox, CheckCircle2, AlertTriangle, Layers3 } from "lucide-react"
+import { Activity, MessageSquare, Brain, Clock, GitBranch, PanelRight, RefreshCw, Route, TerminalSquare } from "lucide-react"
 import { useMonitorSessions } from "@/hooks/use-monitor"
 import { useSession, useSessionMessages, useDeleteSession, useSessionLifecycleEvents } from "@/hooks/use-sessions"
 import { useMonitorSearchParams } from "@/hooks/use-monitor-search-params"
@@ -201,40 +201,6 @@ export function MonitorPage() {
   }, [selectedTraceId, refetchSelectedTrace])
 
   const isRefreshingMessages = isFetchingSession || isFetchingMessages
-  const lifecycleEventCount = lifecycleEvents.length
-  const lifecycleByMessage = useMemo(() => {
-    const map = new Map<number, typeof lifecycleEvents>()
-    for (const event of lifecycleEvents) {
-      if (!event.messageId) continue
-      const items = map.get(event.messageId) ?? []
-      items.push(event)
-      map.set(event.messageId, items)
-    }
-    return map
-  }, [lifecycleEvents])
-  const outcomeStats = useMemo(() => {
-    let replied = 0
-    let noReply = 0
-    let failed = 0
-    let noLifecycle = 0
-    for (const exchange of exchanges) {
-      const events = exchange.userMessage.id ? lifecycleByMessage.get(exchange.userMessage.id) ?? [] : []
-      const completed = [...events].reverse().find((event) => event.stage === "processed_completed")
-      if (events.length === 0) noLifecycle += 1
-      if (events.some((event) => event.status === "failed") || completed?.outcome === "send_failed") failed += 1
-      else if (completed?.outcome === "no_reply") noReply += 1
-      else if (completed?.outcome === "replied" || exchange.assistantMessage) replied += 1
-    }
-    return { replied, noReply, failed, noLifecycle }
-  }, [exchanges, lifecycleByMessage])
-  const currentOutcome = useMemo(() => {
-    const completed = [...lifecycleEvents].reverse().find((event) => event.stage === "processed_completed")
-    if (!completed?.outcome) return null
-    if (completed.outcome === "replied") return "最近已回复"
-    if (completed.outcome === "no_reply") return "最近未回复"
-    if (completed.outcome === "send_failed") return "最近发送失败"
-    return completed.outcome
-  }, [lifecycleEvents])
 
   return (
     <div className="flex h-full bg-[#f6f8fb]">
@@ -258,19 +224,24 @@ export function MonitorPage() {
         {effectiveSessionId ? (
           <>
             <div className="shrink-0 border-b border-slate-200 bg-white">
-              <div className="bg-slate-950 px-6 py-5 text-white">
+              <div className="bg-slate-950 px-6 py-4 text-white">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-[12px] font-medium text-slate-400">
-                      <Radio className="h-3.5 w-3.5 text-cyan-300" />
-                      Monitor Command Center
+                      <TerminalSquare className="h-3.5 w-3.5 text-cyan-300" />
+                      Execution Observatory
                       {isProcessing && <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-emerald-400/15 px-2 py-0.5 text-emerald-200"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-live-pulse" />处理中</span>}
                     </div>
-                    <h2 className="mt-2 truncate text-xl font-semibold tracking-normal">
+                    <h2 className="mt-2 truncate text-lg font-semibold tracking-normal">
                       {session?.channelName || session?.title || `会话 ${effectiveSessionId.slice(0, 8)}`}
                     </h2>
-                    <p className="mt-1 truncate text-[12px] text-slate-400">
-                      {effectiveSessionId} · {session?.sourceChannel || "unknown"} · {session?.executionStatus || "unknown"}
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-slate-400">
+                      <span>{totalMessageCount} 条消息</span>
+                      <span>·</span>
+                      <span>{exchanges.length} 次执行</span>
+                      <span>·</span>
+                      <span>{session?.executionStatus || "unknown"}</span>
+                      {messages.length < totalMessageCount && <span>· 已加载 {messages.length}</span>}
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -295,11 +266,9 @@ export function MonitorPage() {
                     )}
                   </div>
                 </div>
-                <div className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
-                  <CommandMetric icon={Inbox} label="收到消息" value={String(totalMessageCount)} detail={messages.length < totalMessageCount ? `已加载 ${messages.length}` : `${exchanges.length} 次交互`} tone="cyan" />
-                  <CommandMetric icon={CheckCircle2} label="已回复" value={String(outcomeStats.replied)} detail={currentOutcome || "按当前加载消息统计"} tone="green" />
-                  <CommandMetric icon={AlertTriangle} label="未回复/异常" value={String(outcomeStats.noReply + outcomeStats.failed)} detail={`${outcomeStats.noReply} 未回复 · ${outcomeStats.failed} 失败`} tone="amber" />
-                  <CommandMetric icon={Layers3} label="消息流覆盖" value={String(lifecycleEventCount)} detail={`${outcomeStats.noLifecycle} 条无新版消息流`} tone={lifecycleEventCount > 0 ? "violet" : "muted"} />
+                <div className="mt-4 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-[12px] text-slate-300">
+                  <Route className="h-3.5 w-3.5 text-cyan-200" />
+                  <span>当前视图只突出执行过程；消息接收记录降级为辅助证据。</span>
                 </div>
               </div>
             </div>
@@ -400,34 +369,6 @@ export function MonitorPage() {
         sessionName={deleteTargetId ? (sessions?.find(s => s.id === deleteTargetId)?.channelName || sessions?.find(s => s.id === deleteTargetId)?.title || deleteTargetId.slice(0, 10)) : ""}
         onConfirm={confirmDeleteSession}
       />
-    </div>
-  )
-}
-
-function CommandMetric({ icon: Icon, label, value, detail, tone }: {
-  icon: typeof Inbox
-  label: string
-  value: string
-  detail: string
-  tone: "cyan" | "green" | "amber" | "violet" | "muted"
-}) {
-  return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.06] p-3">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[11px] font-medium text-slate-400">{label}</span>
-        <span className={cn(
-          "inline-flex h-7 w-7 items-center justify-center rounded-md",
-          tone === "cyan" && "bg-cyan-400/15 text-cyan-200",
-          tone === "green" && "bg-emerald-400/15 text-emerald-200",
-          tone === "amber" && "bg-amber-400/15 text-amber-200",
-          tone === "violet" && "bg-violet-400/15 text-violet-200",
-          tone === "muted" && "bg-slate-400/15 text-slate-300"
-        )}>
-          <Icon className="h-3.5 w-3.5" />
-        </span>
-      </div>
-      <div className="mt-2 text-2xl font-semibold tracking-normal text-white">{value}</div>
-      <div className="mt-1 truncate text-[11px] text-slate-400">{detail}</div>
     </div>
   )
 }

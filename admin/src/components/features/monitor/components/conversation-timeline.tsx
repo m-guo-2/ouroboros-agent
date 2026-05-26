@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from "react"
 import { useTimeAgoTick } from "@/hooks/use-time-ago-tick"
-import { Zap, Bot, MessageSquare, Copy, ArrowDown, CheckCircle2, Circle, XCircle, Inbox, Timer, CornerDownRight, ArrowRight, MessageCircleReply } from "lucide-react"
+import { Zap, Bot, MessageSquare, Copy, ArrowDown, Inbox, Timer, CornerDownRight, ArrowRight, MessageCircleReply } from "lucide-react"
 import { MarkdownContent } from "@/components/shared/markdown-content"
 import { cn, timeAgo, absoluteTime, copyToClipboard } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
@@ -94,8 +94,8 @@ export function ConversationTimeline({
             <Inbox className="h-4 w-4" />
           </span>
           <div>
-            <div className="text-sm font-semibold text-slate-900">事件台账</div>
-            <div className="text-[11px] text-slate-400">按消息处理结果归档，不再按聊天气泡展示</div>
+            <div className="text-sm font-semibold text-slate-900">执行入口</div>
+            <div className="text-[11px] text-slate-400">选择一条消息，右侧查看完整执行过程</div>
           </div>
         </div>
         <span className="text-[12px] text-slate-400">{exchanges.length} 次交互</span>
@@ -196,17 +196,6 @@ export function ConversationTimeline({
                       </p>
                     </div>
 
-                    <div className="border-t border-slate-100 px-4 py-3">
-                      {messageLifecycle.length > 0 ? (
-                        <LifecycleStatusBar events={messageLifecycle} />
-                      ) : (
-                        <div className="flex items-center gap-2 text-[12px] text-slate-400">
-                          <Circle className="h-3.5 w-3.5" />
-                          无新版消息流记录
-                        </div>
-                      )}
-                    </div>
-
                     <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
                       {exchange.assistantMessage ? (
                         <div>
@@ -240,7 +229,7 @@ export function ConversationTimeline({
                       {exchange.traceId && (
                         <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
                           <CornerDownRight className="h-3.5 w-3.5" />
-                          <span>{isSelected ? "右侧正在查看" : "点击定位到右侧处理链路"}</span>
+                            <span>{isSelected ? "右侧正在查看执行过程" : "点击查看执行过程"}</span>
                           <ArrowRight className="h-3 w-3" />
                         </div>
                       )}
@@ -262,53 +251,6 @@ export function ConversationTimeline({
         <ArrowDown className="h-4 w-4" />
       </button>
     )}
-    </div>
-  )
-}
-
-const STATUS_STEPS = [
-  { stage: "message_saved", label: "入库" },
-  { stage: "session_event_appended", label: "入队" },
-  { stage: "event_drained", label: "消费" },
-  { stage: "context_built", label: "上下文" },
-  { stage: "processed_completed", label: "完成" },
-]
-
-function LifecycleStatusBar({ events }: { events: MessageLifecycleEvent[] }) {
-  const byStage = new Map<string, MessageLifecycleEvent>()
-  for (const event of events) byStage.set(event.stage, event)
-  const done = byStage.get("processed_completed")
-  const outcomeLabel = done?.outcome === "replied"
-    ? "已回复"
-    : done?.outcome === "no_reply"
-    ? "未回复"
-    : done?.outcome === "send_failed"
-    ? "发送失败"
-    : done?.outcome || ""
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-      {STATUS_STEPS.map((step) => {
-        const event = byStage.get(step.stage)
-        const failed = event?.status === "failed"
-        const Icon = failed ? XCircle : event ? CheckCircle2 : Circle
-        return (
-          <span
-            key={step.stage}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md border px-2 py-1",
-              failed
-                ? "border-red-200 bg-red-50 text-red-700"
-                : event
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-slate-200 bg-white text-slate-400"
-            )}
-          >
-            <Icon className="h-3 w-3" />
-            {step.stage === "processed_completed" && outcomeLabel ? outcomeLabel : step.label}
-          </span>
-        )
-      })}
     </div>
   )
 }

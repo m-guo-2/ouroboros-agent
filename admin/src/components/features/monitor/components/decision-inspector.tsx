@@ -79,7 +79,7 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
   const [subagentStack, setSubagentStack] = useState<Array<{ traceId: string; name: string }>>([])
   const [expandAll, setExpandAll] = useState<boolean | null>(null)
   const [expandKey, setExpandKey] = useState(0)
-  const [tab, setTab] = useState<"lifecycle" | "execution">("lifecycle")
+  const [tab, setTab] = useState<"lifecycle" | "execution">("execution")
 
   const currentSubagent = subagentStack.length > 0 ? subagentStack[subagentStack.length - 1] : null
 
@@ -132,8 +132,8 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
         <div className="flex-1 flex items-center justify-center px-6">
           <div className="max-w-sm rounded-lg border border-dashed border-slate-200 bg-slate-50 px-5 py-6 text-center">
             <ListChecks className="mx-auto mb-3 h-7 w-7 text-slate-300" />
-            <p className="text-sm font-medium text-slate-700">还没有选中可追踪的处理</p>
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">点击左侧消息卡片后，这里会显示消息流和执行流；旧消息可能没有新版消息流记录。</p>
+            <p className="text-sm font-medium text-slate-700">还没有选中执行过程</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">点击左侧消息后，这里会显示模型、工具、错误和返回路径。</p>
           </div>
         </div>
       </div>
@@ -145,7 +145,7 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
       <div className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4 shrink-0">
         <div className="flex items-center gap-2">
           <Route className="h-4 w-4 text-slate-500" />
-          <h3 className="text-sm font-semibold text-slate-900">处理详情</h3>
+          <h3 className="text-sm font-semibold text-slate-900">执行过程</h3>
         </div>
         <div className="flex items-center gap-1">
           {onRefreshTrace && subagentStack.length === 0 && (
@@ -206,15 +206,6 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
           <InspectorSummary trace={trace} events={visibleLifecycleEvents} />
           <div className="mt-3 flex gap-1">
           <button
-            onClick={() => setTab("lifecycle")}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors",
-              tab === "lifecycle" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:text-slate-700"
-            )}
-          >
-            消息流
-          </button>
-          <button
             onClick={() => setTab("execution")}
             className={cn(
               "rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors",
@@ -222,6 +213,15 @@ export function DecisionInspector({ trace, lifecycleEvents = [], selectedMessage
             )}
           >
             执行流
+          </button>
+          <button
+            onClick={() => setTab("lifecycle")}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-[11px] font-medium transition-colors",
+              tab === "lifecycle" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:text-slate-700"
+            )}
+          >
+            接收记录
           </button>
           </div>
         </div>
@@ -274,13 +274,13 @@ function InspectorSummary({ trace, events }: { trace: ExecutionTrace | null; eve
 
   return (
     <div className="grid grid-cols-3 gap-2">
-      <SummaryCell label="消息流" value={events.length > 0 ? `${events.length} 条` : "无记录"} tone={events.length > 0 ? "green" : "muted"} />
       <SummaryCell label="执行流" value={trace ? traceStatus || "可查看" : "无记录"} tone={trace ? "green" : "muted"} />
       <SummaryCell
         label="结果"
         value={failed ? "失败" : outcome === "replied" ? "已回复" : outcome === "no_reply" ? "未回复" : outcome === "send_failed" ? "发送失败" : trace?.status === "running" ? "处理中" : "待确认"}
         tone={failed || outcome === "send_failed" ? "red" : outcome === "no_reply" ? "amber" : outcome || trace ? "green" : "muted"}
       />
+      <SummaryCell label="接收记录" value={events.length > 0 ? `${events.length} 条` : "无记录"} tone={events.length > 0 ? "green" : "muted"} />
     </div>
   )
 }
@@ -311,7 +311,7 @@ function LifecycleEventList({ events, hasTrace, onSwitchToExecution }: { events:
     return (
       <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center">
         <AlertCircle className="mx-auto mb-2 h-6 w-6 text-slate-300" />
-        <p className="text-sm font-medium text-slate-700">暂无消息流记录</p>
+        <p className="text-sm font-medium text-slate-700">暂无接收记录</p>
         <p className="mt-1 text-xs leading-relaxed text-slate-400">
           这通常代表旧数据还没有生命周期采集，不等于没有收到消息。
         </p>
