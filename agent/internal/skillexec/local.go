@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const defaultTimeout = 300 * time.Second
+const defaultTimeout = 600 * time.Second
 
 // LocalExecutor runs scripts via sh on the host machine.
 type LocalExecutor struct{}
@@ -26,7 +26,11 @@ func (e *LocalExecutor) Execute(ctx context.Context, req ScriptRequest) (*Script
 		cmdStr = scriptPath + " " + req.Args
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)

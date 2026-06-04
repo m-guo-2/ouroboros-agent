@@ -1,6 +1,9 @@
 package skillexec
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // ScriptExecutor executes skill scripts.
 // Current implementation: LocalExecutor (sh -c).
@@ -15,6 +18,7 @@ type ScriptRequest struct {
 	Script   string            // script filename within scripts/ subdirectory
 	Args     string            // command-line arguments string
 	Env      map[string]string // environment variables for the script process; when set, replaces the default inherited env
+	Timeout  time.Duration     // optional execution timeout; defaults to LocalExecutor's default
 }
 
 // ScriptResult holds the output of a script execution.

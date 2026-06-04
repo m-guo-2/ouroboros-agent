@@ -1289,6 +1289,10 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			script, _ := input["script"].(string)
 			args, _ := input["args"].(string)
 			asyncMode, _ := input["async"].(bool)
+			timeout := 600 * time.Second
+			if t, ok := input["timeout_seconds"].(float64); ok && t > 0 {
+				timeout = time.Duration(int(t)) * time.Second
+			}
 			if skillID == "" || script == "" {
 				return nil, fmt.Errorf("skill_id and script are required")
 			}
@@ -1329,6 +1333,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 				Script:   script,
 				Args:     args,
 				Env:      envMap,
+				Timeout:  timeout,
 			}
 
 			if !asyncMode {
