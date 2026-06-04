@@ -1342,6 +1342,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 				if err != nil {
 					return nil, err
 				}
+				if result.ExitCode != 0 {
+					return nil, fmt.Errorf("script %q exited with code %d:\n%s", script, result.ExitCode, result.Output)
+				}
 				return result, nil
 			}
 
