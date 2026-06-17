@@ -41,6 +41,7 @@ func seedDefaultModels() error {
 		{"model-deepseek-chat", "DeepSeek Chat (V3)", "deepseek", "deepseek-chat"},
 		{"model-deepseek-reasoner", "DeepSeek Reasoner (R1)", "deepseek", "deepseek-reasoner"},
 		{"model-doubao-pro", "Doubao 1.5 Pro", "volcengine", "doubao-1-5-pro-256k"},
+		{"model-doubao-seedream-lite", "Doubao Seedream 5.0 Lite", "volcengine", "doubao-seedream-5-0-lite"},
 	}
 	for _, s := range seeds {
 		_, err := DB.Exec(

@@ -238,6 +238,7 @@ func volcengineFallbackModels() []availableModel {
 		{ID: "doubao-1-5-pro-32k", Name: "Doubao 1.5 Pro 32K", Provider: "volcengine"},
 		{ID: "doubao-1-5-lite-32k", Name: "Doubao 1.5 Lite 32K", Provider: "volcengine"},
 		{ID: "doubao-1-5-thinking-pro-250k", Name: "Doubao 1.5 Thinking Pro", Provider: "volcengine"},
+		{ID: "doubao-seedream-5-0-lite", Name: "Doubao Seedream 5.0 Lite", Provider: "volcengine"},
 	}
 }
 

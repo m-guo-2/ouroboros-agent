@@ -3,7 +3,7 @@
 export interface Model {
   id: string
   name: string
-  provider: "claude" | "openai" | "kimi" | "glm" | "deepseek"
+  provider: "claude" | "openai" | "kimi" | "glm" | "deepseek" | "volcengine"
   enabled: boolean
   configured: boolean
   model: string
