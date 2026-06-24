@@ -59,6 +59,16 @@ const dataReportInstruction = `
 - 如果结果包含 imageUrl，用 send_channel_message（messageType: "image"，content: imageUrl）发送图片，可附带简短文字说明
 - 如果结果包含 fallback: true，用 send_channel_message 发送 fallbackText 作为纯文本替代`
 
+const visualImageInstruction = `
+
+## 图片生成
+
+当用户明确要求表情包、海报、视觉化摘要、运营战报、宣传图等表达型图片时，优先加载 visual-prompt-designer skill，将需求改写成专业生图提示词，再调用 image_generate 工具生成图片。
+
+当用户要求基于当前会话中的原图进行修改、融合或参考生成时，从消息的 [attachments] 段取得图片 id，并通过 image_generate.referenceAttachmentIds 传入。不要把 resource_uri 当作外部 URL，也不要在遗漏参考图时退化成纯文生图。
+
+严格数字准确的报表、排行榜、KPI 卡片优先使用 data_report；不要用生图模型承载必须逐字逐数准确的内容。`
+
 func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	result := agentSystemPrompt
 
@@ -80,6 +90,7 @@ func BuildSystemPrompt(agentSystemPrompt, skillsSnippet string) string {
 	if cardrender.Available() {
 		result += dataReportInstruction
 	}
+	result += visualImageInstruction
 	return result
 }
 
@@ -506,7 +517,7 @@ func buildAttachmentInspectionReminder(attachments []storage.AttachmentData) str
 	if len(attachments) == 0 {
 		return ""
 	}
-	lines := []string{"[runtime guard]", "本轮回答依赖附件内容，请先调用 inspect_attachment 分析以下附件后再回复用户："}
+	lines := []string{"[runtime guard]", "本轮回答依赖附件内容。请先结合用户问题规划本次分析目标，再调用 inspect_attachment，并通过 goal 明确要从附件中确认什么："}
 	for _, attachment := range attachments {
 		lines = append(lines, fmt.Sprintf("- attachmentId=%s kind=%s", attachment.ID, attachment.Kind))
 	}
@@ -1015,6 +1026,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	ostools.RegisterRecallContext(registry, worker.SessionID)
 	ostools.RegisterSaveMemory(registry, worker.SessionID)
 	engine.RegisterTavilyTool(registry)
+	registerImageGenerateTool(registry, worker.SessionID)
 
 	if sb != nil {
 		sandbox.RegisterTools(registry, sb)

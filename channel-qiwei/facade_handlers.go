@@ -40,6 +40,7 @@ type parseMessageRequest struct {
 	MsgData     map[string]any `json:"msgData,omitempty"`
 	ResourceURI string         `json:"resourceUri,omitempty"`
 	LocalPath   string         `json:"localPath,omitempty"`
+	Goal        string         `json:"goal,omitempty"`
 }
 
 type facadeSendMessageRequest struct {
@@ -84,6 +85,7 @@ type parsedAttachment struct {
 	ParsedText    string         `json:"parsedText,omitempty"`
 	Summary       string         `json:"summary,omitempty"`
 	DataURL       string         `json:"-"`
+	AnalysisGoal  string         `json:"-"`
 	Raw           map[string]any `json:"raw,omitempty"`
 }
 
@@ -323,7 +325,7 @@ func (a *app) handleParseMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resourceURI := strings.TrimSpace(firstNonEmpty(req.ResourceURI, req.LocalPath))
-	parsed, err := a.parseMessage(r.Context(), rt, msgType, msgData, raw, resourceURI)
+	parsed, err := a.parseMessage(r.Context(), rt, msgType, msgData, raw, resourceURI, req.Goal)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
@@ -630,7 +632,7 @@ func (a *app) listGroups(ctx context.Context, rt *accountRuntime) ([]map[string]
 	return extractItems(data, "roomList", "list", "rows", "data"), nil
 }
 
-func (a *app) parseMessage(ctx context.Context, rt *accountRuntime, msgType string, msgData map[string]any, raw map[string]any, resourceURI string) (parsedMessage, error) {
+func (a *app) parseMessage(ctx context.Context, rt *accountRuntime, msgType string, msgData map[string]any, raw map[string]any, resourceURI, goal string) (parsedMessage, error) {
 	out := parsedMessage{
 		MessageType: msgType,
 		Raw:         raw,
@@ -646,7 +648,7 @@ func (a *app) parseMessage(ctx context.Context, rt *accountRuntime, msgType stri
 	}
 
 	if strings.TrimSpace(resourceURI) != "" {
-		text, err := a.parsePreparedResource(ctx, msgType, resourceURI)
+		text, err := a.parsePreparedResource(ctx, msgType, resourceURI, goal)
 		if err != nil {
 			return parsedMessage{}, err
 		}
@@ -662,12 +664,13 @@ func (a *app) parseMessage(ctx context.Context, rt *accountRuntime, msgType stri
 	return out, nil
 }
 
-func (a *app) parsePreparedResource(ctx context.Context, msgType, resourceURI string) (string, error) {
+func (a *app) parsePreparedResource(ctx context.Context, msgType, resourceURI, goal string) (string, error) {
 	attachment := parsedAttachment{
-		ResourceURI: resourceURI,
-		LocalPath:   resourceURI,
-		Name:        resourceBaseName(resourceURI),
-		MIMEType:    mime.TypeByExtension(strings.ToLower(filepath.Ext(resourceURI))),
+		ResourceURI:  resourceURI,
+		LocalPath:    resourceURI,
+		Name:         resourceBaseName(resourceURI),
+		MIMEType:     mime.TypeByExtension(strings.ToLower(filepath.Ext(resourceURI))),
+		AnalysisGoal: strings.TrimSpace(goal),
 	}
 	switch msgType {
 	case "image":
@@ -1025,7 +1028,7 @@ type volcengineRecognizer struct {
 func newVolcengineRecognizer(cfg Config) recognizer {
 	return &volcengineRecognizer{
 		cfg:        cfg,
-		httpClient: logger.NewClient("volcengine", 30*time.Second),
+		httpClient: logger.NewClient("volcengine", 120*time.Second),
 	}
 }
 
@@ -1044,15 +1047,20 @@ func (r *volcengineRecognizer) ParseImage(ctx context.Context, attachment parsed
 			return parsedAttachment{}, err
 		}
 	}
+	prompt := "请识别图片中的文字、关键信息，并给出简洁摘要。"
+	if attachment.AnalysisGoal != "" {
+		prompt = "请根据以下目标分析图片，并只返回与目标相关的客观信息。看不清或无法确认的内容要明确说明，不要猜测。\n\n分析目标：" + attachment.AnalysisGoal
+	}
 	body := map[string]any{
-		"model": r.cfg.VolcVisionModel,
+		"model":      r.cfg.VolcVisionModel,
+		"max_tokens": 1024,
 		"messages": []map[string]any{
 			{
 				"role": "user",
 				"content": []map[string]any{
 					{
 						"type": "text",
-						"text": "请识别图片中的文字、关键信息，并给出简洁摘要。",
+						"text": prompt,
 					},
 					{
 						"type": "image_url",

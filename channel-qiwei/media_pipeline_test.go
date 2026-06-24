@@ -162,7 +162,7 @@ func TestParseMessageVoiceReturnsTranscript(t *testing.T) {
 	msgType, msgData := loadFixture(t, "qw-voice.json")
 	raw := map[string]any{"msgType": msgType}
 
-	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "voice", msgData, raw, "")
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "voice", msgData, raw, "", "")
 	if err != nil {
 		t.Fatalf("parseMessage failed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestParseMessageLocalImageUsesRecognizer(t *testing.T) {
 	app.recognizer = &fakeRecognizer{imageText: "图片里的文字"}
 	resourceURI := putTestObject(t, app, "sample.png", "image/png", []byte("fake image"))
 
-	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "image", nil, nil, resourceURI)
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "image", nil, nil, resourceURI, "")
 	if err != nil {
 		t.Fatalf("parseMessage resource image failed: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestParseMessageLocalFileReadsText(t *testing.T) {
 	app := newTestApp(t, "")
 	resourceURI := putTestObject(t, app, "sample.txt", "text/plain; charset=utf-8", []byte("这是文件内容"))
 
-	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "file", nil, nil, resourceURI)
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "file", nil, nil, resourceURI, "")
 	if err != nil {
 		t.Fatalf("parseMessage resource file failed: %v", err)
 	}

@@ -64,20 +64,22 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 				"msgData":     map[string]interface{}{"type": "object", "description": "消息载荷。若未传完整 message，可用这个字段传原始 msgData"},
 				"resourceUri": map[string]interface{}{"type": "string", "description": "qiwei 已准备好的资源地址，例如 oss://bucket/key。适合对图片/文件做二次理解时直接传入"},
 				"localPath":   map[string]interface{}{"type": "string", "description": "兼容旧参数，效果等同于 resourceUri"},
+				"goal":        map[string]interface{}{"type": "string", "description": "解析图片时的目标，明确本次需要从图片中确认什么", "maxLength": 1000},
 			},
 		},
 		createWecomHTTPToolExecutor("parse_message"),
 	)
 
 	registry.RegisterBuiltin("inspect_attachment",
-		"按需分析当前会话中的结构化附件。优先传 attachmentId；图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document。语音已前置转写，不需要通过这个工具处理。",
+		"按需分析当前会话中的结构化附件。调用前先根据用户问题和对话上下文规划本次分析目标，并通过 goal 明确要从附件中确认什么。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document。语音已前置转写，不需要通过这个工具处理。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
 				"attachmentId": map[string]interface{}{"type": "string", "description": "附件 ID。来自用户消息里 [attachments] 段中的 id 字段"},
 				"task":         map[string]interface{}{"type": "string", "description": "分析任务：describe_image / ocr_image / extract_text / summarize_document / summarize_video"},
+				"goal":         map[string]interface{}{"type": "string", "description": "结合当前对话规划的本次分析目标。明确要确认的内容和输出重点，避免泛化描述", "maxLength": 1000},
 			},
-			Required: []string{"attachmentId"},
+			Required: []string{"attachmentId", "goal"},
 		},
 		createInspectAttachmentExecutor(request),
 	)

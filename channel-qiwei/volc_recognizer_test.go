@@ -12,9 +12,11 @@ import (
 
 func TestVolcengineRecognizerParseImageUsesArkChatCompletion(t *testing.T) {
 	var (
-		gotAuth  string
-		gotModel string
-		gotImage string
+		gotAuth      string
+		gotModel     string
+		gotImage     string
+		gotMaxTokens int64
+		gotPrompt    string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -23,9 +25,12 @@ func TestVolcengineRecognizerParseImageUsesArkChatCompletion(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		gotModel = anyToString(body["model"])
+		gotMaxTokens = anyToInt64(body["max_tokens"])
 		messages, _ := body["messages"].([]any)
 		message, _ := messages[0].(map[string]any)
 		content, _ := message["content"].([]any)
+		textPart, _ := content[0].(map[string]any)
+		gotPrompt = anyToString(textPart["text"])
 		imagePart, _ := content[1].(map[string]any)
 		imageURL, _ := imagePart["image_url"].(map[string]any)
 		gotImage = anyToString(imageURL["url"])
@@ -45,9 +50,10 @@ func TestVolcengineRecognizerParseImageUsesArkChatCompletion(t *testing.T) {
 	}
 
 	parsed, err := recognizer.ParseImage(context.Background(), parsedAttachment{
-		Kind:      "image",
-		Name:      filepath.Base(imagePath),
-		LocalPath: imagePath,
+		Kind:         "image",
+		Name:         filepath.Base(imagePath),
+		LocalPath:    imagePath,
+		AnalysisGoal: "确认图片左右两侧的主要颜色",
 	})
 	if err != nil {
 		t.Fatalf("ParseImage failed: %v", err)
@@ -57,6 +63,12 @@ func TestVolcengineRecognizerParseImageUsesArkChatCompletion(t *testing.T) {
 	}
 	if gotModel != "vision-model" {
 		t.Fatalf("unexpected model: %q", gotModel)
+	}
+	if gotMaxTokens != 1024 {
+		t.Fatalf("unexpected max_tokens: %d", gotMaxTokens)
+	}
+	if !strings.Contains(gotPrompt, "确认图片左右两侧的主要颜色") {
+		t.Fatalf("analysis goal missing from prompt: %q", gotPrompt)
 	}
 	if !strings.HasPrefix(gotImage, "data:image/png;base64,") {
 		t.Fatalf("expected data url image payload, got %q", gotImage)

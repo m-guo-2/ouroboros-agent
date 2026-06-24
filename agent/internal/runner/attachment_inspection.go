@@ -19,6 +19,15 @@ func createInspectAttachmentExecutor(request ProcessRequest) func(context.Contex
 				"message": "attachmentId is required",
 			}, nil
 		}
+		goal := strings.TrimSpace(anyString(input["goal"]))
+		if goal == "" {
+			return map[string]any{
+				"status":       "failed",
+				"code":         "analysis_goal_required",
+				"attachmentId": attachmentID,
+				"message":      "goal is required",
+			}, nil
+		}
 		attachment, ok := resolveAttachmentForSession(request, attachmentID)
 		if !ok {
 			return map[string]any{
@@ -41,6 +50,7 @@ func createInspectAttachmentExecutor(request ProcessRequest) func(context.Contex
 		result, err := parseExecutor(ctx, map[string]interface{}{
 			"messageType": attachment.Kind,
 			"resourceUri": attachment.ResourceURI,
+			"goal":        goal,
 		})
 		if err != nil {
 			return map[string]any{
@@ -62,6 +72,7 @@ func createInspectAttachmentExecutor(request ProcessRequest) func(context.Contex
 			"attachmentId": attachmentID,
 			"kind":         attachment.Kind,
 			"task":         task,
+			"goal":         goal,
 			"text":         text,
 			"raw":          result,
 		}, nil
