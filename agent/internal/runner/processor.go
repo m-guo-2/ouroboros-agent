@@ -130,6 +130,17 @@ func applyPersonaOverride(agent *storage.AgentConfig, persona *storage.Persona) 
 	}
 }
 
+func sortedSkillIDsFromMap(ids map[string]bool) []string {
+	out := make([]string, 0, len(ids))
+	for id, ok := range ids {
+		if ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // resolveSubagentLLM returns the LLM client and model name for a subagent profile.
 // If the agent has a per-profile override with valid credentials, a dedicated client is built.
 // Otherwise the main agent's client and model are returned.
@@ -375,6 +386,12 @@ func formatUserMessage(senderName, channel, messageType, channelMessageID, conte
 			}
 		}
 		content = quotedBlock + "\n" + content
+	}
+
+	if pd, ok := channelMeta["participantDiscovery"].(map[string]any); ok {
+		if relation, _ := pd["relation"].(string); relation != "" {
+			meta = append(meta, fmt.Sprintf("participant_discovered relation=%s", relation))
+		}
 	}
 
 	if len(meta) == 0 {
@@ -864,6 +881,16 @@ func lifecycleMessageIDs(events []eventlog.Event) []int64 {
 	return ids
 }
 
+func maxEventSeq(events []eventlog.Event) int64 {
+	var maxSeq int64
+	for _, ev := range events {
+		if ev.Seq > maxSeq {
+			maxSeq = ev.Seq
+		}
+	}
+	return maxSeq
+}
+
 func recordProcessedLifecycle(sessionID, traceID string, messageIDs []int64, outcome string) {
 	for _, id := range messageIDs {
 		_ = storage.SaveLifecycleEvent(map[string]any{
@@ -892,9 +919,15 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	}
 	recordLifecycleForEvents(events, "event_drained", "worker 已消费消息事件")
 	processedMessageIDs := lifecycleMessageIDs(events)
+	executionID := ""
+	executionRecorded := false
+	failureStage := "internal"
 	defer func() {
 		if err != nil {
-			recordProcessedLifecycle(worker.SessionID, "", processedMessageIDs, "failed")
+			recordProcessedLifecycle(worker.SessionID, executionID, processedMessageIDs, "failed")
+			if executionRecorded {
+				_ = storage.FailExecution(executionID, failureStage, err)
+			}
 		}
 	}()
 
@@ -913,9 +946,18 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	firstMsg := events[0].Message
 	channelUserID := firstMsg.SenderID
 	traceID := firstMsg.TraceID
+	if traceID == "" {
+		traceID = fmt.Sprintf("trace-%d", time.Now().UnixNano())
+	}
+	executionID = traceID
 
 	if traceID != "" {
 		ctx = logger.WithTrace(ctx, traceID, worker.SessionID)
+	}
+	if err := storage.StartExecution(traceID, worker.SessionID, agentID, userID, channel, processedMessageIDs); err != nil {
+		logger.Warn(ctx, "创建执行观测记录失败", "error", err.Error())
+	} else {
+		executionRecorded = true
 	}
 
 	logger.Business(ctx, "开始处理会话",
@@ -927,6 +969,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	}
 	logger.Business(ctx, "加载配置中", "traceEvent", "thinking", "source", "system")
 
+	failureStage = "config"
 	agentConfig, err := storage.GetAgentConfig(agentID)
 	if err != nil || agentConfig == nil {
 		logger.Error(ctx, "Agent 配置未找到",
@@ -959,6 +1002,10 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			"provider", provider, "model", modelName)
 		return fmt.Errorf("agent %s missing provider/model", agentID)
 	}
+	if err := storage.SetExecutionModel(executionID, provider, modelName); err != nil {
+		logger.Warn(ctx, "更新执行模型信息失败", "error", err.Error())
+	}
+	failureStage = "model"
 
 	logger.Detail(ctx, "Agent 配置已加载", "provider", provider, "model", modelName)
 
@@ -967,8 +1014,20 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		credentials = &storage.ProviderCredentials{}
 	}
 
+	currentSeq := maxEventSeq(events)
+	if expired, expErr := storage.ExpireSessionSkillsBeforeContext(worker.SessionID, currentSeq); expErr != nil {
+		logger.Warn(ctx, "临时 skill 过期清理失败", "sessionId", worker.SessionID, "error", expErr.Error())
+	} else if expired > 0 {
+		logger.Business(ctx, "临时 skill 自动过期",
+			"sessionId", worker.SessionID,
+			"expiredCount", expired,
+			"currentSeq", currentSeq)
+	}
+
 	effectiveSkillIDs := agentConfig.Skills
+	activeSessionSkillIDs := []string{}
 	if dynamicSkills, dsErr := storage.GetActiveSessionSkills(worker.SessionID); dsErr == nil && len(dynamicSkills) > 0 {
+		activeSessionSkillIDs = dynamicSkills
 		seen := make(map[string]bool, len(effectiveSkillIDs))
 		for _, id := range effectiveSkillIDs {
 			seen[id] = true
@@ -995,14 +1054,30 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	if len(skillsCtx.Diagnostics) > 0 {
 		logger.Warn(ctx, "skill 上下文存在本地诊断", "diagnostics", strings.Join(skillsCtx.Diagnostics, "; "))
 	}
+	_ = storage.SaveLifecycleEvent(map[string]any{
+		"sessionId": worker.SessionID,
+		"traceId":   executionID,
+		"stage":     "skill_context_built",
+		"status":    "success",
+		"summary":   fmt.Sprintf("本轮可加载 %d 个 skill", len(skillsCtx.LoadableSkillIDs)),
+		"payload": map[string]any{
+			"agentSkills":       agentConfig.Skills,
+			"sessionSkills":     activeSessionSkillIDs,
+			"effectiveSkills":   effectiveSkillIDs,
+			"loadableSkills":    sortedSkillIDsFromMap(skillsCtx.LoadableSkillIDs),
+			"diagnostics":       skillsCtx.Diagnostics,
+			"hasSkillsSnippet":  strings.TrimSpace(skillsCtx.SkillsSnippet) != "",
+			"sessionActiveUsed": len(activeSessionSkillIDs) > 0,
+		},
+	})
 
 	llmClient := buildLLMClient(provider, credentials)
 
-	sb, isNew, sbErr := sandboxMgr.GetOrCreate(worker.SessionID)
+	sb, _, sbErr := sandboxMgr.GetOrCreate(worker.SessionID)
 	if sbErr != nil {
 		logger.Warn(ctx, "沙箱创建失败，使用宿主机执行", "error", sbErr.Error())
 		sb = nil
-	} else if isNew {
+	} else {
 		skillBasePaths := make(map[string]string)
 		for _, sid := range effectiveSkillIDs {
 			meta, err := storage.GetSkillRuntimeMetadata(sid)
@@ -1049,11 +1124,14 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 
 风格：用微信闲聊的语气，口语化通俗易懂，小学文化水平也能理解。禁用序号（1.2.3.）、标题（# ##）、括号（【】[]）等结构化符号，禁止比喻，省略称谓和语气词，直接输出回复文本。正面回答问题让用户有获得感，提问一次最多两个问题，不垫话直接问。
 
-富媒体：图片/文件/语音等需设置对应 messageType，不支持 Markdown 语法。每条 message 必须是完整段落，禁止把一句话拆成多条碎片。`, types.JSONSchema{
+@人：mentions 只用于群聊中确实需要提醒指定成员处理的情况。必须先通过当前群详情、联系人详情或历史消息拿到明确 userId；不要按姓名猜测，不要为了普通回复或礼貌称呼而 @，不要连续消息反复 @，不支持 @所有人。私聊不要使用 mentions；@ 失败不会阻塞消息发送。
+
+富媒体：图片、GIF、文件、语音、视频需设置对应 messageType，不支持 Markdown 语法。每条 message 必须是完整段落，禁止把一句话拆成多条碎片。`, types.JSONSchema{
 		Type: "object",
 		Properties: map[string]interface{}{
 			"content":     map[string]interface{}{"type": "string", "description": "单条消息内容（与 messages 二选一）"},
-			"messageType": map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+			"messageType": map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / gif / file / voice / video / link / location / miniapp"},
+			"mentions":    mentionItemsSchema(),
 			"messages": map[string]interface{}{
 				"type":        "array",
 				"description": "多条消息数组，最多 4 条，按顺序发送。与 content 二选一。适合文字+图片混发等场景",
@@ -1061,8 +1139,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 					"type": "object",
 					"properties": map[string]interface{}{
 						"content":     map[string]interface{}{"type": "string", "description": "消息内容"},
-						"messageType": map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+						"messageType": map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / gif / file / voice / video / link / location / miniapp"},
 						"channelMeta": map[string]interface{}{"type": "object", "description": "渠道专用附加参数"},
+						"mentions":    mentionItemsSchema(),
 					},
 					"required": []string{"content"},
 				},
@@ -1075,6 +1154,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			content     string
 			messageType string
 			channelMeta map[string]interface{}
+			mentions    []map[string]string
 		}
 
 		var items []msgItem
@@ -1094,7 +1174,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 				}
 				mt, _ := m["messageType"].(string)
 				cm, _ := m["channelMeta"].(map[string]interface{})
-				items = append(items, msgItem{content: c, messageType: mt, channelMeta: cm})
+				items = append(items, msgItem{content: c, messageType: mt, channelMeta: cm, mentions: normalizeToolMentions(m["mentions"])})
 			}
 		} else {
 			content, ok := input["content"].(string)
@@ -1103,7 +1183,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			}
 			mt, _ := input["messageType"].(string)
 			cm, _ := input["channelMeta"].(map[string]interface{})
-			items = append(items, msgItem{content: content, messageType: mt, channelMeta: cm})
+			items = append(items, msgItem{content: content, messageType: mt, channelMeta: cm, mentions: normalizeToolMentions(input["mentions"])})
 		}
 
 		replyTo, _ := input["replyToChannelMessageId"].(string)
@@ -1150,6 +1230,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			}
 			if len(item.channelMeta) > 0 {
 				outMsg.ChannelMeta = item.channelMeta
+			}
+			if len(item.mentions) > 0 {
+				outMsg.Mentions = item.mentions
 			}
 
 			if err := channels.SendToChannel(outMsg); err != nil {
@@ -1470,7 +1553,6 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		}
 	}
 
-	historyMessages = TruncateByFullTurns(historyMessages, 10)
 	historyMessages = prependSessionMemory(historyMessages, worker.SessionID, modelName)
 
 	initialUserMsg := mergeEventsToMessage(events)
@@ -1493,6 +1575,76 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	logger.Detail(ctx, "历史消息加载诊断",
 		"source", histSource, "historyCount", len(historyMessages), "totalMessages", len(messages),
 		"diagnostic", engine.BuildToolUseDiagnostic(messages))
+
+	compactIfNeeded := func(stage string, msgs []types.AgentMessage) []types.AgentMessage {
+		estimate := EstimateRequestTokens(provider, modelName, systemPrompt, registry.GetDefinitions(), msgs, 8192)
+		if counter, ok := llmClient.(engine.TokenCounter); ok {
+			inputTokens, countErr := counter.CountTokens(ctx, engine.ChatParams{
+				Messages:     msgs,
+				Tools:        registry.GetDefinitions(),
+				SystemPrompt: systemPrompt,
+				Model:        modelName,
+			})
+			if countErr != nil {
+				logger.Warn(ctx, "官方 token 计数失败，使用本地估算",
+					"stage", stage, "provider", provider, "model", modelName, "error", countErr.Error())
+			} else {
+				tokens := inputTokens + 8192
+				estimate.Tokens = tokens
+				estimate.ContextWindow = GetContextWindowForProvider(provider, modelName)
+				estimate.Ratio = float64(tokens) / float64(estimate.ContextWindow)
+				estimate.Method = "provider_count"
+			}
+		}
+		logger.Detail(ctx, "上下文请求 token 估算",
+			"stage", stage,
+			"tokens", estimate.Tokens,
+			"contextWindow", estimate.ContextWindow,
+			"ratio", fmt.Sprintf("%.2f", estimate.Ratio),
+			"method", estimate.Method)
+
+		if !ShouldCompact(estimate) {
+			return msgs
+		}
+
+		compactModel := ResolveCompactModel(modelName)
+		var compactLLM engine.LLMClient
+		if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
+			compactLLM = engine.NewAnthropicClient(engine.AnthropicClientConfig{
+				APIKey:    credentials.APIKey,
+				BaseURL:   credentials.BaseURL,
+				MaxTokens: 2048,
+			})
+		} else {
+			compactLLM = engine.NewOpenAICompatibleClient(engine.OpenAICompatibleClientConfig{
+				APIKey:    credentials.APIKey,
+				BaseURL:   credentials.BaseURL,
+				MaxTokens: 2048,
+			})
+		}
+
+		FlushMemoryBeforeCompact(ctx, msgs, modelName, compactLLM, compactModel, worker.SessionID)
+
+		result, compactErr := CompactContext(ctx, msgs, modelName, compactLLM, compactModel, worker.SessionID)
+		if compactErr != nil {
+			logger.Warn(ctx, "上下文压缩失败，使用原始消息",
+				"stage", stage, "error", compactErr.Error(), "sessionId", worker.SessionID)
+			return msgs
+		}
+		if !result.Compacted {
+			return msgs
+		}
+
+		logger.Business(ctx, "上下文压缩",
+			"traceEvent", "compact",
+			"stage", stage,
+			"tokensBefore", result.TokensBefore,
+			"tokensAfter", result.TokensAfter,
+			"archivedCount", result.ArchivedCount)
+		return result.Messages
+	}
+
+	messages = compactIfNeeded("before_loop", messages)
 
 	onNewMessages := func(iterMessages []types.AgentMessage) error {
 		persistable := toPersistableMessages(iterMessages)
@@ -1519,6 +1671,12 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		if err != nil || len(newEvents) == 0 {
 			return nil
 		}
+		recordLifecycleForEvents(newEvents, "event_drained", "worker 已消费补充消息事件")
+		newMessageIDs := lifecycleMessageIDs(newEvents)
+		processedMessageIDs = append(processedMessageIDs, newMessageIDs...)
+		if err := storage.AttachExecutionMessages(executionID, newMessageIDs); err != nil {
+			logger.Warn(ctx, "关联补充消息到执行失败", "error", err.Error())
+		}
 		merged := mergeEventsToMessage(newEvents)
 		return []types.AgentMessage{merged}
 	}
@@ -1533,16 +1691,34 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		guardRetries := 0
 		for {
 			loopResult, err := engine.RunAgentLoop(ctx, engine.AgentLoopConfig{
-				LLMClient:      llmClient,
-				SystemPrompt:   systemPrompt,
-				Messages:       messages,
-				Registry:       registry,
-				Model:          modelName,
-				MaxIterations:  25,
-				OnNewMessages:  onNewMessages,
+				LLMClient:     llmClient,
+				SystemPrompt:  systemPrompt,
+				Messages:      messages,
+				Registry:      registry,
+				Model:         modelName,
+				MaxIterations: 25,
+				OnNewMessages: onNewMessages,
+				BeforeModelCall: func(hookCtx context.Context, hookMessages []types.AgentMessage) ([]types.AgentMessage, error) {
+					return compactIfNeeded("before_model_call", hookMessages), nil
+				},
 				DrainNewEvents: drainCallback,
 				HasNewEvents:   hasNewCallback,
 			})
+			if loopResult != nil {
+				if usageErr := storage.AddExecutionUsage(executionID, storage.ExecutionUsage{
+					InputTokens:      int64(loopResult.Usage.InputTokens),
+					OutputTokens:     int64(loopResult.Usage.OutputTokens),
+					TotalCostUSD:     loopResult.Usage.TotalCostUsd,
+					LLMCallCount:     loopResult.LLMCallCount,
+					ToolCallCount:    loopResult.ToolCallCount,
+					ToolFailureCount: loopResult.ToolFailureCount,
+					LLMDurationMs:    loopResult.LLMDurationMs,
+					ToolDurationMs:   loopResult.ToolDurationMs,
+					CostKnown:        loopResult.CostKnown,
+				}); usageErr != nil {
+					logger.Warn(ctx, "更新执行用量失败", "error", usageErr.Error())
+				}
+			}
 			if err != nil {
 				logger.Error(ctx, "引擎错误", "traceEvent", "error", "error", err.Error())
 				if loopResult != nil {
@@ -1583,42 +1759,7 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 
 		// Persist context + event cursor atomically.
 		if len(messages) > 0 {
-			estimate := EstimateTokens(messages, modelName)
-			logger.Detail(ctx, "上下文 token 估算",
-				"tokens", estimate.Tokens, "contextWindow", estimate.ContextWindow,
-				"ratio", fmt.Sprintf("%.2f", estimate.Ratio), "method", estimate.Method)
-
-			if ShouldCompact(estimate) {
-				compactModel := ResolveCompactModel(modelName)
-				var compactLLM engine.LLMClient
-				if provider == "claude" || strings.Contains(credentials.BaseURL, "anthropic") {
-					compactLLM = engine.NewAnthropicClient(engine.AnthropicClientConfig{
-						APIKey:    credentials.APIKey,
-						BaseURL:   credentials.BaseURL,
-						MaxTokens: 2048,
-					})
-				} else {
-					compactLLM = engine.NewOpenAICompatibleClient(engine.OpenAICompatibleClientConfig{
-						APIKey:    credentials.APIKey,
-						BaseURL:   credentials.BaseURL,
-						MaxTokens: 2048,
-					})
-				}
-
-				FlushMemoryBeforeCompact(ctx, messages, modelName, compactLLM, compactModel, worker.SessionID)
-
-				result, err := CompactContext(ctx, messages, modelName, compactLLM, compactModel, worker.SessionID)
-				if err != nil {
-					logger.Warn(ctx, "上下文压缩失败，使用原始消息",
-						"error", err.Error(), "sessionId", worker.SessionID)
-				} else if result.Compacted {
-					messages = result.Messages
-					logger.Business(ctx, "上下文压缩",
-						"traceEvent", "compact",
-						"tokensBefore", result.TokensBefore, "tokensAfter", result.TokensAfter,
-						"archivedCount", result.ArchivedCount)
-				}
-			}
+			messages = compactIfNeeded("after_loop", messages)
 
 			redactedMessages := redactMessagesForStorage(messages)
 			contextBytes, err := json.Marshal(redactedMessages)
@@ -1647,16 +1788,24 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		recordLifecycleForEvents(moreEvents, "event_drained", "worker 已消费补充消息事件")
 		recordLifecycleForEvents(moreEvents, "context_built", "补充消息已进入后续上下文")
 		processedMessageIDs = append(processedMessageIDs, lifecycleMessageIDs(moreEvents)...)
+		if err := storage.AttachExecutionMessages(executionID, lifecycleMessageIDs(moreEvents)); err != nil {
+			logger.Warn(ctx, "关联补充消息到执行失败", "error", err.Error())
+		}
 		messages = append(messages, mergeEventsToMessage(moreEvents))
 		logger.Business(ctx, "会话继续处理",
 			"traceEvent", "session_continue", "newEventCount", len(moreEvents))
 	}
 
 	outcome := "no_reply"
-	if storage.HasSuccessfulLifecycleEvent(worker.SessionID, traceID, "outbound_send_completed") {
+	if execution, executionErr := storage.GetExecution(executionID); executionErr == nil && execution != nil && execution.DeliveryStatus == "failed" {
+		outcome = "send_failed"
+	} else if storage.HasSuccessfulLifecycleEvent(worker.SessionID, traceID, "outbound_send_completed") {
 		outcome = "replied"
 	}
 	recordProcessedLifecycle(worker.SessionID, traceID, processedMessageIDs, outcome)
+	if err := storage.CompleteExecution(executionID, outcome); err != nil {
+		logger.Warn(ctx, "完成执行观测记录失败", "error", err.Error())
+	}
 
 	return nil
 }

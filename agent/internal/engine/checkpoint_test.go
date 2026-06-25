@@ -10,9 +10,11 @@ import (
 type mockLLMClient struct {
 	responses []LLMResponse
 	callCount int
+	calls     []ChatParams
 }
 
 func (m *mockLLMClient) Chat(ctx context.Context, params ChatParams) (*LLMResponse, error) {
+	m.calls = append(m.calls, params)
 	if m.callCount >= len(m.responses) {
 		return &LLMResponse{
 			Content:    []types.ContentBlock{{Type: "text", Text: "done"}},
@@ -55,6 +57,54 @@ func TestCheckpoint1_DrainBeforeLLM(t *testing.T) {
 	}
 	if result.FinalText != "response" {
 		t.Fatalf("expected 'response', got %q", result.FinalText)
+	}
+}
+
+func TestBeforeModelCallRunsBeforeEachLLMCall(t *testing.T) {
+	toolResponse := LLMResponse{
+		Content:    []types.ContentBlock{{Type: "tool_use", ID: "tool-1", Name: "lookup", Input: map[string]interface{}{}}},
+		StopReason: "tool_use",
+	}
+	finalResponse := LLMResponse{
+		Content:    []types.ContentBlock{{Type: "text", Text: "done"}},
+		StopReason: "end_turn",
+	}
+	mock := &mockLLMClient{responses: []LLMResponse{toolResponse, finalResponse}}
+
+	hookCalls := 0
+	secondHookSawToolResult := false
+	result, err := RunAgentLoop(context.Background(), AgentLoopConfig{
+		LLMClient: mock,
+		Messages:  []types.AgentMessage{{Role: "user", Content: []types.ContentBlock{{Type: "text", Text: "hello"}}}},
+		Tools: []types.RegisteredTool{{
+			Definition: types.ToolDefinition{Name: "lookup"},
+			Execute:    func(context.Context, map[string]interface{}) (interface{}, error) { return "ok", nil },
+		}},
+		BeforeModelCall: func(ctx context.Context, messages []types.AgentMessage) ([]types.AgentMessage, error) {
+			hookCalls++
+			if hookCalls == 2 {
+				for _, msg := range messages {
+					for _, block := range msg.Content {
+						if block.Type == "tool_result" && block.ToolUseID == "tool-1" {
+							secondHookSawToolResult = true
+						}
+					}
+				}
+			}
+			return messages, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FinalText != "done" {
+		t.Fatalf("expected done, got %q", result.FinalText)
+	}
+	if hookCalls != 2 {
+		t.Fatalf("expected hook before each of 2 LLM calls, got %d", hookCalls)
+	}
+	if !secondHookSawToolResult {
+		t.Fatal("expected second hook call to see prior tool_result")
 	}
 }
 
@@ -164,5 +214,62 @@ func TestNilCallbacksBackwardCompatible(t *testing.T) {
 	}
 	if result.EventPreempted {
 		t.Fatal("EventPreempted should be false with nil callbacks")
+	}
+}
+
+func TestRunAgentLoopCollectsObservabilityMetrics(t *testing.T) {
+	toolResponse := LLMResponse{
+		Content:    []types.ContentBlock{{Type: "tool_use", ID: "tool-1", Name: "lookup", Input: map[string]interface{}{}}},
+		StopReason: "tool_use",
+	}
+	toolResponse.Usage.InputTokens = 120
+	toolResponse.Usage.OutputTokens = 20
+	finalResponse := LLMResponse{
+		Content:    []types.ContentBlock{{Type: "text", Text: "done"}},
+		StopReason: "end_turn",
+	}
+	finalResponse.Usage.InputTokens = 160
+	finalResponse.Usage.OutputTokens = 30
+
+	result, err := RunAgentLoop(context.Background(), AgentLoopConfig{
+		LLMClient: &mockLLMClient{responses: []LLMResponse{toolResponse, finalResponse}},
+		Messages:  []types.AgentMessage{{Role: "user", Content: []types.ContentBlock{{Type: "text", Text: "hello"}}}},
+		Model:     "gpt-4o-mini",
+		Tools: []types.RegisteredTool{{
+			Definition: types.ToolDefinition{Name: "lookup"},
+			Execute:    func(context.Context, map[string]interface{}) (interface{}, error) { return "ok", nil },
+		}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.LLMCallCount != 2 || result.ToolCallCount != 1 || result.ToolFailureCount != 0 {
+		t.Fatalf("unexpected call metrics: %+v", result)
+	}
+	if result.Usage.InputTokens != 280 || result.Usage.OutputTokens != 50 {
+		t.Fatalf("unexpected token usage: %+v", result.Usage)
+	}
+	if result.Usage.TotalCostUsd <= 0 {
+		t.Fatalf("expected positive cost, got %f", result.Usage.TotalCostUsd)
+	}
+	if !result.CostKnown {
+		t.Fatal("expected configured model cost to be known")
+	}
+}
+
+func TestRunAgentLoopMarksUnknownModelCost(t *testing.T) {
+	response := LLMResponse{Content: []types.ContentBlock{{Type: "text", Text: "done"}}, StopReason: "end_turn"}
+	response.Usage.InputTokens = 100
+	response.Usage.OutputTokens = 10
+	result, err := RunAgentLoop(context.Background(), AgentLoopConfig{
+		LLMClient: &mockLLMClient{responses: []LLMResponse{response}},
+		Messages:  []types.AgentMessage{{Role: "user", Content: []types.ContentBlock{{Type: "text", Text: "hello"}}}},
+		Model:     "unknown-model",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.CostKnown {
+		t.Fatal("expected unknown model cost to be marked unknown")
 	}
 }

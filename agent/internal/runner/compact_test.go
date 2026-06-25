@@ -129,11 +129,14 @@ func TestBuildSummaryLayer(t *testing.T) {
 		t.Fatalf("expected assistant role, got %s", layer[1].Role)
 	}
 	text := layer[0].Content[0].Text
-	if !contains(text, "[历史上下文摘要]") {
-		t.Fatalf("missing summary prefix in: %s", text)
+	if !contains(text, "[Compaction Handoff]") {
+		t.Fatalf("missing handoff prefix in: %s", text)
 	}
 	if !contains(text, "15 条消息已归档") {
 		t.Fatalf("missing archive count in: %s", text)
+	}
+	if !contains(text, "recall_context") {
+		t.Fatalf("missing recall_context guidance in: %s", text)
 	}
 }
 
@@ -161,6 +164,32 @@ func TestBuildTaskStateLayer_Empty(t *testing.T) {
 	}
 }
 
+func TestBuildHandoffDigestPrioritizesUserMessages(t *testing.T) {
+	digest := buildHandoffDigest([]types.AgentMessage{
+		msg("user", "用户明确要求：事实不能丢"),
+		{
+			Role: "assistant",
+			Content: []types.ContentBlock{{
+				Type:  "tool_use",
+				ID:    "tool-1",
+				Name:  "execute_command",
+				Input: map[string]interface{}{"cmd": "go test ./..."},
+			}},
+		},
+		toolResultMsg("tool-1", strings.Repeat("large output ", 80)),
+	})
+
+	if !contains(digest, "[用户消息优先摘录]") {
+		t.Fatalf("missing user-priority section: %s", digest)
+	}
+	if !contains(digest, "事实不能丢") {
+		t.Fatalf("missing user fact: %s", digest)
+	}
+	if !contains(digest, "[历史时序摘录]") {
+		t.Fatalf("missing chronology section: %s", digest)
+	}
+}
+
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
@@ -181,7 +210,7 @@ func (m *mockCompactLLM) Chat(ctx context.Context, params engine.ChatParams) (*e
 	}
 
 	text := "mock response"
-	if strings.Contains(params.SystemPrompt, "摘要") {
+	if strings.Contains(params.SystemPrompt, "上下文压缩") || strings.Contains(params.SystemPrompt, "状态承接") {
 		text = m.summaryText
 	} else if strings.Contains(params.SystemPrompt, "任务提取") {
 		text = m.taskStateText
@@ -230,8 +259,8 @@ func TestCompactContext_FullPipeline(t *testing.T) {
 	messages := buildLongConversation(15)
 
 	mockLLM := &mockCompactLLM{
-		summaryText: "1. **目标/项目**：用户在重构上下文压缩\n2. **当前状态**：完成了存储层\n" +
-			"3. **关键决策**：选了固定锚点策略\n4. **失败/回退**：无\n5. **未完成事项**：subagent 适配",
+		summaryText: "[用户事实]\n- 用户要求重构上下文压缩\n\n[当前目标]\n- 重构上下文压缩机制\n\n" +
+			"[关键决策]\n- 选了固定锚点策略\n\n[已完成]\n- 完成了存储层\n\n[未完成]\n- subagent 适配\n\n[证据与产物]\n- compact.go\n\n[风险与失败]\n- 无\n\n[Recall Pointers]\n- 查询用户原话",
 		taskStateText: "当前目标: 重构上下文压缩机制\n\n未完成任务:\n- [ ] 改 compact.go (来源: user)\n- [x] 改 storage 层 (已完成)",
 		failOnCall:    -1,
 	}
@@ -254,8 +283,8 @@ func TestCompactContext_FullPipeline(t *testing.T) {
 		}
 	}
 
-	if !contains(allText, "[历史上下文摘要]") {
-		t.Error("missing summary layer")
+	if !contains(allText, "[Compaction Handoff]") {
+		t.Error("missing handoff layer")
 	}
 	if !contains(allText, "[任务状态]") {
 		t.Error("missing task state layer")
@@ -265,7 +294,7 @@ func TestCompactContext_FullPipeline(t *testing.T) {
 	}
 
 	// Verify four-layer ordering: summary first, then retained, then task state, then agent memory
-	summaryIdx := strings.Index(allText, "[历史上下文摘要]")
+	summaryIdx := strings.Index(allText, "[Compaction Handoff]")
 	taskIdx := strings.Index(allText, "[任务状态]")
 	memoryIdx := strings.Index(allText, "[Agent Memory]")
 	if summaryIdx >= taskIdx || taskIdx >= memoryIdx {
@@ -302,7 +331,7 @@ func TestCompactContext_NoSessionFacts(t *testing.T) {
 	messages := buildLongConversation(15)
 
 	mockLLM := &mockCompactLLM{
-		summaryText:   "Summary of conversation",
+		summaryText:   "[用户事实]\n- Summary of conversation\n\n[Recall Pointers]\n- 查询原文",
 		taskStateText: "NO_TASKS",
 		failOnCall:    -1,
 	}
@@ -322,8 +351,8 @@ func TestCompactContext_NoSessionFacts(t *testing.T) {
 		}
 	}
 
-	if !contains(allText, "[历史上下文摘要]") {
-		t.Error("missing summary layer")
+	if !contains(allText, "[Compaction Handoff]") {
+		t.Error("missing handoff layer")
 	}
 	if contains(allText, "[任务状态]") {
 		t.Error("task state layer should not be present (NO_TASKS)")
@@ -363,8 +392,8 @@ func TestCompactContext_SummaryLLMFailure(t *testing.T) {
 		}
 	}
 
-	if !contains(allText, "[历史上下文摘要]") {
-		t.Error("missing summary layer (should use fallback)")
+	if !contains(allText, "[Compaction Handoff]") {
+		t.Error("missing handoff layer (should use fallback)")
 	}
 	if !contains(allText, "recall_context") {
 		t.Error("fallback summary should mention recall_context")

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 
 	"agent/internal/types"
@@ -75,6 +76,49 @@ func TestSaveCompactionArchive(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("expected message_count=2, got %d", count)
+	}
+}
+
+func TestSearchAndRecentArchivedMessages(t *testing.T) {
+	cleanup := setupCompactionsTestDB(t)
+	defer cleanup()
+
+	compactionID, err := SaveCompaction(CompactionData{
+		SessionID: "sess-recall",
+		Summary:   "summary",
+	})
+	if err != nil {
+		t.Fatalf("SaveCompaction: %v", err)
+	}
+
+	msgs := []types.AgentMessage{
+		{Role: "user", Content: []types.ContentBlock{{Type: "text", Text: "用户明确要求：不要丢弃原话"}}},
+		{Role: "assistant", Content: []types.ContentBlock{
+			{Type: "tool_use", Name: "send_channel_message", Input: map[string]interface{}{"content": "sent"}},
+			{Type: "tool_result", Content: `{"success":true}`},
+		}},
+	}
+	if err := SaveCompactionArchive(compactionID, "sess-recall", msgs); err != nil {
+		t.Fatalf("SaveCompactionArchive: %v", err)
+	}
+
+	found, err := SearchArchivedMessages("sess-recall", "不要丢弃原话", 10)
+	if err != nil {
+		t.Fatalf("SearchArchivedMessages: %v", err)
+	}
+	if len(found) != 1 || found[0].Role != "user" || !strings.Contains(found[0].Content, "不要丢弃原话") {
+		t.Fatalf("unexpected search result: %#v", found)
+	}
+
+	recent, err := GetRecentArchivedMessages("sess-recall", 10)
+	if err != nil {
+		t.Fatalf("GetRecentArchivedMessages: %v", err)
+	}
+	if len(recent) != 2 {
+		t.Fatalf("expected 2 recent archived messages, got %d", len(recent))
+	}
+	if recent[1].MessageType != "structured" {
+		t.Fatalf("expected structured archived message type, got %q", recent[1].MessageType)
 	}
 }
 

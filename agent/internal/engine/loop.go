@@ -15,16 +15,17 @@ import (
 const DefaultMaxIterations = 25
 
 type AgentLoopConfig struct {
-	LLMClient      LLMClient
-	SystemPrompt   string
-	Messages       []types.AgentMessage
-	Tools          []types.RegisteredTool // static tool list (used when Registry is nil)
-	Registry       *ToolRegistry          // if set, tools are read from registry each iteration
-	OnNewMessages  func(messages []types.AgentMessage) error
-	MaxIterations  int
-	Model          string
-	DrainNewEvents func() []types.AgentMessage
-	HasNewEvents   func() bool
+	LLMClient       LLMClient
+	SystemPrompt    string
+	Messages        []types.AgentMessage
+	Tools           []types.RegisteredTool // static tool list (used when Registry is nil)
+	Registry        *ToolRegistry          // if set, tools are read from registry each iteration
+	OnNewMessages   func(messages []types.AgentMessage) error
+	BeforeModelCall func(ctx context.Context, messages []types.AgentMessage) ([]types.AgentMessage, error)
+	MaxIterations   int
+	Model           string
+	DrainNewEvents  func() []types.AgentMessage
+	HasNewEvents    func() bool
 }
 
 const maxConsecutivePreemptions = 3
@@ -33,11 +34,17 @@ type AgentLoopResult struct {
 	FinalText        string
 	Messages         []types.AgentMessage
 	Usage            types.TokenUsage
+	LLMCallCount     int
+	ToolCallCount    int
+	ToolFailureCount int
+	LLMDurationMs    int64
+	ToolDurationMs   int64
+	CostKnown        bool
 	HitMaxIterations bool
 	EventPreempted   bool
 }
 
-func estimateCost(model string, inputTokens, outputTokens int) float64 {
+func estimateCost(model string, inputTokens, outputTokens int) (float64, bool) {
 	type pricing struct{ in, out float64 }
 	table := map[string]pricing{
 		"claude-opus-4-5":            {15, 75},
@@ -53,9 +60,9 @@ func estimateCost(model string, inputTokens, outputTokens int) float64 {
 	}
 	p, ok := table[model]
 	if !ok {
-		return 0
+		return 0, false
 	}
-	return float64(inputTokens)/1e6*p.in + float64(outputTokens)/1e6*p.out
+	return float64(inputTokens)/1e6*p.in + float64(outputTokens)/1e6*p.out, true
 }
 
 func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult, error) {
@@ -89,6 +96,9 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 
 	var totalInputTokens, totalOutputTokens int
 	var totalCostUsd float64
+	var llmCallCount, toolCallCount, toolFailureCount int
+	var llmDurationMs, toolDurationMs int64
+	costKnown := true
 	iteration := 0
 	emptyResponseRetries := 0
 	consecutivePreemptions := 0
@@ -118,6 +128,19 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			toolMap, toolDefs = buildToolIndex()
 		}
 
+		if config.BeforeModelCall != nil {
+			checked, err := config.BeforeModelCall(ctx, messages)
+			if err != nil {
+				loopErr = fmt.Errorf("before model call hook failed at iteration %d: %w", iteration+1, err)
+				logger.Error(ctx, "模型调用前检查失败",
+					"traceEvent", "error", "iteration", iteration+1, "error", err.Error())
+				break
+			}
+			if checked != nil {
+				messages = checked
+			}
+		}
+
 		iteration++
 
 		llmStart := time.Now()
@@ -127,7 +150,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			SystemPrompt: config.SystemPrompt,
 			Model:        config.Model,
 		})
-		llmDurationMs := time.Since(llmStart).Milliseconds()
+		callDurationMs := time.Since(llmStart).Milliseconds()
 
 		if err != nil {
 			loopErr = fmt.Errorf("LLM call failed at iteration %d: %w", iteration, err)
@@ -139,10 +162,15 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 		// Write full LLM I/O to dedicated file (detail level)
 		llmIORef := logger.WriteLLMIO(ctx, iteration, response.RawRequest, response.RawResponse)
 
-		callCost := estimateCost(config.Model, response.Usage.InputTokens, response.Usage.OutputTokens)
+		callCost, callCostKnown := estimateCost(config.Model, response.Usage.InputTokens, response.Usage.OutputTokens)
+		if !callCostKnown {
+			costKnown = false
+		}
 		totalInputTokens += response.Usage.InputTokens
 		totalOutputTokens += response.Usage.OutputTokens
 		totalCostUsd += callCost
+		llmCallCount++
+		llmDurationMs += callDurationMs
 
 		// Business-level: trace event with metrics + reference to full I/O
 		logger.Business(ctx, "LLM 调用",
@@ -151,7 +179,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			"model", config.Model,
 			"inputTokens", response.Usage.InputTokens,
 			"outputTokens", response.Usage.OutputTokens,
-			"durationMs", llmDurationMs,
+			"durationMs", callDurationMs,
 			"stopReason", response.StopReason,
 			"costUsd", callCost,
 			"llmIORef", llmIORef)
@@ -232,6 +260,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 
 		var toolResults []types.ContentBlock
 		for _, toolUse := range toolUseBlocks {
+			toolCallCount++
 			toolInputJSON, _ := json.Marshal(toolUse.Input)
 			redactedToolInput := sanitize.RedactSecrets(string(toolInputJSON))
 			logger.Business(ctx, "工具调用",
@@ -255,12 +284,15 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 				toolResults = append(toolResults, types.ContentBlock{
 					Type: "tool_result", ToolUseID: toolUse.ID, Content: errorMsg, IsError: true,
 				})
+				toolFailureCount++
+				toolDurationMs += dur
 				continue
 			}
 
 			result, err := registeredTool.Execute(ctx, toolUse.Input)
 			duration := time.Now().UnixMilli() - startedAt
 			if err != nil {
+				toolFailureCount++
 				redactedErr := sanitize.RedactSecrets(err.Error())
 				logger.Business(ctx, "工具返回",
 					"traceEvent", "tool_result", "iteration", iteration,
@@ -286,6 +318,7 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 					Type: "tool_result", ToolUseID: toolUse.ID, Content: resultStr,
 				})
 			}
+			toolDurationMs += duration
 		}
 
 		toolResultMsg := types.AgentMessage{Role: "user", Content: toolResults}
@@ -319,6 +352,12 @@ func RunAgentLoop(ctx context.Context, config AgentLoopConfig) (*AgentLoopResult
 			OutputTokens: totalOutputTokens,
 			TotalCostUsd: totalCostUsd,
 		},
+		LLMCallCount:     llmCallCount,
+		ToolCallCount:    toolCallCount,
+		ToolFailureCount: toolFailureCount,
+		LLMDurationMs:    llmDurationMs,
+		ToolDurationMs:   toolDurationMs,
+		CostKnown:        costKnown,
 		HitMaxIterations: hitMaxIterations,
 		EventPreempted:   eventPreempted,
 	}, loopErr

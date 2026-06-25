@@ -20,7 +20,7 @@ import (
 
 var (
 	anthropicHTTPClient = sharedlogger.NewClient("anthropic", 120*time.Second)
-	openaiHTTPClient    = sharedlogger.NewClient("openai", 120*time.Second)
+	openaiHTTPClient    = sharedlogger.NewClient("openai", 300*time.Second)
 )
 
 const maxLLMRetries = 3
@@ -74,6 +74,10 @@ type LLMClient interface {
 	Chat(ctx context.Context, params ChatParams) (*LLMResponse, error)
 }
 
+type TokenCounter interface {
+	CountTokens(ctx context.Context, params ChatParams) (int, error)
+}
+
 // ==================== Anthropic Native Client ====================
 
 type AnthropicClientConfig struct {
@@ -123,7 +127,10 @@ func sanitizeMessagesForAnthropic(ctx context.Context, messages []types.AgentMes
 	}
 
 	var result []types.AgentMessage
-	var dropped []struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }
+	var dropped []struct {
+		ToolUseID string `json:"toolUseID"`
+		Reason    string `json:"reason"`
+	}
 
 	for _, msg := range messages {
 		if msg.Role == "assistant" {
@@ -136,13 +143,19 @@ func sanitizeMessagesForAnthropic(ctx context.Context, messages []types.AgentMes
 					continue
 				}
 				if b.ToolUseID == "" {
-					dropped = append(dropped, struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }{"(empty)", "empty tool_use_id"})
+					dropped = append(dropped, struct {
+						ToolUseID string `json:"toolUseID"`
+						Reason    string `json:"reason"`
+					}{"(empty)", "empty tool_use_id"})
 					continue
 				}
 				if validToolUseIDs[b.ToolUseID] {
 					filtered = append(filtered, b)
 				} else {
-					dropped = append(dropped, struct{ ToolUseID string `json:"toolUseID"`; Reason string `json:"reason"` }{b.ToolUseID, "orphaned (no matching tool_use in history)"})
+					dropped = append(dropped, struct {
+						ToolUseID string `json:"toolUseID"`
+						Reason    string `json:"reason"`
+					}{b.ToolUseID, "orphaned (no matching tool_use in history)"})
 				}
 			}
 			if len(filtered) == 0 {
@@ -195,11 +208,11 @@ func BuildToolUseDiagnostic(messages []types.AgentMessage) map[string]interface{
 	}
 
 	return map[string]interface{}{
-		"messageCount":     len(messages),
-		"toolUseIDs":       toolUseIDs,
-		"toolResultRefs":   toolResultRefs,
-		"emptyToolUse":     emptyToolUse,
-		"emptyToolResult":  emptyToolResult,
+		"messageCount":    len(messages),
+		"toolUseIDs":      toolUseIDs,
+		"toolResultRefs":  toolResultRefs,
+		"emptyToolUse":    emptyToolUse,
+		"emptyToolResult": emptyToolResult,
 	}
 }
 
@@ -310,6 +323,57 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 	return nil, lastErr
 }
 
+func (c *AnthropicClient) CountTokens(ctx context.Context, params ChatParams) (int, error) {
+	model := params.Model
+	if model == "" {
+		model = "claude-3-5-sonnet-20241022"
+	}
+
+	body := map[string]interface{}{
+		"model":    model,
+		"system":   params.SystemPrompt,
+		"messages": sanitizeMessagesForAnthropic(ctx, params.Messages),
+	}
+	if len(params.Tools) > 0 {
+		body["tools"] = params.Tools
+	}
+
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages/count_tokens", bytes.NewReader(reqBody))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := anthropicHTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("Anthropic token count read body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("Anthropic token count API %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var data struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return 0, err
+	}
+	return data.InputTokens, nil
+}
+
 // ==================== OpenAI Compatible Client ====================
 
 type OpenAICompatibleClientConfig struct {
@@ -383,21 +447,21 @@ func (c *OpenAICompatibleClient) convertMessages(messages []types.AgentMessage, 
 				}
 			}
 
-		assistantMsg := map[string]interface{}{
-			"role": "assistant",
-		}
-		if len(textParts) > 0 {
-			assistantMsg["content"] = strings.Join(textParts, "\n")
-		} else {
-			assistantMsg["content"] = nil
-		}
-		if len(toolCalls) > 0 {
-			assistantMsg["tool_calls"] = toolCalls
-		}
-		if msg.ReasoningContent != nil {
-			assistantMsg["reasoning_content"] = *msg.ReasoningContent
-		}
-		result = append(result, assistantMsg)
+			assistantMsg := map[string]interface{}{
+				"role": "assistant",
+			}
+			if len(textParts) > 0 {
+				assistantMsg["content"] = strings.Join(textParts, "\n")
+			} else {
+				assistantMsg["content"] = nil
+			}
+			if len(toolCalls) > 0 {
+				assistantMsg["tool_calls"] = toolCalls
+			}
+			if msg.ReasoningContent != nil {
+				assistantMsg["reasoning_content"] = *msg.ReasoningContent
+			}
+			result = append(result, assistantMsg)
 		}
 	}
 

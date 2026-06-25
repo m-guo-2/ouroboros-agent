@@ -85,7 +85,7 @@ func recallSearch(sessionID, query string) (interface{}, error) {
 		}, nil
 	}
 
-	msgs, err := storage.SearchMessages(sessionID, query, compaction.ArchivedBeforeTime, recallMaxResults)
+	msgs, err := storage.SearchArchivedMessages(sessionID, query, recallMaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("search archived messages: %w", err)
 	}
@@ -116,7 +116,7 @@ func recallRecent(sessionID string) (interface{}, error) {
 		}, nil
 	}
 
-	msgs, err := storage.GetMessagesBefore(sessionID, compaction.ArchivedBeforeTime, recallMaxResults)
+	msgs, err := storage.GetRecentArchivedMessages(sessionID, recallMaxResults)
 	if err != nil {
 		return nil, fmt.Errorf("get archived messages: %w", err)
 	}
@@ -167,7 +167,7 @@ func formatRecalledMessages(msgs []storage.MessageData) []map[string]interface{}
 	out := make([]map[string]interface{}, 0, len(msgs))
 	for _, m := range msgs {
 		content := m.Content
-		if m.MessageType == "structured" {
+		if m.MessageType == "structured" || strings.HasPrefix(strings.TrimSpace(m.Content), "[") {
 			var blocks []types.ContentBlock
 			if json.Unmarshal([]byte(m.Content), &blocks) == nil {
 				var parts []string

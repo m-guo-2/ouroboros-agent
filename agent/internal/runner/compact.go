@@ -18,7 +18,7 @@ const (
 	triggerRatio     = 0.60
 	targetRatio      = 0.50
 	toolResultMaxLen = 1024
-	summaryMaxWords  = 200
+	handoffMaxWords  = 500
 
 	recentUserTurns = 5
 	retainMaxRatio  = 0.50
@@ -266,12 +266,12 @@ func sanitizeOrphanToolBlocks(messages []types.AgentMessage) []types.AgentMessag
 
 func buildSummaryLayer(archivedCount int, summary string) []types.AgentMessage {
 	text := fmt.Sprintf(
-		"[历史上下文摘要]\n之前的对话（%d 条消息已归档）：\n\n%s\n\n---\n完整历史可通过 recall_context 工具检索。",
+		"[Compaction Handoff]\n之前的对话（%d 条消息已归档）已压缩为以下状态承接包。摘要只用于继续当前任务，不是唯一事实源；如需确认用户原话、工具完整输出或时间顺序，使用 recall_context 检索原文。\n\n%s",
 		archivedCount, summary)
 
 	return []types.AgentMessage{
 		{Role: "user", Content: []types.ContentBlock{{Type: "text", Text: text}}},
-		{Role: "assistant", Content: []types.ContentBlock{{Type: "text", Text: "好的，我已了解之前的对话上下文。"}}},
+		{Role: "assistant", Content: []types.ContentBlock{{Type: "text", Text: "好的，我已了解压缩后的任务状态和可召回历史。"}}},
 	}
 }
 
@@ -318,24 +318,34 @@ func buildAgentMemoryLayer(sessionID, model string) []types.AgentMessage {
 	}
 }
 
-// --- Summary generation (5-dimension structured) ---
+// --- Handoff generation ---
 
 func generateSummary(ctx context.Context, messages []types.AgentMessage, llmClient engine.LLMClient, model string) string {
 	if llmClient == nil || model == "" {
 		return buildFallbackSummary(messages)
 	}
 
-	digest := buildMessagesDigest(messages)
+	digest := buildHandoffDigest(messages)
 
 	prompt := fmt.Sprintf(
-		"请将以下对话历史压缩为不超过 %d 词的结构化摘要，按以下 5 个维度逐项输出：\n\n"+
-			"1. **目标/项目**：用户在做什么？\n"+
-			"2. **当前状态**：做到哪一步了？\n"+
-			"3. **关键决策**：选了什么方案、为什么？\n"+
-			"4. **失败/回退**：什么试过不行？（如无可跳过）\n"+
-			"5. **未完成事项**：还有什么没做完的？\n\n"+
-			"对话内容：\n%s",
-		summaryMaxWords, digest)
+		"请把以下历史上下文压缩为不超过 %d 词的 Compaction Handoff Packet，用于让后续模型继续当前任务。\n\n"+
+			"硬性要求：\n"+
+			"- 事实不能编造；不确定就写“需 recall_context 确认”。\n"+
+			"- 用户消息优先，尽量保留用户明确要求、纠正、否定、最新口径的原话或近原话。\n"+
+			"- 工具调用和执行结果只保留对任务继续有影响的事实：查过什么、改过什么、发过什么、失败过什么、关键路径/错误/结果是什么。\n"+
+			"- 不要把工具日志和用户意图平权；不要输出大段 JSON 或 stdout。\n"+
+			"- 摘要不是事实源，必须在最后列出需要回查原文的 Recall Pointers。\n\n"+
+			"请严格按以下结构输出：\n"+
+			"[用户事实]\n- 用户明确要求：...\n- 用户纠正/否定：...\n- 用户给出的关键事实：...\n- 用户最新口径：...\n\n"+
+			"[当前目标]\n- ...\n\n"+
+			"[关键决策]\n- ...\n\n"+
+			"[已完成]\n- ...\n\n"+
+			"[未完成]\n- ...\n\n"+
+			"[证据与产物]\n- 文件/路径/命令/外部消息口径：...\n\n"+
+			"[风险与失败]\n- ...\n\n"+
+			"[Recall Pointers]\n- 需要确认用户原话或完整工具输出时，使用 recall_context 查询：...\n\n"+
+			"历史上下文 digest：\n%s",
+		handoffMaxWords, digest)
 
 	summaryMessages := []types.AgentMessage{{
 		Role:    "user",
@@ -345,7 +355,7 @@ func generateSummary(ctx context.Context, messages []types.AgentMessage, llmClie
 	resp, err := llmClient.Chat(ctx, engine.ChatParams{
 		Messages:     summaryMessages,
 		Model:        model,
-		SystemPrompt: "你是一个对话摘要助手，负责将长对话压缩成结构化的摘要。只输出摘要内容，不要输出其他内容。",
+		SystemPrompt: "你是一个上下文压缩助手。你的任务是生成准确的状态承接包，优先保护用户事实、当前目标、关键决策、未完成事项和可回查线索。只输出状态承接包，不要输出其他内容。",
 	})
 	if err != nil {
 		logger.Warn(ctx, "摘要 LLM 调用失败，使用 fallback",
@@ -449,6 +459,64 @@ func buildMessagesDigest(messages []types.AgentMessage) string {
 	return result
 }
 
+func buildHandoffDigest(messages []types.AgentMessage) string {
+	var userFacts []string
+	var chronology []string
+
+	for _, msg := range messages {
+		for _, b := range msg.Content {
+			switch b.Type {
+			case "text":
+				text := compactText(b.Text, 900)
+				line := fmt.Sprintf("[%s] %s", msg.Role, text)
+				chronology = append(chronology, line)
+				if msg.Role == "user" {
+					userFacts = append(userFacts, line)
+				}
+			case "tool_use":
+				inputJSON, _ := json.Marshal(b.Input)
+				chronology = append(chronology, fmt.Sprintf("[assistant/tool_use] %s(%s)", b.Name, compactText(string(inputJSON), 260)))
+			case "tool_result":
+				chronology = append(chronology, fmt.Sprintf("[tool_result] %s", compactText(b.Content, 260)))
+			}
+		}
+	}
+
+	var sections []string
+	if len(userFacts) > 0 {
+		sections = append(sections, "[用户消息优先摘录]\n"+limitJoined(userFacts, "\n", 6000))
+	}
+	if len(chronology) > 0 {
+		sections = append(sections, "[历史时序摘录]\n"+limitJoined(chronology, "\n", 9000))
+	}
+	result := strings.Join(sections, "\n\n")
+	if len(result) > 14000 {
+		result = result[:14000] + "\n...[digest truncated; use recall_context for full archived history]"
+	}
+	return result
+}
+
+func compactText(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
+}
+
+func limitJoined(items []string, sep string, max int) string {
+	var out []string
+	total := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		item := items[i]
+		if total+len(item)+len(sep) > max {
+			break
+		}
+		out = append([]string{item}, out...)
+		total += len(item) + len(sep)
+	}
+	return strings.Join(out, sep)
+}
+
 const flushMaxIterations = 3
 
 func FlushMemoryBeforeCompact(
@@ -508,28 +576,35 @@ func FlushMemoryBeforeCompact(
 func buildFallbackSummary(messages []types.AgentMessage) string {
 	userCount := 0
 	toolCount := 0
-	var topics []string
+	var userFacts []string
 
 	for _, msg := range messages {
 		for _, b := range msg.Content {
 			if b.Type == "text" && msg.Role == "user" {
 				userCount++
 				text := b.Text
-				if len(text) > 100 {
-					text = text[:100] + "..."
+				if len(text) > 180 {
+					text = text[:180] + "..."
 				}
-				if len(topics) < 3 {
-					topics = append(topics, text)
-				}
+				userFacts = append(userFacts, "- "+text)
 			}
 			if b.Type == "tool_use" {
 				toolCount++
 			}
 		}
 	}
+	if len(userFacts) > 5 {
+		userFacts = userFacts[len(userFacts)-5:]
+	}
 
 	return fmt.Sprintf(
-		"[Earlier context archived, details available via recall_context]\n"+
-			"Stats: %d user messages, %d tool calls.\nTopics: %s",
-		userCount, toolCount, strings.Join(topics, " | "))
+		"[用户事实]\n%s\n\n"+
+			"[当前目标]\n- 摘要模型不可用，需结合最近消息继续判断。\n\n"+
+			"[关键决策]\n- 需 recall_context 确认。\n\n"+
+			"[已完成]\n- 归档区包含 %d 次工具调用。\n\n"+
+			"[未完成]\n- 需结合最近消息和 recall_context 确认。\n\n"+
+			"[证据与产物]\n- 完整历史已归档，可通过 recall_context 检索。\n\n"+
+			"[风险与失败]\n- 当前为 fallback handoff，可能遗漏细节。\n\n"+
+			"[Recall Pointers]\n- 查询用户原话、完整工具输出、历史决策；归档统计：%d 条用户消息，%d 次工具调用。",
+		strings.Join(userFacts, "\n"), toolCount, userCount, toolCount)
 }

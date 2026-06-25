@@ -118,12 +118,61 @@ func SaveCompactionArchive(compactionID int64, sessionID string, messages []type
 			`INSERT INTO context_compaction_archived_messages
 			 (archive_id, seq, original_message_id, role, content, message_type, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			archiveID, i, 0, msg.Role, content, "text", now,
+			archiveID, i, 0, msg.Role, content, archivedMessageType(msg), now,
 		); err != nil {
 			return fmt.Errorf("insert archived message %d: %w", i, err)
 		}
 	}
 	return tx.Commit()
+}
+
+func SearchArchivedMessages(sessionID, query string, limit int) ([]MessageData, error) {
+	return queryArchivedMessages(
+		`SELECT ccam.id, cca.session_id, ccam.role, ccam.content,
+		        ccam.message_type, ccam.created_at
+		   FROM context_compaction_archived_messages ccam
+		   JOIN context_compaction_archives cca ON cca.id = ccam.archive_id
+		  WHERE cca.session_id = ? AND ccam.content LIKE ?
+		  ORDER BY cca.id DESC, ccam.seq DESC
+		  LIMIT ?`,
+		sessionID, "%"+query+"%", limit,
+	)
+}
+
+func GetRecentArchivedMessages(sessionID string, limit int) ([]MessageData, error) {
+	msgs, err := queryArchivedMessages(
+		`SELECT ccam.id, cca.session_id, ccam.role, ccam.content,
+		        ccam.message_type, ccam.created_at
+		   FROM context_compaction_archived_messages ccam
+		   JOIN context_compaction_archives cca ON cca.id = ccam.archive_id
+		  WHERE cca.session_id = ?
+		  ORDER BY cca.id DESC, ccam.seq DESC
+		  LIMIT ?`,
+		sessionID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	reverseMessages(msgs)
+	return msgs, nil
+}
+
+func queryArchivedMessages(sqlStr string, args ...interface{}) ([]MessageData, error) {
+	rows, err := DB.Query(sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []MessageData
+	for rows.Next() {
+		var m MessageData
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Content, &m.MessageType, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
 }
 
 // encodeAgentMessageContent renders the message's content blocks as JSON so
@@ -138,4 +187,11 @@ func encodeAgentMessageContent(m types.AgentMessage) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+func archivedMessageType(m types.AgentMessage) string {
+	if len(m.Content) == 1 && m.Content[0].Type == "text" {
+		return "text"
+	}
+	return "structured"
 }
