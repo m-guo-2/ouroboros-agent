@@ -21,9 +21,11 @@ type writeMsg struct {
 // asyncWriter wraps a LogWriter and dispatches writes through a buffered channel
 // so the calling goroutine never blocks on I/O.
 type asyncWriter struct {
-	ch   chan writeMsg
-	dest LogWriter
-	wg   sync.WaitGroup
+	ch     chan writeMsg
+	dest   LogWriter
+	wg     sync.WaitGroup
+	mu     sync.Mutex
+	closed bool
 }
 
 func newAsyncWriter(dest LogWriter) *asyncWriter {
@@ -53,23 +55,42 @@ func (aw *asyncWriter) loop() {
 }
 
 func (aw *asyncWriter) Append(level Level, entry map[string]any) {
+	aw.mu.Lock()
+	if aw.closed {
+		aw.mu.Unlock()
+		return
+	}
 	select {
 	case aw.ch <- writeMsg{kind: 'a', level: level, entry: entry}:
 	default:
 		fmt.Fprintf(os.Stderr, "logger: async buffer full, dropping log entry\n")
 	}
+	aw.mu.Unlock()
 }
 
 func (aw *asyncWriter) WriteLLMIO(ref, traceID string, iteration int, data []byte) {
+	aw.mu.Lock()
+	if aw.closed {
+		aw.mu.Unlock()
+		return
+	}
 	select {
 	case aw.ch <- writeMsg{kind: 'l', ref: ref, traceID: traceID, iteration: iteration, data: data}:
 	default:
 		fmt.Fprintf(os.Stderr, "logger: async buffer full, dropping llm-io entry\n")
 	}
+	aw.mu.Unlock()
 }
 
 func (aw *asyncWriter) Flush() {
+	aw.mu.Lock()
+	if aw.closed {
+		aw.mu.Unlock()
+		return
+	}
+	aw.closed = true
 	close(aw.ch)
+	aw.mu.Unlock()
 	aw.wg.Wait()
 	aw.dest.Close()
 }
