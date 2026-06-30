@@ -152,9 +152,6 @@ func handleGroupJoined(evt GroupEvent, agentID string) {
 		"sessionId", session.ID, "agentId", agentCfg.ID,
 		"groupId", evt.ChannelGroupID, "groupName", evt.GroupName)
 
-	// Dispatch hooks to activate ephemeral skills (e.g. welcome/icebreaker).
-	runner.DispatchHooks(ctx, agentCfg.Hooks, "group_joined", session.ID)
-
 	// Inject a synthetic message so processSession has an event to drain.
 	content := fmt.Sprintf("[群事件] Bot 加入群聊「%s」", evt.GroupName)
 	savedMsg, _ := storage.SaveMessage(map[string]interface{}{
@@ -169,10 +166,18 @@ func handleGroupJoined(evt GroupEvent, agentID string) {
 		"senderId":    "",
 	})
 	var msgID int64
+	var eventSeq int64
 	if savedMsg != nil {
 		msgID = savedMsg.ID
-		_ = storage.AppendSessionEvent(session.ID, msgID)
+		eventSeq, _ = storage.AppendSessionEventAndGetSeq(session.ID, msgID)
 	}
+
+	// Dispatch hooks to activate ephemeral skills (e.g. welcome/icebreaker).
+	runner.DispatchHooksWithPayload(ctx, agentCfg.Hooks, "group_joined", runner.HookPayload{
+		SessionID:      session.ID,
+		ScopeType:      "session",
+		ActivatedAtSeq: eventSeq,
+	})
 
 	_ = storage.UpdateSession(session.ID, map[string]interface{}{
 		"executionStatus": "processing",

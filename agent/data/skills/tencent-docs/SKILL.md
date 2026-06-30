@@ -1,0 +1,105 @@
+---
+name: tencent-docs
+description: "腾讯文档。创建和管理在线文档、表格、幻灯片、思维导图、流程图。当需要创建或编辑在线文档、表格、PPT、思维导图、流程图，或搜索和读取已有文档时使用。"
+homepage: https://docs.qq.com/home
+version: 2.0.0
+author: tencent-docs
+metadata: {"openclaw":{"primaryEnv":"TENCENT_DOCS_TOKEN","category":"tencent","tencentTokenMode":"custom","tokenUrl":"https://docs.qq.com/open/document/mcp/get-token/","emoji":"📝"}}
+---
+
+# 腾讯文档
+
+在线文档平台，支持创建、编辑、搜索各种类型的文档。
+
+通过 `run_script` 执行对应脚本完成操作。
+
+## 写文档
+
+写报告、文章、方案：
+
+```
+run_script("tencent-docs", "create_doc", "--title '周报' --markdown '# 本周进展\n- 完成了 A\n- 推进了 B'")
+```
+
+返回可打开的文档链接。公文/合同等需要正式排版的场景加 `--type word`。
+
+可选 `--parent_id` 指定存放位置。
+
+## 做表格
+
+**结构化数据表**（任务跟踪、日程管理）：
+
+```
+run_script("tencent-docs", "create_sheet", "--title '面试日程' --fields '[{\"name\":\"公司\",\"type\":\"text\"},{\"name\":\"时间\",\"type\":\"datetime\"},{\"name\":\"状态\",\"type\":\"select\",\"options\":[\"待面试\",\"已完成\"]}]' --records '[{\"公司\":\"腾讯\",\"时间\":\"2026-03-20 20:00\",\"状态\":\"已完成\"}]'")
+```
+
+**简单数据表**（带公式计算）：
+
+```
+run_script("tencent-docs", "create_excel", "--title '费用统计' --markdown '| 项目 | 金额 |\n|---|---|\n| 交通 | 500 |'")
+```
+
+## 做 PPT
+
+只需描述内容，系统自动生成排版（需要几分钟）：
+
+```
+run_script("tencent-docs", "create_slide", "--description '关于 AI Agent 的技术分享：1. 什么是 Agent 2. 工具调用原理 3. 实践经验'")
+```
+
+可选 `--reference` 传入参考材料。
+
+## 画思维导图
+
+用 Markdown 层级结构描述导图：
+
+```
+run_script("tencent-docs", "create_mind", "--title '项目规划' --markdown '# 项目规划\n## 阶段一\n- 需求调研\n- 技术选型\n## 阶段二\n- 开发\n- 测试'")
+```
+
+## 画流程图
+
+用 Mermaid 语法描述（**必须全英文**）：
+
+```
+run_script("tencent-docs", "create_flowchart", "--title '审批流程' --mermaid 'graph TD; A[Start] --> B{Review}; B -->|Approve| C[Done]; B -->|Reject| D[Revise]'")
+```
+
+## 找文件
+
+搜索已有文档：
+
+```
+run_script("tencent-docs", "search_file", "--query '周报'")
+```
+
+查看最近编辑的文档：
+
+```
+run_script("tencent-docs", "list_recent", "--count 10")
+```
+
+## 读文档内容
+
+```
+run_script("tencent-docs", "read_doc", "--url 'https://docs.qq.com/doc/xxx'")
+```
+
+也可以用 `--file_id` 替代 `--url`。
+
+## 进阶操作
+
+以上脚本覆盖创建、查找、读取场景。如果需要：
+
+- 编辑已有文档中的特定段落
+- 批量操作智能表格的字段和记录
+- 管理知识库空间和文件夹结构
+- 导入导出文件
+
+请通过 `load_skill_reference` 查阅详细 API 文档：
+
+- `api_references.md` — 文档创建、内容读取、图片上传、网页剪藏
+- `smartcanvas_references.md` — 智能文档元素级操作
+- `smartsheet_references.md` — 智能表格字段和记录操作
+- `manage_references.md` — 文件搜索、移动、复制、导入导出
+- `auth.md` — Token 认证说明

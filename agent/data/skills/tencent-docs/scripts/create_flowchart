@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""创建流程图。
+
+用法:
+  create_flowchart --title "审批流程" --mermaid "graph TD; A[Start] --> B{Review}; B -->|Yes| C[Done]"
+
+参数:
+  --title    标题（必填）
+  --mermaid  Mermaid 语法内容（必填，必须全英文）
+  --parent_id  父节点 ID
+
+返回: 包含 url 字段的 JSON
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["title", "mermaid"])
+params = {"title": args["title"], "mermaid": args["mermaid"]}
+if "parent_id" in args:
+    params["parent_id"] = args["parent_id"]
+
+result = call_mcp("create_flowchart_by_mermaid", params)
+output(result)

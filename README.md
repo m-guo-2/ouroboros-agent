@@ -122,10 +122,8 @@ cd channel-feishu && npm install && npm run dev
 
 | 文档 | 说明 |
 | ------ | ------ |
-| **[系统架构总览](./docs/ARCHITECTURE.md)** | 理念、设计、现状、演进路线 - 看这一份就够 |
-| [产品需求文档](./docs/PRODUCT_REQUIREMENTS.md) | 自举架构详细设计 |
-| [统一渠道架构](./docs/UNIFIED_CHANNEL_ARCHITECTURE.md) | 渠道抽象、用户身份、记忆系统 |
-| [设计决策记录](./docs/decisions/) | 重要架构决策 |
+| [长期设计备忘](./docs/long-term-design-notes.md) | 从 OpenSpec 提炼出的长期设计原则和架构约束 |
+| [项目文档索引](./docs/README.md) | 运维、平台集成和长期文档入口 |
 
 ## License
 

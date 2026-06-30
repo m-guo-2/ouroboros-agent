@@ -126,6 +126,13 @@ func handleAgents(w http.ResponseWriter, r *http.Request) {
 		if v, ok := body["model"].(string); ok {
 			cfg.Model = v
 		}
+		if v, ok := body["sandboxTemplateId"].(string); ok {
+			if !validateSandboxTemplateID(v) {
+				apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
+				return
+			}
+			cfg.SandboxTemplateID = v
+		}
 		if body["skills"] != nil {
 			cfg.Skills = parseSkillIDs(body["skills"])
 		}
@@ -247,6 +254,10 @@ func handleAgentsWithID(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
 		if err := decodeBody(r, &body); err != nil {
 			apiErr(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if v, ok := body["sandboxTemplateId"].(string); ok && !validateSandboxTemplateID(v) {
+			apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
 			return
 		}
 		updated, err := storage.UpdateAgentConfig(id, body)

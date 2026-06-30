@@ -85,18 +85,21 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	)
 
 	registry.RegisterBuiltin("wecom_send_message",
-		`向指定企微联系人或群聊主动发送消息。支持单条（content）或多条（messages 数组，最多 4 条）。支持 text、rich_text、image、file、voice、link、location、miniapp。
+		`向指定企微联系人或群聊主动发送消息。支持单条（content）或多条（messages 数组，最多 4 条）。支持 text、rich_text、image、gif、file、voice、video、link、location、miniapp。
 
 调用规则：尽量一次说完，禁止连续调用本工具；只有中间穿插其他工具调用时才可分开发送。需要混发文字和图片/文件时，用 messages 数组在一次调用内完成。
 
 风格：用微信闲聊的语气，口语化通俗易懂，小学文化水平也能理解。禁用序号（1.2.3.）、标题（# ##）、括号（【】[]）等结构化符号，禁止比喻，省略称谓和语气词，直接输出回复文本。正面回答问题让用户有获得感，提问一次最多两个问题，不垫话直接问。
 
-富媒体：图片/文件/语音等需设置对应 messageType，不支持 Markdown 语法。每条 message 必须是完整段落，禁止把一句话拆成多条碎片。`,
+@人：mentions 只用于群聊中确实需要提醒指定成员处理的情况。必须先通过当前群详情、联系人详情或历史消息拿到明确 userId；不要按姓名猜测，不要为了普通回复或礼貌称呼而 @，不要连续消息反复 @，不支持 @所有人。私聊不要使用 mentions；@ 失败不会阻塞消息发送。
+
+富媒体：图片、GIF、文件、语音、视频需设置对应 messageType，不支持 Markdown 语法。每条 message 必须是完整段落，禁止把一句话拆成多条碎片。`,
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
-				"messageType": map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+				"messageType": map[string]interface{}{"type": "string", "description": "单条模式的消息类型：text（默认）/ rich_text / image / gif / file / voice / video / link / location / miniapp"},
 				"content":     map[string]interface{}{"type": "string", "description": "单条消息内容（与 messages 二选一）。text/rich_text 填文字；image/file/voice 填可访问 URL；link 填链接地址；location/miniapp 可留空由 channelMeta 承载"},
+				"mentions":    mentionItemsSchema(),
 				"messages": map[string]interface{}{
 					"type":        "array",
 					"description": "多条消息数组，最多 4 条，按顺序发送。与 content 二选一。适合文字+图片混发等场景",
@@ -104,8 +107,9 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 						"type": "object",
 						"properties": map[string]interface{}{
 							"content":     map[string]interface{}{"type": "string", "description": "消息内容"},
-							"messageType": map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / file / voice / link / location / miniapp"},
+							"messageType": map[string]interface{}{"type": "string", "description": "消息类型：text（默认）/ rich_text / image / gif / file / voice / video / link / location / miniapp"},
 							"channelMeta": map[string]interface{}{"type": "object", "description": "附加参数"},
+							"mentions":    mentionItemsSchema(),
 						},
 						"required": []string{"content"},
 					},
@@ -204,6 +208,7 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 			content     string
 			messageType string
 			channelMeta map[string]interface{}
+			mentions    []map[string]string
 		}
 
 		var items []msgItem
@@ -223,7 +228,7 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 				}
 				mt, _ := m["messageType"].(string)
 				cm, _ := m["channelMeta"].(map[string]interface{})
-				items = append(items, msgItem{content: c, messageType: mt, channelMeta: cm})
+				items = append(items, msgItem{content: c, messageType: mt, channelMeta: cm, mentions: normalizeToolMentions(m["mentions"])})
 			}
 		} else {
 			content, _ := input["content"].(string)
@@ -232,7 +237,7 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 			}
 			mt, _ := input["messageType"].(string)
 			cm, _ := input["channelMeta"].(map[string]interface{})
-			items = append(items, msgItem{content: content, messageType: mt, channelMeta: cm})
+			items = append(items, msgItem{content: content, messageType: mt, channelMeta: cm, mentions: normalizeToolMentions(input["mentions"])})
 		}
 
 		type sendResult struct {
@@ -249,12 +254,12 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 			content := item.content
 
 			if !isMediaMessageType(messageType) && looksLikeFilePath(strings.TrimSpace(content)) {
-				if inferred := inferMessageTypeFromFile(strings.TrimSpace(content)); inferred != "" {
+				if inferred := inferMessageTypeFromFile(strings.TrimSpace(content), sessionReq.SandboxRootDir); inferred != "" {
 					messageType = inferred
 				}
 			}
 
-			resolved, err := resolveMediaContent(ctx, messageType, content)
+			resolved, err := resolveMediaContent(ctx, messageType, content, sessionReq.SandboxRootDir)
 			if err != nil {
 				results = append(results, sendResult{Index: i, Success: false, Error: err.Error()})
 				allOK = false
@@ -276,6 +281,9 @@ func createWecomSendMessageExecutor(sessionReq ProcessRequest) types.ToolExecuto
 			}
 			if len(item.channelMeta) > 0 {
 				payload["channelMeta"] = item.channelMeta
+			}
+			if len(item.mentions) > 0 {
+				payload["mentions"] = item.mentions
 			}
 
 			data, err := sendOne(ctx, payload)

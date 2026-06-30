@@ -71,9 +71,6 @@ func NewClient(token, owner, repo, branch string) *Client {
 
 // NewClientFromConfig creates a Client from the GitHub config section.
 func NewClientFromConfig(gh config.GitHub) (*Client, error) {
-	if gh.Token == "" {
-		return nil, fmt.Errorf("github.token not set")
-	}
 	if gh.SkillsRepo == "" {
 		return nil, fmt.Errorf("github.skills_repo not set")
 	}

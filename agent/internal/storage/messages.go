@@ -275,6 +275,10 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	}
 
 	now := timeutil.NowMs()
+	processingStatus := ""
+	if role == "user" && initiator == "user" {
+		processingStatus = "queued"
+	}
 
 	tx, err := DB.Begin()
 	if err != nil {
@@ -285,10 +289,10 @@ func SaveMessage(params map[string]interface{}) (*MessageData, error) {
 	res, err := tx.Exec(
 		`INSERT INTO messages
 		 (session_id, role, content, message_type, channel, channel_message_id,
-		  channel_meta, trace_id, initiator, sender_name, sender_id, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  channel_meta, trace_id, initiator, sender_name, sender_id, processing_status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID, role, content, msgType, channel, channelMessageID,
-		channelMetaJSON, traceID, initiator, senderName, senderID, now,
+		channelMetaJSON, traceID, initiator, senderName, senderID, processingStatus, now,
 	)
 	if err != nil {
 		return nil, err

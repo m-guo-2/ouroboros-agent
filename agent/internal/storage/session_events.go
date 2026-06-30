@@ -9,11 +9,20 @@ type SessionEventRow struct {
 }
 
 func AppendSessionEvent(sessionID string, messageID int64) error {
-	_, err := DB.Exec(
+	_, err := AppendSessionEventAndGetSeq(sessionID, messageID)
+	return err
+}
+
+func AppendSessionEventAndGetSeq(sessionID string, messageID int64) (int64, error) {
+	res, err := DB.Exec(
 		`INSERT INTO session_events (session_id, message_id) VALUES (?, ?)`,
 		sessionID, messageID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	seq, _ := res.LastInsertId()
+	return seq, nil
 }
 
 func GetSessionEventsAfter(sessionID string, afterSeq int64) ([]SessionEventRow, error) {

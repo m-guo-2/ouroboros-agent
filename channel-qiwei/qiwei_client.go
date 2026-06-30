@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -135,6 +138,90 @@ func (c *qiweiClient) doAPIRaw(ctx context.Context, method string, params map[st
 		lastErr = errors.New("unknown qiwei request error")
 	}
 	return qiweiDoAPIResponse{}, lastErr
+}
+
+func (c *qiweiClient) doFileAPIRaw(ctx context.Context, method string, filePath string, fileType int, filename string) (qiweiDoAPIResponse, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return qiweiDoAPIResponse{}, fmt.Errorf("file path is required")
+	}
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		filename = filepath.Base(filePath)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := map[string]string{
+		"method":   normalizeMethod(method),
+		"guid":     c.guid,
+		"fileType": fmt.Sprintf("%d", fileType),
+	}
+	for k, v := range fields {
+		if err := writer.WriteField(k, v); err != nil {
+			return qiweiDoAPIResponse{}, err
+		}
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return qiweiDoAPIResponse{}, fmt.Errorf("open upload file: %w", err)
+	}
+	defer f.Close()
+
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	if err := writer.Close(); err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+
+	url := c.baseURL + "/api/qw/doFileApi"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-QIWEI-TOKEN", c.token)
+
+	logger.Business(ctx, "企微文件 API 请求",
+		"method", fields["method"],
+		"filename", filename,
+		"fileType", fileType,
+	)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	if resp.StatusCode >= 400 {
+		return qiweiDoAPIResponse{}, fmt.Errorf("qiwei file api error: %d body=%s", resp.StatusCode, string(respBody))
+	}
+
+	var out qiweiDoAPIResponse
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return qiweiDoAPIResponse{}, err
+	}
+	if out.Code != 0 && out.Code != 200 {
+		return out, fmt.Errorf("qiwei file business error: code=%d msg=%s", out.Code, out.Msg)
+	}
+
+	logger.Business(ctx, "企微文件 API 响应",
+		"method", fields["method"],
+		"code", out.Code,
+		"responseBody", string(respBody),
+	)
+	return out, nil
 }
 
 func mergeParams(guid string, params map[string]any) map[string]any {

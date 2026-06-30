@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/m-guo-2/ouroboros-agent/shared/oss"
 )
@@ -67,6 +68,8 @@ func TestInferMessageTypeFromFile(t *testing.T) {
 	gifFile := mkFile("anim.gif")
 	webpFile := mkFile("hero.webp")
 	bmpFile := mkFile("legacy.bmp")
+	mp4File := mkFile("clip.mp4")
+	movFile := mkFile("clip.mov")
 	pdfFile := mkFile("report.pdf")
 	txtFile := mkFile("notes.txt")
 	noExtFile := mkFile("Makefile")
@@ -80,9 +83,11 @@ func TestInferMessageTypeFromFile(t *testing.T) {
 		{"png image", pngFile, "image"},
 		{"jpg image", jpgFile, "image"},
 		{"jpeg image", jpegFile, "image"},
-		{"gif image", gifFile, "image"},
+		{"gif", gifFile, "gif"},
 		{"webp image", webpFile, "image"},
 		{"bmp image", bmpFile, "image"},
+		{"mp4 video", mp4File, "video"},
+		{"mov video", movFile, "video"},
 		{"pdf file", pdfFile, "file"},
 		{"txt file", txtFile, "file"},
 		{"no extension", noExtFile, "file"},
@@ -92,7 +97,7 @@ func TestInferMessageTypeFromFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := inferMessageTypeFromFile(tt.path); got != tt.want {
+			if got := inferMessageTypeFromFile(tt.path, ""); got != tt.want {
 				t.Errorf("inferMessageTypeFromFile(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
@@ -110,7 +115,7 @@ func TestAutoDetectIntegration(t *testing.T) {
 		messageType := ""
 		content := imgPath
 		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
-			if inferred := inferMessageTypeFromFile(content); inferred != "" {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
 				messageType = inferred
 			}
 		}
@@ -123,7 +128,7 @@ func TestAutoDetectIntegration(t *testing.T) {
 		messageType := "text"
 		content := imgPath
 		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
-			if inferred := inferMessageTypeFromFile(content); inferred != "" {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
 				messageType = inferred
 			}
 		}
@@ -136,7 +141,7 @@ func TestAutoDetectIntegration(t *testing.T) {
 		messageType := "image"
 		content := imgPath
 		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
-			if inferred := inferMessageTypeFromFile(content); inferred != "" {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
 				messageType = inferred
 			}
 		}
@@ -145,11 +150,28 @@ func TestAutoDetectIntegration(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit video messageType skips detection", func(t *testing.T) {
+		videoPath := filepath.Join(dir, "clip.mp4")
+		if err := os.WriteFile(videoPath, []byte("fakevideo"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		messageType := "video"
+		content := videoPath
+		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
+				messageType = inferred
+			}
+		}
+		if messageType != "video" {
+			t.Errorf("messageType = %q, want %q", messageType, "video")
+		}
+	})
+
 	t.Run("plain text content does not trigger detection", func(t *testing.T) {
 		messageType := ""
 		content := "hello, this is a normal reply"
 		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
-			if inferred := inferMessageTypeFromFile(content); inferred != "" {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
 				messageType = inferred
 			}
 		}
@@ -162,7 +184,7 @@ func TestAutoDetectIntegration(t *testing.T) {
 		messageType := ""
 		content := "/tmp/nonexistent_image_12345.png"
 		if !isMediaMessageType(messageType) && looksLikeFilePath(content) {
-			if inferred := inferMessageTypeFromFile(content); inferred != "" {
+			if inferred := inferMessageTypeFromFile(content, ""); inferred != "" {
 				messageType = inferred
 			}
 		}
@@ -270,4 +292,103 @@ func TestReuploadHTTPMedia(t *testing.T) {
 			t.Errorf("error = %q, want to mention OSS", err.Error())
 		}
 	})
+}
+
+func TestResolveMediaContentPassesThroughHTTPMedia(t *testing.T) {
+	input := "https://example.com/image.png"
+	got, err := resolveMediaContent(context.Background(), "image", input, "")
+	if err != nil {
+		t.Fatalf("resolveMediaContent returned error: %v", err)
+	}
+	if got != input {
+		t.Fatalf("resolveMediaContent = %q, want %q", got, input)
+	}
+}
+
+func TestUploadLocalFileSignsReturnedObjectKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.xlsx")
+	if err := os.WriteFile(path, []byte("xlsx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &prefixKeyStorage{inner: oss.NewFakeStorage()}
+	got, err := uploadLocalFile(context.Background(), store, path)
+	if err != nil {
+		t.Fatalf("uploadLocalFile returned error: %v", err)
+	}
+	if got != "https://fake-oss.local/agent/"+store.putKey {
+		t.Fatalf("url = %q, want signed returned key", got)
+	}
+	if store.signedKey != "agent/"+store.putKey {
+		t.Fatalf("signed key = %q, want %q", store.signedKey, "agent/"+store.putKey)
+	}
+}
+
+type prefixKeyStorage struct {
+	inner     *oss.FakeStorage
+	putKey    string
+	signedKey string
+}
+
+func (s *prefixKeyStorage) PutObject(ctx context.Context, input oss.PutObjectInput) (oss.PutObjectResult, error) {
+	result, err := s.inner.PutObject(ctx, input)
+	if err != nil {
+		return result, err
+	}
+	s.putKey = result.Key
+	result.Key = "agent/" + result.Key
+	return result, nil
+}
+
+func (s *prefixKeyStorage) GetObject(ctx context.Context, key string) (*oss.GetObjectResult, error) {
+	return s.inner.GetObject(ctx, key)
+}
+
+func (s *prefixKeyStorage) PresignGetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	s.signedKey = key
+	return "https://fake-oss.local/" + key, nil
+}
+
+func TestResolveLocalMediaPathUsesSandboxRoot(t *testing.T) {
+	dir := t.TempDir()
+	fileName := "河南物理类96853位次可报考院校清单.xlsx"
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte("xlsx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"plain filename", fileName, filepath.Join(dir, fileName)},
+		{"dot relative", "./" + fileName, filepath.Join(dir, fileName)},
+		{"workspace absolute", "/workspace/" + fileName, filepath.Join(dir, fileName)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveLocalMediaPath(tt.content, dir)
+			if err != nil {
+				t.Fatalf("resolveLocalMediaPath returned error: %v", err)
+			}
+			if filepath.Clean(got) != filepath.Clean(tt.want) {
+				t.Fatalf("resolveLocalMediaPath = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferMessageTypeFromSandboxRelativeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "result.xlsx"), []byte("xlsx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !looksLikeFilePath("result.xlsx") {
+		t.Fatal("result.xlsx should be treated as a file-like path")
+	}
+	if got := inferMessageTypeFromFile("result.xlsx", dir); got != "file" {
+		t.Fatalf("inferMessageTypeFromFile = %q, want file", got)
+	}
 }

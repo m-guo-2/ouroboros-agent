@@ -5,7 +5,7 @@ AI Agent 需要执行 LLM 生成的代码（脚本运行、文件读写、依赖
 ## What Changes
 
 - 新增 `SandboxManager`，管理 Daytona 沙箱的创建、复用与回收，采用 lazy per-session 生命周期
-- 新增 4 个沙箱 Tool：`execute_command`、`write_file`、`read_file`、`list_files`，注册到 ToolRegistry
+- 新增沙箱 Tool：`execute_command`、`sandbox_set_env`、`write_file`、`read_file`、`list_files`，注册到 ToolRegistry
 - 沙箱支持三层环境变量注入：镜像内置、创建时（session 级）、执行时（per-exec 临时）
 - 沙箱支持可选的初始化流程（上传文件、安装依赖、自定义脚本）
 - 后台巡检自动回收 idle 超时和 maxTTL 超时的沙箱
@@ -16,7 +16,7 @@ AI Agent 需要执行 LLM 生成的代码（脚本运行、文件读写、依赖
 ### New Capabilities
 
 - `sandbox-manager`: 沙箱生命周期管理，包含 lazy 创建、session 级复用、idle/maxTTL 自动回收、graceful shutdown
-- `sandbox-tools`: 暴露给 LLM 的 4 个沙箱 Tool（execute_command、write_file、read_file、list_files），注册到现有 ToolRegistry
+- `sandbox-tools`: 暴露给 LLM 的沙箱 Tool（execute_command、sandbox_set_env、write_file、read_file、list_files），注册到现有 ToolRegistry
 
 ### Modified Capabilities
 

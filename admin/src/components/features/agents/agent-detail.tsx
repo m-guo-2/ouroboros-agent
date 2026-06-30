@@ -16,18 +16,12 @@ import { PersonaList } from "@/components/features/agents/persona-list"
 import { GroupAssignments } from "@/components/features/agents/group-assignments"
 import { AgentHooks } from "@/components/features/agents/agent-hooks"
 import { useSkills } from "@/hooks/use-skills"
+import { useSandboxTemplates } from "@/hooks/use-sandbox-templates"
 import { agentsApi } from "@/api/agents"
 import { settingsApi } from "@/api/settings"
 import type { AvailableModel, SubagentModelConfig, Hook } from "@/api/types"
 
-const PROVIDERS = [
-  { value: "anthropic", label: "Anthropic (Claude)" },
-  { value: "openai", label: "OpenAI (GPT)" },
-  { value: "moonshot", label: "Moonshot (Kimi)" },
-  { value: "zhipu", label: "智谱 (GLM)" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "volcengine", label: "火山方舟 (豆包)" },
-]
+const NEWAPI_PROVIDER = "openai"
 
 const SUBAGENT_PROFILES = [
   { key: "developer", label: "Developer" },
@@ -43,13 +37,14 @@ export function AgentDetail() {
   const { data: unconfiguredGroups } = useUnconfiguredGroups(id)
   const unconfiguredCount = unconfiguredGroups?.length ?? 0
   const { data: skills } = useSkills()
+  const { data: sandboxTemplates } = useSandboxTemplates()
   const updateMutation = useUpdateAgent()
   const deleteMutation = useDeleteAgent()
 
   const [name, setName] = useState("")
   const [prompt, setPrompt] = useState("")
-  const [provider, setProvider] = useState("")
   const [model, setModel] = useState("")
+  const [sandboxTemplateId, setSandboxTemplateId] = useState("office-worker")
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [isActive, setIsActive] = useState(true)
   const [subagentModels, setSubagentModels] = useState<Record<string, SubagentModelConfig>>({})
@@ -105,8 +100,8 @@ export function AgentDetail() {
   if (agent && !initialized) {
     setName(agent.displayName)
     setPrompt(agent.systemPrompt ?? "")
-    setProvider(agent.provider ?? "")
     setModel(agent.model ?? "")
+    setSandboxTemplateId(agent.sandboxTemplateId ?? "office-worker")
     setSelectedSkills(agent.skills ?? [])
     setIsActive(agent.isActive !== false)
     setSubagentModels(agent.subagentModels ?? {})
@@ -115,16 +110,11 @@ export function AgentDetail() {
     setInitialized(true)
   }
 
-  const fetchAvailableModels = async (providerValue?: string) => {
-    const p = providerValue ?? provider
-    if (!p) {
-      setModelsError("请先选择 LLM 提供商")
-      return
-    }
+  const fetchAvailableModels = async () => {
     setModelsLoading(true)
     setModelsError("")
     try {
-      const res = await settingsApi.getProviderModels(p)
+      const res = await settingsApi.getProviderModels(NEWAPI_PROVIDER)
       if (res.success && res.data) {
         setAvailableModels(res.data)
         setShowModelList(true)
@@ -132,7 +122,7 @@ export function AgentDetail() {
         setModelsError((res as any).error || "获取模型列表失败")
       }
     } catch {
-      setModelsError("网络请求失败，请检查 API Key 是否已配置")
+      setModelsError("网络请求失败，请检查 NewAPI API Key 是否已配置")
     } finally {
       setModelsLoading(false)
     }
@@ -154,8 +144,8 @@ export function AgentDetail() {
   const handleSave = async () => {
     const filteredSubagentModels: Record<string, SubagentModelConfig> = {}
     for (const [profile, cfg] of Object.entries(subagentModels)) {
-      if (cfg.provider && cfg.model) {
-        filteredSubagentModels[profile] = cfg
+      if (cfg.model) {
+        filteredSubagentModels[profile] = { provider: NEWAPI_PROVIDER, model: cfg.model }
       }
     }
     const filteredSubagentSkills: Record<string, string[]> = {}
@@ -169,8 +159,9 @@ export function AgentDetail() {
       data: {
         displayName: name,
         systemPrompt: prompt,
-        provider: provider || undefined,
+        provider: model ? NEWAPI_PROVIDER : undefined,
         model: model || undefined,
+        sandboxTemplateId,
         skills: selectedSkills,
         subagentModels: filteredSubagentModels,
         subagentSkills: filteredSubagentSkills,
@@ -206,6 +197,8 @@ export function AgentDetail() {
       return { ...prev, [profile]: next }
     })
   }
+
+  const selectedSandboxTemplate = sandboxTemplates?.find((t) => t.id === sandboxTemplateId)
 
   return (
     <div>
@@ -262,33 +255,13 @@ export function AgentDetail() {
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700 mb-1.5 block">LLM 提供商</label>
-                <select
-                  className="flex h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  value={provider}
-                  onChange={(e) => {
-                    setProvider(e.target.value)
-                    setModel("")
-                    setAvailableModels([])
-                    setShowModelList(false)
-                    setModelsError("")
-                  }}
-                >
-                  <option value="">请选择提供商...</option>
-                  {PROVIDERS.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
                 <label className="text-sm font-medium text-slate-700 mb-1.5 block">模型</label>
                 <div className="space-y-1.5">
                   <div className="flex gap-2">
                     <Input
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
-                      placeholder={provider ? "点击查询选择模型，或手动输入模型 ID" : "请先选择提供商"}
-                      disabled={!provider}
+                      placeholder="点击查询选择 NewAPI 模型，或手动输入模型 ID"
                       className="flex-1"
                     />
                     <Button
@@ -296,7 +269,7 @@ export function AgentDetail() {
                       variant="secondary"
                       size="sm"
                       onClick={() => fetchAvailableModels()}
-                      disabled={modelsLoading || !provider}
+                      disabled={modelsLoading}
                       className="shrink-0 whitespace-nowrap"
                     >
                       {modelsLoading ? (
@@ -304,7 +277,7 @@ export function AgentDetail() {
                       ) : (
                         <RefreshCw className="h-3.5 w-3.5" />
                       )}
-                      {modelsLoading ? "查询中..." : "查询模型"}
+                      {modelsLoading ? "查询中..." : "查询 NewAPI 模型"}
                     </Button>
                   </div>
                   {modelsError && (
@@ -340,6 +313,28 @@ export function AgentDetail() {
                   )}
                 </div>
               </div>
+              <div className="rounded-md border border-slate-200 p-3">
+                <label className="text-sm font-medium text-slate-700 mb-1.5 block">运行环境</label>
+                <select
+                  className="flex h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  value={sandboxTemplateId}
+                  onChange={(e) => setSandboxTemplateId(e.target.value)}
+                >
+                  {(sandboxTemplates ?? []).map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>
+                      {tpl.display_name}
+                    </option>
+                  ))}
+                </select>
+                {selectedSandboxTemplate && (
+                  <div className="mt-2 space-y-1 text-xs text-slate-500">
+                    <p>{selectedSandboxTemplate.description}</p>
+                    <p className="font-mono text-slate-400">
+                      {selectedSandboxTemplate.id} / {selectedSandboxTemplate.category}
+                    </p>
+                  </div>
+                )}
+              </div>
               <div>
                 <label className="text-sm font-medium text-slate-700 mb-1.5 block">
                   系统提示词
@@ -368,31 +363,15 @@ export function AgentDetail() {
                     return (
                       <div key={p.key} className="flex items-center gap-2 p-2.5 border border-slate-200 rounded-md bg-slate-50/50">
                         <span className="text-xs font-medium text-slate-600 w-28 shrink-0">{p.label}</span>
-                        <select
-                          className="flex h-8 rounded-md border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500 w-40"
-                          value={cfg.provider}
-                          onChange={(e) => {
-                            setSubagentModels((prev) => ({
-                              ...prev,
-                              [p.key]: { ...cfg, provider: e.target.value, model: "" },
-                            }))
-                          }}
-                        >
-                          <option value="">继承主模型</option>
-                          {PROVIDERS.map((prov) => (
-                            <option key={prov.value} value={prov.value}>{prov.label}</option>
-                          ))}
-                        </select>
                         <Input
                           value={cfg.model}
                           onChange={(e) => {
                             setSubagentModels((prev) => ({
                               ...prev,
-                              [p.key]: { ...cfg, model: e.target.value },
+                              [p.key]: { provider: NEWAPI_PROVIDER, model: e.target.value },
                             }))
                           }}
-                          placeholder={cfg.provider ? "输入模型 ID" : "继承主 Agent 模型"}
-                          disabled={!cfg.provider}
+                          placeholder="留空继承主 Agent 模型"
                           className="flex-1 h-8 text-xs"
                         />
                       </div>
@@ -547,7 +526,7 @@ export function AgentDetail() {
         </TabsContent>
 
         <TabsContent value="groups">
-          <GroupAssignments agentId={agent.id} />
+          <GroupAssignments agentId={agent.id} agent={agent} />
         </TabsContent>
       </Tabs>
     </div>

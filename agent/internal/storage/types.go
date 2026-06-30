@@ -8,8 +8,10 @@ type SubagentModelConfig struct {
 
 // HookAction is a single action within a Hook rule.
 type HookAction struct {
-	Type    string `json:"type"`
-	SkillID string `json:"skillId,omitempty"`
+	Type               string `json:"type"`
+	SkillID            string `json:"skillId,omitempty"`
+	ScopeType          string `json:"scopeType,omitempty"`
+	ExpiresAfterEvents int    `json:"expiresAfterEvents,omitempty"`
 }
 
 // Hook is an event-driven orchestration rule: when event fires, execute actions.
@@ -20,18 +22,19 @@ type Hook struct {
 
 // AgentConfig holds the runtime configuration for an agent.
 type AgentConfig struct {
-	ID             string                         `json:"id"`
-	DisplayName    string                         `json:"displayName"`
-	SystemPrompt   string                         `json:"systemPrompt"`
-	ModelID        string                         `json:"modelId,omitempty"`
-	Provider       string                         `json:"provider,omitempty"`
-	Model          string                         `json:"model,omitempty"`
-	SubagentModels map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
-	Skills         []string                       `json:"skills"`
-	SubagentSkills map[string][]string            `json:"subagentSkills,omitempty"`
-	Hooks          []Hook                         `json:"hooks"`
-	Channels       []ChannelBinding               `json:"channels"`
-	IsActive       bool                           `json:"isActive"`
+	ID                string                         `json:"id"`
+	DisplayName       string                         `json:"displayName"`
+	SystemPrompt      string                         `json:"systemPrompt"`
+	ModelID           string                         `json:"modelId,omitempty"`
+	Provider          string                         `json:"provider,omitempty"`
+	Model             string                         `json:"model,omitempty"`
+	SandboxTemplateID string                         `json:"sandboxTemplateId"`
+	SubagentModels    map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
+	Skills            []string                       `json:"skills"`
+	SubagentSkills    map[string][]string            `json:"subagentSkills,omitempty"`
+	Hooks             []Hook                         `json:"hooks"`
+	Channels          []ChannelBinding               `json:"channels"`
+	IsActive          bool                           `json:"isActive"`
 }
 
 // ChannelBinding describes which channel an agent is bound to.
@@ -52,37 +55,39 @@ type ProviderCredentials struct {
 // All skills use progressive loading: Level 1 metadata index in prompt,
 // Level 2 full content via load_skill, Level 3 references via load_skill_reference.
 type SkillContext struct {
-	SkillsSnippet    string          `json:"skillsSnippet"`             // Level 1 metadata index injected into system prompt
-	LoadableSkillIDs map[string]bool `json:"loadableSkillIDs"`         // skill IDs that load_skill can load
-	Diagnostics      []string        `json:"diagnostics,omitempty"`    // runtime/local-store diagnostics
+	SkillsSnippet    string          `json:"skillsSnippet"`         // Level 1 metadata index injected into system prompt
+	LoadableSkillIDs map[string]bool `json:"loadableSkillIDs"`      // skill IDs that load_skill can load
+	Diagnostics      []string        `json:"diagnostics,omitempty"` // runtime/local-store diagnostics
 }
 
 // Persona is a named behavior profile that can be assigned to groups.
 // Pointer fields distinguish "not set" (nil/NULL) from "set to empty".
 type Persona struct {
-	ID             string                        `json:"id"`
-	AgentID        string                        `json:"agentId"`
-	DisplayName    string                        `json:"displayName"`
-	SystemPrompt   *string                       `json:"systemPrompt"`
-	Provider       *string                       `json:"provider"`
-	Model          *string                       `json:"model"`
-	Skills         *[]string                     `json:"skills"`
-	SubagentModels map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
-	SubagentSkills map[string][]string           `json:"subagentSkills,omitempty"`
-	GroupCount     int                           `json:"groupCount"`
-	CreatedAt      string                        `json:"createdAt"`
-	UpdatedAt      string                        `json:"updatedAt"`
+	ID                string                         `json:"id"`
+	AgentID           string                         `json:"agentId"`
+	DisplayName       string                         `json:"displayName"`
+	SystemPrompt      *string                        `json:"systemPrompt"`
+	Provider          *string                        `json:"provider"`
+	Model             *string                        `json:"model"`
+	SandboxTemplateID *string                        `json:"sandboxTemplateId"`
+	Skills            *[]string                      `json:"skills"`
+	SubagentModels    map[string]SubagentModelConfig `json:"subagentModels,omitempty"`
+	SubagentSkills    map[string][]string            `json:"subagentSkills,omitempty"`
+	GroupCount        int                            `json:"groupCount"`
+	CreatedAt         string                         `json:"createdAt"`
+	UpdatedAt         string                         `json:"updatedAt"`
 }
 
 // GroupAssignment maps a group (by session_key) to a Persona.
 type GroupAssignment struct {
-	ID         string  `json:"id"`
-	AgentID    string  `json:"agentId"`
-	SessionKey string  `json:"sessionKey"`
-	GroupName  string  `json:"groupName"`
-	PersonaID  *string `json:"personaId"`
-	CreatedAt  string  `json:"createdAt"`
-	UpdatedAt  string  `json:"updatedAt"`
+	ID                string  `json:"id"`
+	AgentID           string  `json:"agentId"`
+	SessionKey        string  `json:"sessionKey"`
+	GroupName         string  `json:"groupName"`
+	PersonaID         *string `json:"personaId"`
+	SandboxTemplateID *string `json:"sandboxTemplateId"`
+	CreatedAt         string  `json:"createdAt"`
+	UpdatedAt         string  `json:"updatedAt"`
 }
 
 // UnconfiguredGroup represents a group chat discovered from sessions
@@ -105,6 +110,7 @@ type SessionData struct {
 	ChannelConversationID string `json:"channelConversationId"`
 	ChannelName           string `json:"channelName"`
 	WorkDir               string `json:"workDir"`
+	SandboxTemplateID     string `json:"sandboxTemplateId"`
 	ExecutionStatus       string `json:"executionStatus"`
 	Mode                  string `json:"mode"`
 	EventCursor           int64  `json:"eventCursor"`

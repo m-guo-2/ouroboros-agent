@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from "react-router-dom"
 import {
-  Bot, Blocks, Cpu,
+  Bot, Blocks,
   Activity,
   Settings,
   MessageSquare,
@@ -23,7 +23,6 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     items: [
       { label: "Agents", path: "/agents", icon: Bot },
       { label: "Skills", path: "/skills", icon: Blocks },
-      { label: "Models", path: "/models", icon: Cpu },
       { label: "企微账号", path: "/qiwei-accounts", icon: MessageSquare },
     ],
   },

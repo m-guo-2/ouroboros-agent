@@ -19,6 +19,29 @@
 - **THEN** 命令执行时 SHALL 注入 `MY_VAR=test_value` 环境变量
 - **THEN** 该环境变量 SHALL 仅对本次执行有效，不影响后续命令
 
+### Requirement: sandbox_set_env tool
+系统 SHALL 提供 `sandbox_set_env` Tool，为当前 session 的沙箱持久注入或清除环境变量。持久 env SHALL 影响后续 `execute_command` 和 skill `run_script`，但 SHALL NOT 修改宿主进程环境或写入沙箱文件。
+
+#### Scenario: Persistent env applied to later command
+- **WHEN** LLM 调用 `sandbox_set_env` 参数 `{"env": {"API_BASE_URL": "https://example.test"}}`
+- **WHEN** 后续调用 `execute_command` 参数 `{"command": "echo $API_BASE_URL"}`
+- **THEN** 命令执行时 SHALL 读取到 `API_BASE_URL=https://example.test`
+
+#### Scenario: Persistent env visible to skill scripts
+- **WHEN** 当前 session 的沙箱已通过 `sandbox_set_env` 注入 `TOKEN=abc`
+- **WHEN** LLM 调用 skill `run_script`
+- **THEN** 脚本进程环境 SHALL 包含 `TOKEN=abc`
+
+#### Scenario: Unset persistent env
+- **WHEN** 当前 session 的沙箱已存在 `TOKEN=abc`
+- **WHEN** LLM 调用 `sandbox_set_env` 参数 `{"unset": ["TOKEN"]}`
+- **THEN** 后续命令和脚本环境 SHALL 不再包含 `TOKEN`
+
+#### Scenario: Invalid env name rejected
+- **WHEN** LLM 调用 `sandbox_set_env` 参数 `{"env": {"BAD-NAME": "x"}}`
+- **THEN** Tool SHALL 返回明确错误
+- **THEN** 当前沙箱 env SHALL 保持不变
+
 #### Scenario: Command with custom timeout
 - **WHEN** LLM 调用 `execute_command` 参数 `{"command": "sleep 10", "timeout": 5}`
 - **THEN** 命令 SHALL 在 5 秒后被终止
@@ -101,8 +124,8 @@
 
 #### Scenario: API key configured
 - **WHEN** 环境变量 `DAYTONA_API_KEY` 已设置
-- **THEN** 4 个沙箱 Tool SHALL 注册到 ToolRegistry
-- **THEN** LLM 的 tool list 中 SHALL 包含这 4 个 Tool
+- **THEN** 沙箱 Tool SHALL 注册到 ToolRegistry
+- **THEN** LLM 的 tool list 中 SHALL 包含这些 Tool
 
 #### Scenario: API key not configured
 - **WHEN** 环境变量 `DAYTONA_API_KEY` 未设置

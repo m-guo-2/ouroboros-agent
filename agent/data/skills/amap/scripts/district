@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""查行政区划。
+
+用法:
+  district --query "北京"
+  district --query "朝阳区" --depth 2
+
+参数:
+  --query  区域名称（必填）
+  --depth  子级深度 0-3，默认 1（0=不返回子级，1=省→市，2=省→市→区，3=全部）
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _amap_client import call_amap, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["query"])
+params = {
+    "keywords": args["query"],
+    "subdistrict": args.get("depth", "1"),
+}
+result = call_amap("/v3/config/district", params)
+output(result)

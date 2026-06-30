@@ -1,18 +1,3 @@
-// ===== Models =====
-
-export interface Model {
-  id: string
-  name: string
-  provider: "claude" | "openai" | "kimi" | "glm" | "deepseek" | "volcengine"
-  enabled: boolean
-  configured: boolean
-  model: string
-  maxTokens: number
-  temperature: number
-  baseUrl?: string
-  hasApiKey?: boolean
-}
-
 export interface AvailableModel {
   id: string
   name: string
@@ -35,6 +20,7 @@ export interface AgentProfile {
   modelId?: string
   provider?: string
   model?: string
+  sandboxTemplateId?: string
   subagentModels?: Record<string, SubagentModelConfig>
   skills?: string[]
   subagentSkills?: Record<string, string[]>
@@ -52,6 +38,8 @@ export interface AgentProfile {
 export interface HookAction {
   type: string
   skillId?: string
+  scopeType?: string
+  expiresAfterEvents?: number
 }
 
 export interface Hook {
@@ -77,6 +65,7 @@ export interface AgentSession {
   channelConversationId: string
   channelName: string
   workDir: string
+  sandboxTemplateId: string
   executionStatus: string
   createdAt: number
   updatedAt: number
@@ -116,6 +105,17 @@ export interface MessageLifecycleEvent {
 }
 
 // ===== Skills =====
+
+export interface SandboxTemplate {
+  id: string
+  category: string
+  display_name: string
+  description: string
+  runtime_commands: string[]
+  python_packages: string[]
+  system_binaries: string[]
+  verification_hint: string
+}
 
 export interface SkillListItem {
   id: string
@@ -323,6 +323,7 @@ export interface Persona {
   systemPrompt?: string | null
   provider?: string | null
   model?: string | null
+  sandboxTemplateId?: string | null
   skills?: string[] | null
   subagentModels?: Record<string, SubagentModelConfig> | null
   subagentSkills?: Record<string, string[]> | null
@@ -337,6 +338,7 @@ export interface GroupAssignment {
   sessionKey: string
   groupName: string
   personaId?: string | null
+  sandboxTemplateId?: string | null
   createdAt: string
   updatedAt: string
 }

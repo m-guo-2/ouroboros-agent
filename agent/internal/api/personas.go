@@ -47,6 +47,15 @@ func handlePersonas(w http.ResponseWriter, r *http.Request, agentID string) {
 				p.Model = &s
 			}
 		}
+		if v, ok := body["sandboxTemplateId"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				if !validateSandboxTemplateID(s) {
+					apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
+					return
+				}
+				p.SandboxTemplateID = &s
+			}
+		}
 		if v, ok := body["skills"]; ok && v != nil {
 			ids := parseSkillIDs(v)
 			p.Skills = &ids
@@ -122,6 +131,10 @@ func handlePersonaWithID(w http.ResponseWriter, r *http.Request, agentID, person
 		var body map[string]interface{}
 		if err := decodeBody(r, &body); err != nil {
 			apiErr(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if v, ok := body["sandboxTemplateId"].(string); ok && v != "" && !validateSandboxTemplateID(v) {
+			apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
 			return
 		}
 		result, err := storage.UpdatePersona(id, body)

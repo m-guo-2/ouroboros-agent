@@ -7,9 +7,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 // Lazy-load all pages for code splitting
 const MonitorPage = lazy(() => import("@/components/features/monitor/monitor-page").then((m) => ({ default: m.MonitorPage })))
+const ExecutionDetailPage = lazy(() => import("@/components/features/monitor/execution-detail-page").then((m) => ({ default: m.ExecutionDetailPage })))
 const AgentList = lazy(() => import("@/components/features/agents/agent-list").then((m) => ({ default: m.AgentList })))
 const AgentDetail = lazy(() => import("@/components/features/agents/agent-detail").then((m) => ({ default: m.AgentDetail })))
-const ModelList = lazy(() => import("@/components/features/models/model-list").then((m) => ({ default: m.ModelList })))
 const SkillList = lazy(() => import("@/components/features/skills/skill-list").then((m) => ({ default: m.SkillList })))
 const SkillDetail = lazy(() => import("@/components/features/skills/skill-detail").then((m) => ({ default: m.SkillDetail })))
 const SettingsPage = lazy(() => import("@/components/features/settings/settings-page").then((m) => ({ default: m.SettingsPage })))
@@ -83,9 +83,9 @@ export default function RootApp() {
           <Route element={<AppLayout />}>
             <Route index element={<Navigate to="/monitor" replace />} />
             <Route path="monitor" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><MonitorPage /></Suspense></ErrorBoundary>} />
+            <Route path="monitor/executions/:id" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><ExecutionDetailPage /></Suspense></ErrorBoundary>} />
             <Route path="agents" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><AgentList /></Suspense></ErrorBoundary>} />
             <Route path="agents/:id" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><AgentDetail /></Suspense></ErrorBoundary>} />
-            <Route path="models" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><ModelList /></Suspense></ErrorBoundary>} />
             <Route path="skills" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillList /></Suspense></ErrorBoundary>} />
             <Route path="skills/:name" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><SkillDetail /></Suspense></ErrorBoundary>} />
             <Route path="qiwei-accounts" element={<ErrorBoundary><Suspense fallback={<PageFallback />}><QiweiAccountList /></Suspense></ErrorBoundary>} />

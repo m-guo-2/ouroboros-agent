@@ -28,6 +28,9 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	mux.HandleFunc("/api/agents", handleAgents)
 	mux.HandleFunc("/api/agents/", handleAgentsWithID)
 
+	// Sandbox templates
+	mux.HandleFunc("/api/sandbox-templates", handleSandboxTemplates)
+
 	// Models (LLM config)
 	mux.HandleFunc("/api/models", handleModels)
 	mux.HandleFunc("/api/models/", handleModelsWithID)
@@ -50,6 +53,8 @@ func Mount(mux *http.ServeMux, logReader sharedlogger.LogReader) {
 	th := &tracesHandler{reader: logReader}
 	mux.Handle("/api/traces", th)
 	mux.Handle("/api/traces/", th)
+	mh := &monitorHandler{traces: th}
+	mux.Handle("/api/monitor/", mh)
 
 	// Services status
 	mux.HandleFunc("/api/services", handleServices)

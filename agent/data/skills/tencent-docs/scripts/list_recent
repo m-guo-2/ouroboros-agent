@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""查看最近编辑的文档。
+
+用法:
+  list_recent
+  list_recent --count 20
+
+参数:
+  --count  返回数量，默认 10
+
+返回: 最近文档列表 JSON
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:])
+count = int(args.get("count", "10"))
+
+result = call_mcp("manage.recent_online_file", {"count": count})
+output(result)

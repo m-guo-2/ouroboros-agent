@@ -21,6 +21,8 @@ ENABLE_FEISHU="${ENABLE_FEISHU:-0}"
 INSTALL_NGINX="${INSTALL_NGINX:-1}"
 RELOAD_NGINX="${RELOAD_NGINX:-1}"
 BOOTSTRAP_AFTER_INSTALL="${BOOTSTRAP_AFTER_INSTALL:-1}"
+INSTALL_OFFICE_DEPS="${INSTALL_OFFICE_DEPS:-1}"
+INSTALL_OFFICE_FONTS="${INSTALL_OFFICE_FONTS:-1}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -166,12 +168,76 @@ install_admin_dist() {
   cp -R "$REPO_ROOT/admin/dist" "$INSTALL_PREFIX/admin/dist"
 }
 
+install_skills() {
+  info "installing built-in skills"
+  install -d -m 0755 "$INSTALL_PREFIX/agent/data"
+  rm -rf "$INSTALL_PREFIX/agent/data/skills"
+  cp -R "$REPO_ROOT/agent/data/skills" "$INSTALL_PREFIX/agent/data/skills"
+}
+
 install_default_prompt() {
   local src="$REPO_ROOT/agent/data/moli-system-prompt.md"
   local dst="$CONFIG_DIR/default-system-prompt.md"
   if [[ -f "$src" && ! -f "$dst" ]]; then
     install -m 0640 "$src" "$dst"
   fi
+}
+
+install_office_dependencies() {
+	if ! bool_enabled "$INSTALL_OFFICE_DEPS"; then
+		warn "skipping office python dependencies"
+		return
+	fi
+
+  local req="$REPO_ROOT/agent/internal/sandbox/runtime/files/office/requirements.txt"
+  if [[ ! -f "$req" ]]; then
+    warn "office requirements not found: $req"
+    return
+  fi
+
+  info "installing office python dependencies for $RUN_USER"
+  python3 -m pip --version >/dev/null 2>&1 || die "python3 pip is required for office dependencies"
+  local tmp_req="/tmp/${APP_NAME}-office-requirements.$$"
+  install -m 0644 "$req" "$tmp_req"
+  runuser -u "$RUN_USER" -- \
+    env HOME="$INSTALL_PREFIX" \
+    python3 -m pip install --user -r "$tmp_req"
+	rm -f "$tmp_req"
+}
+
+install_office_fonts() {
+	if ! bool_enabled "$INSTALL_OFFICE_FONTS"; then
+		warn "skipping office fonts"
+		return
+	fi
+
+	info "installing office Chinese fonts"
+	if command -v apt-get >/dev/null 2>&1; then
+		DEBIAN_FRONTEND=noninteractive apt-get install -y \
+			fontconfig \
+			fonts-noto-cjk \
+			fonts-wqy-zenhei \
+			fonts-arphic-ukai \
+			fonts-arphic-uming \
+			fonts-arphic-gkai00mp \
+			fonts-arphic-gbsn00lp \
+			fonts-cwtex-fs \
+			fonts-cwtex-kai \
+			fonts-cwtex-heib \
+			fonts-liberation \
+			fonts-liberation2
+	else
+		warn "apt-get not found; install Chinese office fonts manually"
+	fi
+
+	local fc_src="$REPO_ROOT/deploy/fontconfig/64-moli-chinese-office-fonts.conf"
+	if [[ -f "$fc_src" ]]; then
+		install -d -m 0755 /etc/fonts/conf.d
+		install -m 0644 "$fc_src" /etc/fonts/conf.d/64-moli-chinese-office-fonts.conf
+	fi
+	if command -v fc-cache >/dev/null 2>&1; then
+		fc-cache -f
+	fi
 }
 
 install_env_files() {
@@ -324,12 +390,15 @@ main() {
   install_directories
   install_binaries
   install_admin_dist
+  install_skills
   install_default_prompt
   install_env_files
   install_systemd_units
   install_nginx_config
-  fix_ownership
-  enable_services
+	fix_ownership
+	install_office_fonts
+	install_office_dependencies
+	enable_services
   run_bootstrap
   print_summary
 }

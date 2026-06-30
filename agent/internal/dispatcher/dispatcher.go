@@ -122,6 +122,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		}
 	}
 
+	isNewSession := false
 	if session == nil {
 		// Create new session.
 		title := msg.Content
@@ -147,10 +148,7 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		}
 		logger.Business(ctx, "新 Session 创建",
 			"sessionId", session.ID, "agentId", agentCfg.ID)
-
-		// Dispatch hooks for the new session so ephemeral skills get activated
-		// before the first processSession reads session_active_skills.
-		runner.DispatchHooks(ctx, agentCfg.Hooks, "session_started", session.ID)
+		isNewSession = true
 	} else {
 		// Patch any new metadata onto existing session.
 		patch := map[string]string{}
@@ -165,6 +163,46 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 		}
 		if len(patch) > 0 {
 			_ = storage.PatchSession(session.ID, patch)
+		}
+	}
+
+	if isGroupClearCommand(msg) {
+		runner.ResetSessionRuntime(session.ID)
+		count, countErr := storage.CountSessionMessages(session.ID)
+		if countErr != nil {
+			logger.Error(ctx, "查询清理前消息数失败", "sessionId", session.ID, "error", countErr.Error())
+			return DispatchResult{Success: false, SessionID: session.ID, UserID: userID, Error: "clear count failed"}
+		}
+		if err := storage.ClearSessionHistory(session.ID); err != nil {
+			logger.Error(ctx, "群历史清理失败", "sessionId", session.ID, "error", err.Error())
+			return DispatchResult{Success: false, SessionID: session.ID, UserID: userID, Error: "clear history failed"}
+		}
+		logger.Business(ctx, "GM 清理群历史",
+			"sessionId", session.ID,
+			"sessionKey", session.SessionKey,
+			"messageCount", count)
+		return DispatchResult{Success: true, SessionID: session.ID, UserID: userID}
+	}
+
+	firstInSession := false
+	if msg.ChannelUserID != "" {
+		seenParticipant, pErr := storage.HasSessionParticipant(session.ID, msg.ChannelUserID)
+		if pErr != nil {
+			logger.Warn(ctx, "查询 session participant 失败", "sessionId", session.ID, "channelUserId", msg.ChannelUserID, "error", pErr.Error())
+		}
+		firstInSession = !seenParticipant
+	}
+	relation, seenErr := storage.RecordAgentUserSeen(agentCfg.ID, userID)
+	if seenErr != nil {
+		logger.Warn(ctx, "记录 agent 用户见过状态失败", "agentId", agentCfg.ID, "userId", userID, "error", seenErr.Error())
+		relation = "unknown"
+	}
+	if firstInSession {
+		if msg.ChannelMeta == nil {
+			msg.ChannelMeta = map[string]any{}
+		}
+		msg.ChannelMeta["participantDiscovery"] = map[string]any{
+			"relation": relation,
 		}
 	}
 
@@ -234,7 +272,8 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 			"attachmentNum": len(msg.Attachments),
 		},
 	})
-	if err := storage.AppendSessionEvent(session.ID, msgID); err != nil {
+	eventSeq, err := storage.AppendSessionEventAndGetSeq(session.ID, msgID)
+	if err != nil {
 		_ = storage.SaveLifecycleEvent(map[string]any{
 			"sessionId":        session.ID,
 			"messageId":        msgID,
@@ -246,6 +285,30 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 			"payload":          map[string]any{"error": err.Error()},
 		})
 		return DispatchResult{Success: false, Error: "session event append failed"}
+	}
+	if msg.ChannelUserID != "" {
+		inserted, pErr := storage.UpsertSessionParticipant(session.ID, msg.ChannelUserID, userID, msgID, eventSeq)
+		if pErr != nil {
+			logger.Warn(dispatchCtx, "记录 session participant 失败",
+				"sessionId", session.ID, "channelUserId", msg.ChannelUserID, "error", pErr.Error())
+		}
+		firstInSession = firstInSession && inserted
+	}
+	if isNewSession {
+		runner.DispatchHooksWithPayload(dispatchCtx, agentCfg.Hooks, "session_started", runner.HookPayload{
+			SessionID:      session.ID,
+			ScopeType:      "session",
+			ActivatedAtSeq: eventSeq,
+		})
+	}
+	if firstInSession {
+		runner.DispatchHooksWithPayload(dispatchCtx, agentCfg.Hooks, "participant_discovered", runner.HookPayload{
+			SessionID:      session.ID,
+			ScopeType:      "participant",
+			ScopeKey:       msg.ChannelUserID,
+			ActivatedAtSeq: eventSeq,
+			Relation:       relation,
+		})
 	}
 	_ = storage.SaveLifecycleEvent(map[string]any{
 		"sessionId":        session.ID,
@@ -366,6 +429,12 @@ func resolveSessionKey(msg IncomingMessage) string {
 		uniqueID = resolveChannelUserKey(msg)
 	}
 	return msg.Channel + ":" + uniqueID
+}
+
+func isGroupClearCommand(msg IncomingMessage) bool {
+	return strings.TrimSpace(msg.ConversationType) == "group" &&
+		strings.EqualFold(strings.TrimSpace(msg.SenderName), "GM") &&
+		strings.TrimSpace(msg.Content) == "#clear"
 }
 
 func resolveDedupeKey(msg IncomingMessage) string {

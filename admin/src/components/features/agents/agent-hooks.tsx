@@ -128,6 +128,12 @@ export function AgentHooks({ hooks, onChange }: AgentHooksProps) {
                   <span className="font-medium text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
                     {action.skillId}
                   </span>
+                  {action.scopeType && (
+                    <span className="text-slate-400">scope={action.scopeType}</span>
+                  )}
+                  {!!action.expiresAfterEvents && (
+                    <span className="text-slate-400">expires={action.expiresAfterEvents} events</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -206,6 +212,27 @@ export function AgentHooks({ hooks, onChange }: AgentHooksProps) {
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}
+                  <select
+                    className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500 w-28 shrink-0"
+                    value={action.scopeType ?? ""}
+                    onChange={(e) => updateFormAction(aIdx, { scopeType: e.target.value || undefined })}
+                  >
+                    <option value="">默认 scope</option>
+                    <option value="session">session</option>
+                    <option value="participant">participant</option>
+                  </select>
+                  <input
+                    type="number"
+                    min={0}
+                    className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500 w-28 shrink-0"
+                    placeholder="过期 events"
+                    value={action.expiresAfterEvents ?? ""}
+                    onChange={(e) =>
+                      updateFormAction(aIdx, {
+                        expiresAfterEvents: e.target.value ? Number(e.target.value) : undefined,
+                      })
+                    }
+                  />
                 </div>
               ))}
               <button

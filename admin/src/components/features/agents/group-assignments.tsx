@@ -18,7 +18,11 @@ import {
   useCreateGroupAssignment,
   useUpdateGroupAssignment,
   useDeleteGroupAssignment,
+  useClearGroupHistory,
 } from "@/hooks/use-personas"
+import { useSkills } from "@/hooks/use-skills"
+import { useSandboxTemplates } from "@/hooks/use-sandbox-templates"
+import type { AgentProfile, Persona, SandboxTemplate, SkillListItem } from "@/api/types"
 
 function formatLastActive(ts: number) {
   const ms = ts > 1e12 ? ts : ts * 1000
@@ -29,27 +33,90 @@ function formatLastActive(ts: number) {
   }
 }
 
-export interface GroupAssignmentsProps {
-  agentId: string
+function effectiveSkillIDs(
+  personaId: string | null | undefined,
+  personas: Map<string, Persona>,
+  agent: AgentProfile,
+) {
+  if (!personaId) return agent.skills ?? []
+  const persona = personas.get(personaId)
+  return persona?.skills ?? agent.skills ?? []
 }
 
-export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
+function effectiveSandboxTemplateID(
+  assignmentTemplateId: string | null | undefined,
+  personaId: string | null | undefined,
+  personas: Map<string, Persona>,
+  agent: AgentProfile,
+) {
+  if (assignmentTemplateId) return assignmentTemplateId
+  if (personaId) {
+    const personaTemplateId = personas.get(personaId)?.sandboxTemplateId
+    if (personaTemplateId) return personaTemplateId
+  }
+  return agent.sandboxTemplateId ?? "office-worker"
+}
+
+function formatSandboxTemplate(id: string, templates: Map<string, SandboxTemplate>) {
+  return templates.get(id)?.display_name ?? id
+}
+
+function SkillSummary({
+  ids,
+  skills,
+  prefix,
+}: {
+  ids: string[]
+  skills: Map<string, SkillListItem>
+  prefix: string
+}) {
+  const items = ids.map((id) => ({ id, label: skills.get(id)?.name ?? id }))
+  if (items.length === 0) {
+    return <p className="mt-1 text-xs text-amber-600">{prefix}：无</p>
+  }
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      <span className="text-xs text-slate-400">{prefix}：</span>
+      {items.map((item) => (
+        <Badge key={item.id} variant="outline" className="max-w-[180px] truncate text-[11px]">
+          {item.label}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+export interface GroupAssignmentsProps {
+  agentId: string
+  agent: AgentProfile
+}
+
+export function GroupAssignments({ agentId, agent }: GroupAssignmentsProps) {
   const { data: personas } = usePersonas(agentId)
+  const { data: skills } = useSkills()
+  const { data: sandboxTemplates } = useSandboxTemplates()
   const { data: assignments, isLoading: assignmentsLoading } = useGroupAssignments(agentId)
   const { data: unconfigured, isLoading: discoverLoading } = useUnconfiguredGroups(agentId)
   const createMutation = useCreateGroupAssignment()
   const updateMutation = useUpdateGroupAssignment()
   const deleteMutation = useDeleteGroupAssignment()
+  const clearHistoryMutation = useClearGroupHistory()
 
   const [pickPersonaByKey, setPickPersonaByKey] = useState<Record<string, string>>({})
+  const [pickSandboxByKey, setPickSandboxByKey] = useState<Record<string, string>>({})
 
   const [manualOpen, setManualOpen] = useState(false)
   const [manualSessionKey, setManualSessionKey] = useState("")
   const [manualGroupName, setManualGroupName] = useState("")
   const [manualPersonaId, setManualPersonaId] = useState("")
+  const [manualSandboxTemplateId, setManualSandboxTemplateId] = useState("")
 
   const setPick = (sessionKey: string, personaId: string) => {
     setPickPersonaByKey((prev) => ({ ...prev, [sessionKey]: personaId }))
+  }
+
+  const setSandboxPick = (sessionKey: string, sandboxTemplateId: string) => {
+    setPickSandboxByKey((prev) => ({ ...prev, [sessionKey]: sandboxTemplateId }))
   }
 
   const handleConfirmUnconfigured = async (row: {
@@ -68,6 +135,7 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
           sessionKey: row.sessionKey,
           groupName: row.channelName || row.sessionKey,
           personaId: pid,
+          sandboxTemplateId: pickSandboxByKey[row.sessionKey] || null,
         },
       })
     } catch (e) {
@@ -85,6 +153,7 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
         data: {
           sessionKey: row.sessionKey,
           groupName: row.channelName || row.sessionKey,
+          sandboxTemplateId: pickSandboxByKey[row.sessionKey] || null,
         },
       })
     } catch (e) {
@@ -104,12 +173,34 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
     }
   }
 
+  const handleSandboxChange = async (assignmentId: string, sandboxTemplateId: string) => {
+    try {
+      await updateMutation.mutateAsync({
+        agentId,
+        id: assignmentId,
+        data: { sandboxTemplateId: sandboxTemplateId || null },
+      })
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "更新失败")
+    }
+  }
+
   const handleDelete = async (assignmentId: string, groupName: string) => {
     if (!window.confirm(`确认移除群「${groupName}」的分配？`)) return
     try {
       await deleteMutation.mutateAsync({ agentId, id: assignmentId })
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "删除失败")
+    }
+  }
+
+  const handleClearHistory = async (assignmentId: string, groupName: string) => {
+    if (!window.confirm(`确认清空群「${groupName}」的所有历史？\n\n这会删除该群在系统内的消息、执行记录和上下文记忆，但不会移除群分配。`)) return
+    try {
+      const res = await clearHistoryMutation.mutateAsync({ agentId, id: assignmentId })
+      window.alert(`已清空 ${res.data?.messageCount ?? 0} 条消息历史`)
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "清空失败")
     }
   }
 
@@ -127,22 +218,29 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
           sessionKey: sk,
           groupName: gn,
           personaId: manualPersonaId || undefined,
+          sandboxTemplateId: manualSandboxTemplateId || null,
         },
       })
       setManualOpen(false)
       setManualSessionKey("")
       setManualGroupName("")
       setManualPersonaId("")
+      setManualSandboxTemplateId("")
     } catch (e) {
       window.alert(e instanceof Error ? e.message : "创建失败")
     }
   }
 
   const personaOptions = personas ?? []
-  const busy = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending
+  const personaByID = new Map(personaOptions.map((p) => [p.id, p]))
+  const skillByID = new Map((skills ?? []).map((s) => [s.id, s]))
+  const sandboxTemplateByID = new Map((sandboxTemplates ?? []).map((t) => [t.id, t]))
+  const busy = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending || clearHistoryMutation.isPending
 
   const selectPersonaClass =
     "flex h-9 w-full max-w-[220px] rounded-md border border-slate-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+  const selectSandboxClass =
+    "flex h-9 w-full max-w-[240px] rounded-md border border-slate-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
 
   if (assignmentsLoading || discoverLoading) {
     return (
@@ -178,6 +276,14 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                       <Badge variant="outline">{row.sourceChannel}</Badge>
                     </div>
                     <p className="text-xs text-slate-500 font-mono break-all">{row.sessionKey}</p>
+                    <SkillSummary
+                      ids={agent.skills ?? []}
+                      skills={skillByID}
+                      prefix="默认技能"
+                    />
+                    <p className="text-xs text-slate-500">
+                      默认环境：{formatSandboxTemplate(agent.sandboxTemplateId ?? "office-worker", sandboxTemplateByID)}
+                    </p>
                     <p className="text-xs text-slate-400">最近活跃：{formatLastActive(row.lastActive)}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -190,6 +296,18 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                       {personaOptions.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className={selectSandboxClass}
+                      value={pickSandboxByKey[row.sessionKey] ?? ""}
+                      onChange={(e) => setSandboxPick(row.sessionKey, e.target.value)}
+                    >
+                      <option value="">继承运行环境</option>
+                      {(sandboxTemplates ?? []).map((tpl) => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.display_name}
                         </option>
                       ))}
                     </select>
@@ -225,7 +343,14 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
             <p className="text-sm text-slate-500">暂无已分配记录</p>
           ) : (
             <div className="space-y-2">
-              {assignments.map((a) => (
+              {assignments.map((a) => {
+                const sandboxId = effectiveSandboxTemplateID(a.sandboxTemplateId, a.personaId, personaByID, agent)
+                const sandboxPrefix = a.sandboxTemplateId
+                  ? "群组覆盖环境"
+                  : a.personaId && personaByID.get(a.personaId)?.sandboxTemplateId
+                    ? "Persona 环境"
+                    : "继承默认环境"
+                return (
                 <div
                   key={a.id}
                   className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
@@ -233,6 +358,14 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-slate-900">{a.groupName}</p>
                     <p className="text-xs text-slate-500 font-mono break-all mt-0.5">{a.sessionKey}</p>
+                    <SkillSummary
+                      ids={effectiveSkillIDs(a.personaId, personaByID, agent)}
+                      skills={skillByID}
+                      prefix={a.personaId && personaByID.get(a.personaId)?.skills != null ? "Persona 技能" : "继承默认技能"}
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      {sandboxPrefix}：{formatSandboxTemplate(sandboxId, sandboxTemplateByID)}
+                    </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <select
@@ -248,6 +381,28 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                         </option>
                       ))}
                     </select>
+                    <select
+                      className={selectSandboxClass}
+                      value={a.sandboxTemplateId ?? ""}
+                      onChange={(e) => handleSandboxChange(a.id, e.target.value)}
+                      disabled={updateMutation.isPending}
+                    >
+                      <option value="">继承运行环境</option>
+                      {(sandboxTemplates ?? []).map((tpl) => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="text-red-600 hover:text-red-700"
+                      onClick={() => handleClearHistory(a.id, a.groupName)}
+                      disabled={clearHistoryMutation.isPending}
+                    >
+                      清空历史
+                    </Button>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -259,7 +414,7 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                     </Button>
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </CardContent>
@@ -306,6 +461,21 @@ export function GroupAssignments({ agentId }: GroupAssignmentsProps) {
                 {personaOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700 mb-1 block">运行环境（可选）</label>
+              <select
+                className={selectSandboxClass + " max-w-none"}
+                value={manualSandboxTemplateId}
+                onChange={(e) => setManualSandboxTemplateId(e.target.value)}
+              >
+                <option value="">继承运行环境</option>
+                {(sandboxTemplates ?? []).map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.display_name}
                   </option>
                 ))}
               </select>

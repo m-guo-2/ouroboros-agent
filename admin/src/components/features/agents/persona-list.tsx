@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useSkills } from "@/hooks/use-skills"
+import { useSandboxTemplates } from "@/hooks/use-sandbox-templates"
 import {
   usePersonas,
   useCreatePersona,
@@ -21,16 +22,9 @@ import {
   useDeletePersona,
 } from "@/hooks/use-personas"
 import { settingsApi } from "@/api/settings"
-import type { AgentProfile, AvailableModel, Persona, SubagentModelConfig } from "@/api/types"
+import type { AgentProfile, AvailableModel, Persona, SandboxTemplate, SubagentModelConfig } from "@/api/types"
 
-const PROVIDERS = [
-  { value: "anthropic", label: "Anthropic (Claude)" },
-  { value: "openai", label: "OpenAI (GPT)" },
-  { value: "moonshot", label: "Moonshot (Kimi)" },
-  { value: "zhipu", label: "智谱 (GLM)" },
-  { value: "deepseek", label: "DeepSeek" },
-  { value: "volcengine", label: "火山方舟 (豆包)" },
-]
+const NEWAPI_PROVIDER = "openai"
 
 const SUBAGENT_PROFILES = [
   { key: "developer", label: "Developer" },
@@ -41,11 +35,14 @@ const SUBAGENT_PROFILES = [
 
 function formatModelLabel(provider?: string | null, model?: string | null) {
   if (!provider && !model) return "使用默认"
-  const p = PROVIDERS.find((x) => x.value === provider)?.label ?? provider ?? ""
   const m = model ?? ""
-  if (p && m) return `${p} / ${m}`
   if (m) return m
-  return p || "使用默认"
+  return provider === NEWAPI_PROVIDER ? "NewAPI" : provider || "使用默认"
+}
+
+function formatSandboxTemplateLabel(id: string | null | undefined, templates: SandboxTemplate[] | undefined) {
+  if (!id) return "继承 Agent 默认"
+  return templates?.find((t) => t.id === id)?.display_name ?? id
 }
 
 type PersonaFormMode = "create" | "edit"
@@ -68,6 +65,7 @@ function PersonaFormDialog({
   persona,
 }: PersonaFormDialogProps) {
   const { data: skills } = useSkills()
+  const { data: sandboxTemplates } = useSandboxTemplates()
   const createMutation = useCreatePersona()
   const updateMutation = useUpdatePersona()
 
@@ -75,8 +73,9 @@ function PersonaFormDialog({
   const [overridePrompt, setOverridePrompt] = useState(false)
   const [prompt, setPrompt] = useState("")
   const [overrideModel, setOverrideModel] = useState(false)
-  const [provider, setProvider] = useState("")
   const [model, setModel] = useState("")
+  const [overrideSandbox, setOverrideSandbox] = useState(false)
+  const [sandboxTemplateId, setSandboxTemplateId] = useState("office-worker")
   const [overrideSkills, setOverrideSkills] = useState(false)
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [overrideSubModels, setOverrideSubModels] = useState(false)
@@ -97,8 +96,10 @@ function PersonaFormDialog({
       setPrompt(persona.systemPrompt ?? "")
       const hasModel = Boolean(persona.provider || persona.model)
       setOverrideModel(hasModel)
-      setProvider(persona.provider ?? "")
       setModel(persona.model ?? "")
+      const hasSandbox = Boolean(persona.sandboxTemplateId)
+      setOverrideSandbox(hasSandbox)
+      setSandboxTemplateId(persona.sandboxTemplateId ?? agent.sandboxTemplateId ?? "office-worker")
       setOverrideSkills(persona.skills != null)
       setSelectedSkills(persona.skills ?? [...(agent.skills ?? [])])
       const hasSubM = persona.subagentModels != null && Object.keys(persona.subagentModels).length > 0
@@ -114,8 +115,9 @@ function PersonaFormDialog({
       setOverridePrompt(false)
       setPrompt("")
       setOverrideModel(false)
-      setProvider("")
       setModel("")
+      setOverrideSandbox(false)
+      setSandboxTemplateId(agent.sandboxTemplateId ?? "office-worker")
       setOverrideSkills(false)
       setSelectedSkills([])
       setOverrideSubModels(false)
@@ -132,16 +134,11 @@ function PersonaFormDialog({
     if (open) resetFromProps()
   }, [open, resetFromProps])
 
-  const fetchAvailableModels = async (providerValue?: string) => {
-    const p = providerValue ?? provider
-    if (!p) {
-      setModelsError("请先选择 LLM 提供商")
-      return
-    }
+  const fetchAvailableModels = async () => {
     setModelsLoading(true)
     setModelsError("")
     try {
-      const res = await settingsApi.getProviderModels(p)
+      const res = await settingsApi.getProviderModels(NEWAPI_PROVIDER)
       if (res.success && res.data) {
         setAvailableModels(res.data)
         setShowModelList(true)
@@ -149,7 +146,7 @@ function PersonaFormDialog({
         setModelsError((res as { error?: string }).error || "获取模型列表失败")
       }
     } catch {
-      setModelsError("网络请求失败，请检查 API Key 是否已配置")
+      setModelsError("网络请求失败，请检查 NewAPI API Key 是否已配置")
     } finally {
       setModelsLoading(false)
     }
@@ -175,8 +172,8 @@ function PersonaFormDialog({
     const filteredSubagentModels: Record<string, SubagentModelConfig> = {}
     if (overrideSubModels) {
       for (const [profile, cfg] of Object.entries(subagentModels)) {
-        if (cfg?.provider && cfg?.model) {
-          filteredSubagentModels[profile] = cfg
+        if (cfg?.model) {
+          filteredSubagentModels[profile] = { provider: NEWAPI_PROVIDER, model: cfg.model }
         }
       }
     }
@@ -191,8 +188,9 @@ function PersonaFormDialog({
     return {
       displayName: displayName.trim(),
       systemPrompt: overridePrompt ? (prompt || null) : null,
-      provider: overrideModel ? (provider || null) : null,
+      provider: overrideModel && model ? NEWAPI_PROVIDER : null,
       model: overrideModel ? (model || null) : null,
+      sandboxTemplateId: overrideSandbox ? sandboxTemplateId : null,
       skills: overrideSkills ? selectedSkills : null,
       subagentModels: overrideSubModels ? filteredSubagentModels : null,
       subagentSkills: overrideSubSkills ? filteredSubagentSkills : null,
@@ -221,6 +219,7 @@ function PersonaFormDialog({
 
   const defaultPromptPreview = agent.systemPrompt ?? "（Agent 未配置系统提示词）"
   const defaultModelPreview = formatModelLabel(agent.provider, agent.model)
+  const defaultSandboxPreview = formatSandboxTemplateLabel(agent.sandboxTemplateId ?? "office-worker", sandboxTemplates)
   const defaultSkillsCount = agent.skills?.length ?? 0
 
   return (
@@ -262,38 +261,19 @@ function PersonaFormDialog({
 
           <div className="rounded-lg border border-slate-200 p-3 space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-medium text-slate-800">主模型（提供商 + 模型）</span>
+              <span className="text-sm font-medium text-slate-800">主模型</span>
               <Switch checked={overrideModel} onCheckedChange={setOverrideModel} />
             </div>
             {!overrideModel ? (
               <p className="text-sm text-slate-400">使用默认配置</p>
             ) : (
               <div className="space-y-2">
-                <select
-                  className="flex h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  value={provider}
-                  onChange={(e) => {
-                    setProvider(e.target.value)
-                    setModel("")
-                    setAvailableModels([])
-                    setShowModelList(false)
-                    setModelsError("")
-                  }}
-                >
-                  <option value="">请选择提供商...</option>
-                  {PROVIDERS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
                 <div className="space-y-1.5">
                   <div className="flex gap-2">
                     <Input
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
-                      placeholder={provider ? "查询或手动输入模型 ID" : "请先选择提供商"}
-                      disabled={!provider}
+                      placeholder="查询 NewAPI 模型，或手动输入模型 ID"
                       className="flex-1"
                     />
                     <Button
@@ -301,7 +281,7 @@ function PersonaFormDialog({
                       variant="secondary"
                       size="sm"
                       onClick={() => fetchAvailableModels()}
-                      disabled={modelsLoading || !provider}
+                      disabled={modelsLoading}
                       className="shrink-0 whitespace-nowrap"
                     >
                       {modelsLoading ? (
@@ -309,7 +289,7 @@ function PersonaFormDialog({
                       ) : (
                         <RefreshCw className="h-3.5 w-3.5" />
                       )}
-                      查询模型
+                      查询 NewAPI 模型
                     </Button>
                   </div>
                   {modelsError && <p className="text-xs text-red-500">{modelsError}</p>}
@@ -340,6 +320,31 @@ function PersonaFormDialog({
             )}
             {!overrideModel && (
               <p className="text-xs text-slate-500">当前 Agent 默认：{defaultModelPreview}</p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-medium text-slate-800">运行环境</span>
+              <Switch checked={overrideSandbox} onCheckedChange={setOverrideSandbox} />
+            </div>
+            {!overrideSandbox ? (
+              <p className="text-sm text-slate-400">使用默认配置</p>
+            ) : (
+              <select
+                className="flex h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                value={sandboxTemplateId}
+                onChange={(e) => setSandboxTemplateId(e.target.value)}
+              >
+                {(sandboxTemplates ?? []).map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>
+                    {tpl.display_name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {!overrideSandbox && (
+              <p className="text-xs text-slate-500">当前 Agent 默认：{defaultSandboxPreview}</p>
             )}
           </div>
 
@@ -399,33 +404,15 @@ function PersonaFormDialog({
                       className="flex flex-wrap items-center gap-2 p-2 border border-slate-200 rounded-md bg-slate-50/50"
                     >
                       <span className="text-xs font-medium text-slate-600 w-28 shrink-0">{p.label}</span>
-                      <select
-                        className="flex h-8 rounded-md border border-slate-300 bg-white px-2 text-xs w-40"
-                        value={cfg.provider}
-                        onChange={(e) => {
-                          setSubagentModels((prev) => ({
-                            ...prev,
-                            [p.key]: { ...cfg, provider: e.target.value, model: "" },
-                          }))
-                        }}
-                      >
-                        <option value="">继承主模型</option>
-                        {PROVIDERS.map((prov) => (
-                          <option key={prov.value} value={prov.value}>
-                            {prov.label}
-                          </option>
-                        ))}
-                      </select>
                       <Input
                         value={cfg.model}
                         onChange={(e) => {
                           setSubagentModels((prev) => ({
                             ...prev,
-                            [p.key]: { ...cfg, model: e.target.value },
+                            [p.key]: { provider: NEWAPI_PROVIDER, model: e.target.value },
                           }))
                         }}
-                        placeholder={cfg.provider ? "模型 ID" : "继承"}
-                        disabled={!cfg.provider}
+                        placeholder="留空继承"
                         className="flex-1 min-w-[120px] h-8 text-xs"
                       />
                     </div>
@@ -497,8 +484,9 @@ export interface PersonaListProps {
 }
 
 export function PersonaList({ agentId, agent }: PersonaListProps) {
-  const { data: personas, isLoading } = usePersonas(agentId)
-  const cloneMutation = useClonePersona()
+	const { data: personas, isLoading } = usePersonas(agentId)
+	const { data: sandboxTemplates } = useSandboxTemplates()
+	const cloneMutation = useClonePersona()
   const deleteMutation = useDeletePersona()
 
   const [formOpen, setFormOpen] = useState(false)
@@ -586,6 +574,7 @@ export function PersonaList({ agentId, agent }: PersonaListProps) {
             const skillsCount = p.skills?.length
             const skillsLabel =
               skillsCount == null ? "使用默认" : `${skillsCount} 个技能`
+            const sandboxLabel = formatSandboxTemplateLabel(p.sandboxTemplateId, sandboxTemplates)
             return (
               <Card key={p.id}>
                 <CardHeader className="pb-2">
@@ -593,6 +582,7 @@ export function PersonaList({ agentId, agent }: PersonaListProps) {
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm text-slate-600">
                   <p>模型：{formatModelLabel(p.provider, p.model)}</p>
+                  <p>运行环境：{sandboxLabel}</p>
                   <p>技能：{skillsLabel}</p>
                   <p>已分配 {p.groupCount} 个群</p>
                   <div className="flex flex-wrap gap-2 pt-2">

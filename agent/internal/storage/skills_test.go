@@ -107,6 +107,31 @@ func TestLocalSkillRuntimeUsesSQLiteAndFiles(t *testing.T) {
 	}
 }
 
+func TestSeededIcebreakerSkillLoadsFromReadme(t *testing.T) {
+	cleanup := setupSkillTestDB(t)
+	defer cleanup()
+
+	ctx, err := GetSkillsContext([]string{"icebreaker"})
+	if err != nil {
+		t.Fatalf("get skills context: %v", err)
+	}
+	if !strings.Contains(ctx.SkillsSnippet, "破冰引导") {
+		t.Fatalf("expected snippet to include icebreaker, got %q", ctx.SkillsSnippet)
+	}
+	if len(ctx.Diagnostics) != 0 {
+		t.Fatalf("expected no diagnostics for seeded readme skill, got %v", ctx.Diagnostics)
+	}
+
+	detail, err := GetSkillDetail("icebreaker")
+	if err != nil {
+		t.Fatalf("get icebreaker detail: %v", err)
+	}
+	content, _ := detail["content"].(string)
+	if !strings.Contains(content, "complete_skill") {
+		t.Fatalf("expected icebreaker content to include exit instruction, got %q", content)
+	}
+}
+
 func TestSkillDiagnosticsAndMissingLocalFile(t *testing.T) {
 	cleanup := setupSkillTestDB(t)
 	defer cleanup()

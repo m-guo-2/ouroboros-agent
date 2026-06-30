@@ -11,6 +11,7 @@ type HookEventDef struct {
 
 var knownHookEvents = []HookEventDef{
 	{Name: "session_started", Label: "新会话开始", Description: "用户在一个会话中发送首条消息时触发"},
+	{Name: "participant_discovered", Label: "发现会话参与者", Description: "某用户首次出现在当前会话或群里时触发，并携带 first_seen/seen_before 关系事实"},
 	{Name: "contact_added", Label: "新好友添加", Description: "渠道侧新好友关系建立时触发"},
 	{Name: "group_joined", Label: "入群", Description: "Agent 被拉入新群时触发"},
 }

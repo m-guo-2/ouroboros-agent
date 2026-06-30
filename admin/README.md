@@ -8,7 +8,6 @@ Moli Agent 平台的管理后台前端，用于监控 Agent 活动和管理平�
 |------|------|------|
 | **Monitor** | `/monitor` | 统一会话查看器。左侧会话列表，右侧消息交互详情（用户消息 → 执行 trace → 助手回复） |
 | **Agents** | `/agents` | Agent 列表和详情管理 |
-| **Models** | `/models` | 模型配置管理 |
 | **Skills** | `/skills` | 技能列表和详情查看 |
 | **Logs** | `/logs` | 结构化日志查看 |
 | **Settings** | `/settings` | 系统设置 |

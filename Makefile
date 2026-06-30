@@ -115,7 +115,7 @@ deploy: stop build install restart status
 	@echo ""
 	@echo "=> 部署完成 ✓"
 
-install: install-bins install-admin
+install: install-bins install-admin install-skills
 
 install-bins: build-agent build-qiwei
 	@sudo mkdir -p $(INSTALL_DIR)/bin
@@ -137,6 +137,12 @@ install-admin: build-admin
 	sudo rm -rf $(INSTALL_DIR)/admin/dist
 	sudo cp -R admin/dist $(INSTALL_DIR)/admin/dist
 	@echo "  安装: $(INSTALL_DIR)/admin/dist/"
+
+install-skills:
+	@sudo mkdir -p $(INSTALL_DIR)/agent/data
+	sudo rm -rf $(INSTALL_DIR)/agent/data/skills
+	sudo cp -R agent/data/skills $(INSTALL_DIR)/agent/data/skills
+	@echo "  安装: $(INSTALL_DIR)/agent/data/skills/"
 
 restart:
 	@echo "=> 重启 $(APP_NAME) 服务组..."

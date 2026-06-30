@@ -19,6 +19,7 @@ import { DecisionInspector } from "./components/decision-inspector"
 import { SessionMemoryPanel } from "./components/session-memory-panel"
 import { SessionDelayedTasksPanel } from "./components/session-delayed-tasks-panel"
 import { SubagentJobsPanel } from "./components/subagent-jobs-panel"
+import { ExecutionOverview } from "./execution-overview"
 
 export type MonitorTab = "conversation" | "memory" | "tasks" | "subagent"
 
@@ -30,6 +31,21 @@ const TABS: { id: MonitorTab; label: string; icon: typeof MessageSquare }[] = [
 ]
 
 export function MonitorPage() {
+  const [view, setView] = useState<"executions" | "sessions">("executions")
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-white px-5 py-2">
+        <button onClick={() => setView("executions")} className={cn("cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors", view === "executions" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100")}>执行观测</button>
+        <button onClick={() => setView("sessions")} className={cn("cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors", view === "sessions" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100")}>会话调试</button>
+      </div>
+      <div className="min-h-0 flex-1">
+        {view === "executions" ? <ExecutionOverview /> : <SessionMonitorPage />}
+      </div>
+    </div>
+  )
+}
+
+function SessionMonitorPage() {
   const queryClient = useQueryClient()
   const urlState = useMonitorSearchParams()
   const [inspectorOpen, setInspectorOpen] = useState(true)

@@ -29,7 +29,7 @@ var providerCredentialsKey = map[string]providerKeyConfig{
 }
 
 const agentParentSelectSQL = `SELECT id, COALESCE(model_id,''), display_name, COALESCE(system_prompt,''),
-	COALESCE(provider,''), COALESCE(model,''), is_active
+	COALESCE(provider,''), COALESCE(model,''), COALESCE(sandbox_template_id,''), is_active
 	FROM agent_configs`
 
 // scanAgentCoreConfig scans the core agent_configs columns only. The JSON-derived
@@ -39,9 +39,10 @@ func scanAgentCoreConfig(scan func(...interface{}) error) (AgentConfig, error) {
 	var cfg AgentConfig
 	var isActive int
 	if err := scan(&cfg.ID, &cfg.ModelID, &cfg.DisplayName, &cfg.SystemPrompt,
-		&cfg.Provider, &cfg.Model, &isActive); err != nil {
+		&cfg.Provider, &cfg.Model, &cfg.SandboxTemplateID, &isActive); err != nil {
 		return cfg, err
 	}
+	cfg.SandboxTemplateID = normalizeSandboxTemplateID(cfg.SandboxTemplateID)
 	cfg.IsActive = isActive == 1
 	return cfg, nil
 }
@@ -88,19 +89,19 @@ func loadAgentChildren(q dbQ, cfg *AgentConfig) error {
 	rows.Close()
 
 	// agent_hooks
-	rows, err = q.Query(`SELECT event, action_type, COALESCE(skill_id,'') FROM agent_hooks
+	rows, err = q.Query(`SELECT event, action_type, COALESCE(skill_id,''), COALESCE(scope_type,''), COALESCE(expires_after_events,0) FROM agent_hooks
 		WHERE agent_id = ? ORDER BY event, position ASC, id ASC`, cfg.ID)
 	if err != nil {
 		return err
 	}
 	type hookRow struct {
-		Event   string
-		Action  HookAction
+		Event  string
+		Action HookAction
 	}
 	var hookRows []hookRow
 	for rows.Next() {
 		var hr hookRow
-		if err := rows.Scan(&hr.Event, &hr.Action.Type, &hr.Action.SkillID); err != nil {
+		if err := rows.Scan(&hr.Event, &hr.Action.Type, &hr.Action.SkillID, &hr.Action.ScopeType, &hr.Action.ExpiresAfterEvents); err != nil {
 			rows.Close()
 			return err
 		}
@@ -227,6 +228,7 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 	if cfg.IsActive {
 		isActive = 1
 	}
+	cfg.SandboxTemplateID = normalizeSandboxTemplateID(cfg.SandboxTemplateID)
 	now := timeutil.NowMs()
 
 	tx, err := DB.Begin()
@@ -237,10 +239,10 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 
 	if _, err := tx.Exec(
 		`INSERT INTO agent_configs
-		 (id, user_id, model_id, display_name, system_prompt, provider, model, is_active, created_at, updated_at, deleted_at)
-		 VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		 (id, user_id, model_id, display_name, system_prompt, provider, model, sandbox_template_id, is_active, created_at, updated_at, deleted_at)
+		 VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		cfg.ID, cfg.ModelID, cfg.DisplayName, cfg.SystemPrompt, cfg.Provider, cfg.Model,
-		isActive, now, now,
+		cfg.SandboxTemplateID, isActive, now, now,
 	); err != nil {
 		return nil, err
 	}
@@ -258,12 +260,13 @@ func CreateAgentConfig(cfg AgentConfig) (*AgentConfig, error) {
 // appear in the update map.
 func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentConfig, error) {
 	colMap := map[string]string{
-		"displayName":  "display_name",
-		"systemPrompt": "system_prompt",
-		"modelId":      "model_id",
-		"provider":     "provider",
-		"model":        "model",
-		"isActive":     "is_active",
+		"displayName":       "display_name",
+		"systemPrompt":      "system_prompt",
+		"modelId":           "model_id",
+		"provider":          "provider",
+		"model":             "model",
+		"sandboxTemplateId": "sandbox_template_id",
+		"isActive":          "is_active",
 	}
 	now := timeutil.NowMs()
 
@@ -287,6 +290,9 @@ func UpdateAgentConfig(agentID string, updates map[string]interface{}) (*AgentCo
 					v = 0
 				}
 			}
+		}
+		if key == "sandboxTemplateId" {
+			v = normalizeSandboxTemplateID(fmt.Sprint(val))
 		}
 		if _, err := tx.Exec(
 			fmt.Sprintf("UPDATE agent_configs SET %s = ?, updated_at = ? WHERE id = ? AND deleted_at = 0", col),
@@ -481,9 +487,9 @@ func replaceAgentHooks(tx *sql.Tx, agentID string, hooks []Hook, now int64) erro
 		}
 		for i, a := range h.Actions {
 			if _, err := tx.Exec(
-				`INSERT INTO agent_hooks (agent_id, event, action_type, skill_id, position, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				agentID, event, a.Type, a.SkillID, i, now,
+				`INSERT INTO agent_hooks (agent_id, event, action_type, skill_id, scope_type, expires_after_events, position, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				agentID, event, a.Type, a.SkillID, a.ScopeType, a.ExpiresAfterEvents, i, now,
 			); err != nil {
 				return err
 			}
@@ -601,8 +607,10 @@ func toHooks(v interface{}) []Hook {
 						continue
 					}
 					h.Actions = append(h.Actions, HookAction{
-						Type:    stringField(am, "type"),
-						SkillID: stringField(am, "skillId"),
+						Type:               stringField(am, "type"),
+						SkillID:            stringField(am, "skillId"),
+						ScopeType:          stringField(am, "scopeType"),
+						ExpiresAfterEvents: intField(am, "expiresAfterEvents"),
 					})
 				}
 			}
@@ -655,6 +663,20 @@ func stringField(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func intField(m map[string]interface{}, keys ...string) int {
+	for _, key := range keys {
+		switch v := m[key].(type) {
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // dbQ is the subset of *sql.DB / *sql.Tx used by load helpers.

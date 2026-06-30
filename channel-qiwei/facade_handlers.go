@@ -44,12 +44,13 @@ type parseMessageRequest struct {
 }
 
 type facadeSendMessageRequest struct {
-	AccountID             string         `json:"account_id,omitempty"`
-	ChannelConversationID string         `json:"channelConversationId,omitempty"`
-	ChannelUserID         string         `json:"channelUserId,omitempty"`
-	MessageType           string         `json:"messageType,omitempty"`
-	Content               string         `json:"content"`
-	ChannelMeta           map[string]any `json:"channelMeta,omitempty"`
+	AccountID             string          `json:"account_id,omitempty"`
+	ChannelConversationID string          `json:"channelConversationId,omitempty"`
+	ChannelUserID         string          `json:"channelUserId,omitempty"`
+	MessageType           string          `json:"messageType,omitempty"`
+	Content               string          `json:"content"`
+	ChannelMeta           map[string]any  `json:"channelMeta,omitempty"`
+	Mentions              []mentionTarget `json:"mentions,omitempty"`
 }
 
 // resolveRuntimeForFacade picks the runtime for a facade/admin-adjacent
@@ -370,11 +371,13 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	var method string
 	var params map[string]any
+	mentionInfo := prepareMentionSend(req.Mentions, req.ChannelConversationID, req.ChannelUserID, messageType)
 
 	if isMediaMessageType(messageType) {
 		method, params, err = a.resolveMediaSendParams(r.Context(), rt, messageType, toID, req.Content, req.ChannelMeta)
 	} else {
 		method, params, err = toFacadeQiweiMessageRequest(req, toID)
+		applyMentionParams(&method, params, mentionInfo)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: err.Error()})
@@ -389,7 +392,8 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		"content", req.Content,
 	)
 
-	res, err := rt.client.doAPIRaw(r.Context(), method, params)
+	fallbackMethod, fallbackParams := mentionFallback(method, params, mentionInfo)
+	data, mentionStatus, mentionError, err := a.sendWithMentionFallback(r.Context(), rt, method, params, fallbackMethod, fallbackParams, mentionInfo)
 	if err != nil {
 		logger.Error(r.Context(), "facade 发送失败",
 			"method", method,
@@ -399,44 +403,25 @@ func (a *app) handleFacadeSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
 		return
 	}
-	data, err := decodeAPIData(res.Data)
-	if err != nil {
-		logger.Error(r.Context(), "facade 发送解码失败",
-			"method", method,
-			"toId", toID,
-			"error", err.Error(),
-			"rawData", string(res.Data),
-		)
-		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: err.Error()})
-		return
-	}
-
-	if errMsg := checkSendSuccess(data); errMsg != "" {
-		logger.Error(r.Context(), "facade 发送投递失败",
-			"method", method,
-			"toId", toID,
-			"error", errMsg,
-			"data", string(res.Data),
-		)
-		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: errMsg, Data: map[string]any{
-			"method": method,
-			"data":   data,
-		}})
-		return
-	}
 
 	logger.Business(r.Context(), "facade 发送成功",
 		"method", method,
 		"toId", toID,
-		"code", res.Code,
-		"msg", res.Msg,
-		"data", string(res.Data),
+		"mentionStatus", mentionStatus,
+		"mentionError", mentionError,
 	)
 
-	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: map[string]any{
+	out := map[string]any{
 		"method": method,
 		"data":   data,
-	}})
+	}
+	if mentionStatus != "" {
+		out["mentionStatus"] = mentionStatus
+	}
+	if mentionError != "" {
+		out["mentionError"] = mentionError
+	}
+	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: out})
 }
 
 func (a *app) handleGetGroupDetail(w http.ResponseWriter, r *http.Request) {

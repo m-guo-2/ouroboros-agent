@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""搜索文档。
+
+用法:
+  search_file --query "周报"
+  search_file --query "张三" --type owner
+
+参数:
+  --query  搜索关键词（必填）
+  --type   搜索类型：title（默认）或 owner
+
+返回: 文件列表 JSON
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["query"])
+params = {"search_key": args["query"]}
+search_type = args.get("type", "title")
+params["search_type"] = search_type
+
+result = call_mcp("manage.search_file", params)
+output(result)

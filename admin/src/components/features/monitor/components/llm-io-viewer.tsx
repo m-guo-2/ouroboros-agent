@@ -8,6 +8,22 @@ function stringify(v: unknown): string {
   return typeof v === "string" ? v : JSON.stringify(v, null, 2)
 }
 
+function hasRole(value: unknown, role: string) {
+  return !!value && typeof value === "object" && (value as Record<string, unknown>).role === role
+}
+
+function withSystemMessagesFirst(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value
+  const obj = value as Record<string, unknown>
+  if (!Array.isArray(obj.messages)) return value
+
+  const systemMessages = obj.messages.filter((message) => hasRole(message, "system"))
+  if (systemMessages.length === 0) return value
+
+  const restMessages = obj.messages.filter((message) => !hasRole(message, "system"))
+  return { ...obj, messages: [...systemMessages, ...restMessages] }
+}
+
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
@@ -25,6 +41,8 @@ function CopyBtn({ text }: { text: string }) {
 
 export function LLMIOViewer({ traceId, llmIORef, onClose }: { traceId: string; llmIORef: string; onClose: () => void }) {
   const { data, isLoading, error } = useLLMIO(traceId, llmIORef)
+  const requestForDisplay = withSystemMessagesFirst(data?.data?.request)
+  const responseForDisplay = data?.data?.response
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
@@ -53,25 +71,25 @@ export function LLMIOViewer({ traceId, llmIORef, onClose }: { traceId: string; l
           {error && <div className="text-sm text-red-600">加载失败: {String(error)}</div>}
           {data?.data && (
             <div className="space-y-4">
-              {data.data.request != null && (
+              {requestForDisplay != null && (
                 <div className="rounded-lg border border-brand-100 overflow-hidden">
                   <div className="px-3 py-1.5 bg-brand-50 text-xs font-semibold text-brand-700 uppercase tracking-wider flex items-center">
                     Request
-                    <CopyBtn text={stringify(data.data.request)} />
+                    <CopyBtn text={stringify(requestForDisplay)} />
                   </div>
                   <pre className="p-3 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-[35vh] overflow-y-auto bg-white select-text">
-                    {stringify(data.data.request)}
+                    {stringify(requestForDisplay)}
                   </pre>
                 </div>
               )}
-              {data.data.response != null && (
+              {responseForDisplay != null && (
                 <div className="rounded-lg border border-green-100 overflow-hidden">
                   <div className="px-3 py-1.5 bg-green-50 text-xs font-semibold text-green-700 uppercase tracking-wider flex items-center">
                     Response
-                    <CopyBtn text={stringify(data.data.response)} />
+                    <CopyBtn text={stringify(responseForDisplay)} />
                   </div>
                   <pre className="p-3 text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap max-h-[35vh] overflow-y-auto bg-white select-text">
-                    {stringify(data.data.response)}
+                    {stringify(responseForDisplay)}
                   </pre>
                 </div>
               )}

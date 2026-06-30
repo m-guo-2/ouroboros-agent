@@ -28,6 +28,7 @@ type ProcessRequest struct {
 	MessageID             int64                    `json:"messageId"`
 	SessionID             string                   `json:"sessionId,omitempty"`
 	TraceID               string                   `json:"traceId,omitempty"`
+	SandboxRootDir        string                   `json:"-"`
 }
 
 type SessionWorker struct {
@@ -38,6 +39,7 @@ type SessionWorker struct {
 	EventLog       *eventlog.EventLog
 	Processing     bool
 	CancelFunc     context.CancelFunc
+	Done           chan struct{}
 	LastActivityAt int64
 	IdleTimer      *time.Timer
 }
@@ -88,7 +90,37 @@ func evictSession(sessionID string) {
 	go func() { _ = sandboxMgr.Destroy(sessionID) }()
 }
 
+// ResetSessionRuntime cancels any active worker and destroys the live sandbox
+// for a session. Persistent session rows are cleared by storage.
+func ResetSessionRuntime(sessionID string) {
+	workerMutex.Lock()
+	worker, ok := sessionWorkers[sessionID]
+	var done <-chan struct{}
+	if ok {
+		if worker.CancelFunc != nil {
+			worker.CancelFunc()
+		}
+		if worker.Processing {
+			done = worker.Done
+		}
+		if worker.IdleTimer != nil {
+			worker.IdleTimer.Stop()
+		}
+		delete(sessionWorkers, sessionID)
+	}
+	workerMutex.Unlock()
+
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	_ = sandboxMgr.Destroy(sessionID)
+}
+
 func drainWorker(worker *SessionWorker) {
+	defer close(worker.Done)
 	for {
 		baseCtx, cancel := context.WithCancel(context.Background())
 		ctx := logger.WithTrace(baseCtx, fmt.Sprintf("drain-%d", time.Now().UnixNano()), worker.SessionID)
@@ -227,6 +259,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 			WorkDir:        workDir,
 			EventLog:       eventlog.New(sessionID, eventCursor),
 			Processing:     false,
+			Done:           make(chan struct{}),
 			LastActivityAt: time.Now().UnixMilli(),
 		}
 		sessionWorkers[sessionID] = worker
@@ -240,6 +273,7 @@ func EnqueueProcessRequest(ctx context.Context, req ProcessRequest) error {
 
 	if !worker.Processing {
 		worker.Processing = true
+		worker.Done = make(chan struct{})
 		go drainWorker(worker)
 	}
 	workerMutex.Unlock()
@@ -272,6 +306,7 @@ func RecoverSession(ctx context.Context, sd storage.SessionData, el *eventlog.Ev
 		WorkDir:        sd.WorkDir,
 		EventLog:       el,
 		Processing:     true,
+		Done:           make(chan struct{}),
 		LastActivityAt: time.Now().UnixMilli(),
 	}
 	sessionWorkers[sd.ID] = worker

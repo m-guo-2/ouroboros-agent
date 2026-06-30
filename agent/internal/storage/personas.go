@@ -34,7 +34,7 @@ func msToRFC3339(ms int64) string {
 // personaCoreSelect pulls the scalar personas row; children are loaded by
 // loadPersonaChildren.
 const personaCoreSelect = `SELECT p.id, p.agent_id, p.display_name,
-	p.system_prompt, p.provider, p.model, p.created_at, p.updated_at,
+	p.system_prompt, p.provider, p.model, p.sandbox_template_id, p.created_at, p.updated_at,
 	(SELECT COUNT(*) FROM group_persona_assignments g
 	   WHERE g.persona_id = p.id AND g.deleted_at = 0) AS group_count
 	FROM agent_personas p`
@@ -43,12 +43,12 @@ const personaCoreSelect = `SELECT p.id, p.agent_id, p.display_name,
 // sql.NullString; pointer semantics in Persona preserve "unset" vs "empty".
 func scanPersonaCore(scan func(...interface{}) error) (Persona, error) {
 	var p Persona
-	var systemPrompt, provider, model sql.NullString
+	var systemPrompt, provider, model, sandboxTemplateID sql.NullString
 	var createdMs, updatedMs int64
 	var groupCount int
 	if err := scan(
 		&p.ID, &p.AgentID, &p.DisplayName,
-		&systemPrompt, &provider, &model,
+		&systemPrompt, &provider, &model, &sandboxTemplateID,
 		&createdMs, &updatedMs, &groupCount,
 	); err != nil {
 		return p, err
@@ -62,6 +62,9 @@ func scanPersonaCore(scan func(...interface{}) error) (Persona, error) {
 	if model.Valid {
 		p.Model = &model.String
 	}
+	if sandboxTemplateID.Valid && sandboxTemplateID.String != "" {
+		p.SandboxTemplateID = &sandboxTemplateID.String
+	}
 	p.CreatedAt = msToRFC3339(createdMs)
 	p.UpdatedAt = msToRFC3339(updatedMs)
 	p.GroupCount = groupCount
@@ -69,9 +72,10 @@ func scanPersonaCore(scan func(...interface{}) error) (Persona, error) {
 }
 
 func loadPersonaChildren(q dbQ, p *Persona) error {
-	// Skills (ordered). Use pointer-to-slice so "no row" ≠ "empty slice" only
-	// when callers explicitly set Skills; here we always populate since the
-	// binding table is authoritative.
+	// Skills (ordered). No binding rows means "use agent defaults".
+	// The current relational model cannot distinguish "explicitly override to
+	// zero skills" from "no override", so we preserve the safer inheritance
+	// behavior for group personas.
 	var skillIDs []string
 	rows, err := q.Query(`SELECT skill_id FROM persona_skill_bindings
 		WHERE persona_id = ? AND deleted_at = 0 ORDER BY position ASC, created_at ASC`, p.ID)
@@ -87,10 +91,9 @@ func loadPersonaChildren(q dbQ, p *Persona) error {
 		skillIDs = append(skillIDs, id)
 	}
 	rows.Close()
-	if skillIDs == nil {
-		skillIDs = []string{}
+	if skillIDs != nil {
+		p.Skills = &skillIDs
 	}
-	p.Skills = &skillIDs
 
 	// SubagentModels
 	rows, err = q.Query(`SELECT subagent_key, COALESCE(provider,''), COALESCE(model,'')
@@ -190,10 +193,11 @@ func CreatePersona(p Persona) (*Persona, error) {
 
 	if _, err := tx.Exec(
 		`INSERT INTO agent_personas
-		 (id, agent_id, display_name, system_prompt, provider, model, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		 (id, agent_id, display_name, system_prompt, provider, model, sandbox_template_id, created_at, updated_at, deleted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		p.ID, p.AgentID, p.DisplayName,
 		nullStr(p.SystemPrompt), nullStr(p.Provider), nullStr(p.Model),
+		nullStr(p.SandboxTemplateID),
 		now, now,
 	); err != nil {
 		return nil, err
@@ -209,10 +213,11 @@ func CreatePersona(p Persona) (*Persona, error) {
 
 func UpdatePersona(id string, updates map[string]interface{}) (*Persona, error) {
 	colMap := map[string]string{
-		"displayName":  "display_name",
-		"systemPrompt": "system_prompt",
-		"provider":     "provider",
-		"model":        "model",
+		"displayName":       "display_name",
+		"systemPrompt":      "system_prompt",
+		"provider":          "provider",
+		"model":             "model",
+		"sandboxTemplateId": "sandbox_template_id",
 	}
 	now := timeutil.NowMs()
 

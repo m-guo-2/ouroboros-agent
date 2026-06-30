@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""创建智能表格（结构化数据表）。
+
+用法:
+  create_sheet --title "标题" --fields '[{"name":"姓名","type":"text"},{"name":"日期","type":"datetime"}]' --records '[{"姓名":"张三","日期":"2026-03-20"}]'
+  create_sheet --title "标题" --fields '[...]' --parent_id "xxx"
+
+参数:
+  --title      表格标题（必填）
+  --fields     字段定义 JSON 数组（必填）。每个字段: name, type(text/number/datetime/select/multi_select/checkbox/url/email/phone)
+               select/multi_select 需加 options 数组
+  --records    初始数据 JSON 数组，key 为字段名
+  --parent_id  父节点 ID
+
+返回: 包含 url 字段的 JSON
+"""
+import json, os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["title", "fields"])
+
+create_params = {"title": args["title"], "file_type": "smartsheet"}
+if "parent_id" in args:
+    create_params["parent_id"] = args["parent_id"]
+result = call_mcp("manage.create_file", create_params)
+if isinstance(result, dict) and result.get("error"):
+    output(result)
+    sys.exit(1)
+
+file_id = result.get("file_id", "")
+if not file_id:
+    output({"error": "创建表格失败：未获取到 file_id", "raw": result})
+    sys.exit(1)
+
+tables = call_mcp("smartsheet.list_tables", {"file_id": file_id})
+sheet_id = ""
+if isinstance(tables, dict) and tables.get("tables"):
+    sheet_id = tables["tables"][0].get("sheet_id", "")
+elif isinstance(tables, list) and tables:
+    sheet_id = tables[0].get("sheet_id", "")
+
+if not sheet_id:
+    output({"error": "获取 sheet_id 失败", "file_id": file_id, "raw": tables})
+    sys.exit(1)
+
+fields_def = json.loads(args["fields"])
+existing = call_mcp("smartsheet.list_fields", {"file_id": file_id, "sheet_id": sheet_id})
+if isinstance(existing, dict) and existing.get("fields"):
+    for f in existing["fields"]:
+        call_mcp("smartsheet.delete_fields", {"file_id": file_id, "sheet_id": sheet_id, "field_id": f["field_id"]})
+
+call_mcp("smartsheet.add_fields", {"file_id": file_id, "sheet_id": sheet_id, "fields": fields_def})
+
+if "records" in args:
+    records = json.loads(args["records"])
+    if records:
+        field_map = {}
+        updated_fields = call_mcp("smartsheet.list_fields", {"file_id": file_id, "sheet_id": sheet_id})
+        if isinstance(updated_fields, dict) and updated_fields.get("fields"):
+            for f in updated_fields["fields"]:
+                field_map[f["field_name"]] = f["field_id"]
+
+        api_records = []
+        for rec in records:
+            fields = {}
+            for k, v in rec.items():
+                fid = field_map.get(k, k)
+                fields[fid] = v
+            api_records.append({"fields": fields})
+        call_mcp("smartsheet.add_records", {"file_id": file_id, "sheet_id": sheet_id, "records": api_records})
+
+url = result.get("url", "")
+output({"url": url, "file_id": file_id, "sheet_id": sheet_id})

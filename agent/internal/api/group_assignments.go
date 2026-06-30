@@ -51,6 +51,15 @@ func handleGroupAssignments(w http.ResponseWriter, r *http.Request, agentID, sub
 					ga.PersonaID = &s
 				}
 			}
+			if v, exists := body["sandboxTemplateId"]; exists {
+				if s, ok := v.(string); ok && s != "" {
+					if !validateSandboxTemplateID(s) {
+						apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
+						return
+					}
+					ga.SandboxTemplateID = &s
+				}
+			}
 			result, err := storage.CreateGroupAssignment(ga)
 			if err != nil {
 				if strings.Contains(err.Error(), "UNIQUE constraint") {
@@ -67,8 +76,21 @@ func handleGroupAssignments(w http.ResponseWriter, r *http.Request, agentID, sub
 		return
 	}
 
-	// subPath is the assignment ID
-	id := subPath
+	parts := strings.SplitN(subPath, "/", 2)
+	id := parts[0]
+	action := ""
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+
+	if action != "" {
+		if action == "clear-history" && r.Method == http.MethodPost {
+			clearGroupHistory(w, agentID, id)
+			return
+		}
+		apiErr(w, http.StatusNotFound, "not found")
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -93,6 +115,10 @@ func handleGroupAssignments(w http.ResponseWriter, r *http.Request, agentID, sub
 			apiErr(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
+		if v, ok := body["sandboxTemplateId"].(string); ok && v != "" && !validateSandboxTemplateID(v) {
+			apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
+			return
+		}
 		result, err := storage.UpdateGroupAssignment(id, body)
 		if err != nil {
 			apiErr(w, http.StatusInternalServerError, err.Error())
@@ -113,4 +139,35 @@ func handleGroupAssignments(w http.ResponseWriter, r *http.Request, agentID, sub
 	default:
 		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func clearGroupHistory(w http.ResponseWriter, agentID, assignmentID string) {
+	ga, err := storage.GetGroupAssignmentByID(assignmentID)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ga == nil || ga.AgentID != agentID {
+		apiErr(w, http.StatusNotFound, "group assignment not found")
+		return
+	}
+	session, err := storage.FindSessionByKey(agentID, ga.SessionKey)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if session == nil {
+		ok(w, map[string]interface{}{"cleared": true, "sessionId": "", "messageCount": 0})
+		return
+	}
+	count, err := storage.CountSessionMessages(session.ID)
+	if err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := storage.ClearSessionHistory(session.ID); err != nil {
+		apiErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ok(w, map[string]interface{}{"cleared": true, "sessionId": session.ID, "messageCount": count})
 }

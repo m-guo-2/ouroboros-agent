@@ -128,6 +128,9 @@ func applyPersonaOverride(agent *storage.AgentConfig, persona *storage.Persona) 
 	if persona.SubagentSkills != nil {
 		agent.SubagentSkills = persona.SubagentSkills
 	}
+	if persona.SandboxTemplateID != nil && *persona.SandboxTemplateID != "" {
+		agent.SandboxTemplateID = *persona.SandboxTemplateID
+	}
 }
 
 func sortedSkillIDsFromMap(ids map[string]bool) []string {
@@ -977,14 +980,17 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		return fmt.Errorf("agent not found: %s", agentID)
 	}
 
+	var assignment *storage.GroupAssignment
+	var persona *storage.Persona
+
 	// Group persona override: session_key → assignment → persona → replace fields
 	if sessionData.SessionKey != "" {
-		assignment, err := storage.GetGroupAssignment(agentID, sessionData.SessionKey)
+		assignment, err = storage.GetGroupAssignment(agentID, sessionData.SessionKey)
 		if err != nil {
 			logger.Warn(ctx, "群分配查询失败，使用默认配置", "sessionKey", sessionData.SessionKey, "error", err)
 		}
 		if assignment != nil && assignment.PersonaID != nil && *assignment.PersonaID != "" {
-			persona, err := storage.GetPersona(*assignment.PersonaID)
+			persona, err = storage.GetPersona(*assignment.PersonaID)
 			if err != nil {
 				logger.Warn(ctx, "Persona 查询失败，使用默认配置", "personaId", *assignment.PersonaID, "error", err)
 			}
@@ -994,6 +1000,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			}
 		}
 	}
+	effectiveSandboxTemplateID := storage.ResolveEffectiveSandboxTemplateID(agentConfig, persona, assignment)
+	sessionData.SandboxTemplateID = effectiveSandboxTemplateID
+	_ = storage.UpdateSession(worker.SessionID, map[string]interface{}{"sandboxTemplateId": effectiveSandboxTemplateID})
 
 	provider := agentConfig.Provider
 	modelName := agentConfig.Model
@@ -1004,6 +1013,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	}
 	if err := storage.SetExecutionModel(executionID, provider, modelName); err != nil {
 		logger.Warn(ctx, "更新执行模型信息失败", "error", err.Error())
+	}
+	if err := storage.SetExecutionSandboxTemplate(executionID, effectiveSandboxTemplateID); err != nil {
+		logger.Warn(ctx, "更新执行沙箱模板失败", "error", err.Error())
 	}
 	failureStage = "model"
 
@@ -1073,11 +1085,19 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 
 	llmClient := buildLLMClient(provider, credentials)
 
-	sb, _, sbErr := sandboxMgr.GetOrCreate(worker.SessionID)
+	sbTemplate, ok := sandbox.ResolveSandboxTemplate(effectiveSandboxTemplateID)
+	if !ok {
+		logger.Warn(ctx, "未知沙箱模板，回退默认模板", "sandboxTemplateId", effectiveSandboxTemplateID)
+		sbTemplate = sandbox.DefaultSandboxTemplate()
+	}
+	sb, _, sbErr := sandboxMgr.GetOrCreateWithTemplate(worker.SessionID, sbTemplate)
 	if sbErr != nil {
 		logger.Warn(ctx, "沙箱创建失败，使用宿主机执行", "error", sbErr.Error())
 		sb = nil
 	} else {
+		if sb.Template.ID != sbTemplate.ID {
+			logger.Warn(ctx, "会话沙箱已存在，保留原模板", "sessionId", worker.SessionID, "existingTemplateId", sb.Template.ID, "requestedTemplateId", sbTemplate.ID)
+		}
 		skillBasePaths := make(map[string]string)
 		for _, sid := range effectiveSkillIDs {
 			meta, err := storage.GetSkillRuntimeMetadata(sid)
@@ -1116,6 +1136,9 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 		ChannelConversationID: channelConvID,
 		TraceID:               traceID,
 		SessionID:             worker.SessionID,
+	}
+	if sb != nil {
+		sessionReq.SandboxRootDir = sb.RootDir
 	}
 
 	registry.RegisterBuiltin("send_channel_message", `向当前会话发送消息。支持单条（content）或多条（messages 数组，最多 4 条）。
@@ -1201,12 +1224,12 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 			content := item.content
 
 			if !isMediaMessageType(messageType) && looksLikeFilePath(strings.TrimSpace(content)) {
-				if inferred := inferMessageTypeFromFile(strings.TrimSpace(content)); inferred != "" {
+				if inferred := inferMessageTypeFromFile(strings.TrimSpace(content), sessionReq.SandboxRootDir); inferred != "" {
 					messageType = inferred
 				}
 			}
 
-			resolved, err := resolveMediaContent(c, messageType, content)
+			resolved, err := resolveMediaContent(c, messageType, content, sessionReq.SandboxRootDir)
 			if err != nil {
 				results = append(results, sendResult{Index: i, Success: false, Error: err.Error()})
 				allOK = false

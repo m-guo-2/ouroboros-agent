@@ -46,6 +46,9 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: "content is required"})
 		return
 	}
+	if strings.TrimSpace(msg.MessageType) == "" {
+		msg.MessageType = "text"
+	}
 
 	composite := msg.ChannelConversationID
 	if composite == "" {
@@ -69,31 +72,26 @@ func (a *app) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	var method string
 	var params map[string]any
+	mentionInfo := prepareMentionSend(msg.Mentions, msg.ChannelConversationID, msg.ChannelUserID, msg.MessageType)
 
 	if isMediaMessageType(msg.MessageType) {
 		method, params, err = a.resolveMediaSendParams(r.Context(), rt, msg.MessageType, toID, msg.Content, msg.ChannelMeta)
 	} else {
 		method, params, err = toQiweiMessageRequest(msg, toID)
+		applyMentionParams(&method, params, mentionInfo)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiResponse{Success: false, Error: err.Error()})
 		return
 	}
-	res, err := rt.client.doAPIRaw(r.Context(), method, params)
+	fallbackMethod, fallbackParams := mentionFallback(method, params, mentionInfo)
+	data, mentionStatus, mentionError, err := a.sendWithMentionFallback(r.Context(), rt, method, params, fallbackMethod, fallbackParams, mentionInfo)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, apiResponse{Success: false, Error: err.Error()})
 		return
 	}
 
-	var data any
-	if len(res.Data) > 0 {
-		_ = unmarshalSafe(res.Data, &data)
-	}
-	if errMsg := checkSendSuccess(data); errMsg != "" {
-		writeJSON(w, http.StatusBadGateway, apiResponse{Success: false, Error: errMsg, Data: data})
-		return
-	}
-	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: data})
+	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: sendResponseData(data, mentionStatus, mentionError)})
 }
 
 func statusForRouting(err error) int {
@@ -160,6 +158,197 @@ func toQiweiMessageRequest(msg outgoingMessage, toID string) (string, map[string
 	default:
 		return "", nil, fmt.Errorf("unsupported messageType: %s", msg.MessageType)
 	}
+}
+
+type mentionSendInfo struct {
+	Enabled bool
+	Status  string
+	Error   string
+	Targets []mentionTarget
+}
+
+func prepareMentionSend(raw []mentionTarget, channelConversationID, channelUserID, messageType string) mentionSendInfo {
+	if len(raw) == 0 {
+		return mentionSendInfo{}
+	}
+	if !isGroupConversation(channelConversationID, channelUserID) {
+		return mentionSendInfo{Status: "ignored_private_chat"}
+	}
+	targets := normalizeMentionTargets(raw)
+	if len(targets) == 0 {
+		return mentionSendInfo{Status: "degraded", Error: "no valid mention userId"}
+	}
+	if !supportsMentionMessageType(messageType) {
+		return mentionSendInfo{Status: "ignored_unsupported_message_type", Targets: targets}
+	}
+	return mentionSendInfo{Enabled: true, Targets: targets}
+}
+
+func normalizeMentionTargets(raw []mentionTarget) []mentionTarget {
+	out := make([]mentionTarget, 0, len(raw))
+	seen := make(map[string]bool)
+	for _, item := range raw {
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" || isMentionAllTarget(userID) || seen[userID] {
+			continue
+		}
+		seen[userID] = true
+		out = append(out, mentionTarget{
+			UserID: userID,
+			Name:   strings.TrimSpace(item.Name),
+		})
+	}
+	return out
+}
+
+func isMentionAllTarget(userID string) bool {
+	switch strings.ToLower(strings.TrimSpace(userID)) {
+	case "all", "@all", "notify@all", "所有人", "@所有人":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGroupConversation(channelConversationID, channelUserID string) bool {
+	convID := strings.TrimSpace(channelConversationID)
+	return convID != "" && convID != strings.TrimSpace(channelUserID)
+}
+
+func supportsMentionMessageType(messageType string) bool {
+	switch strings.TrimSpace(messageType) {
+	case "", "text", "rich_text", "hyper_text":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyMentionParams(method *string, params map[string]any, info mentionSendInfo) {
+	if !info.Enabled || len(info.Targets) == 0 || params == nil {
+		return
+	}
+	if method != nil {
+		*method = "/msg/sendHyperText"
+	}
+	if content := anyToString(params["content"]); content != "" {
+		params["content"] = hyperTextMentionContent(content, info.Targets)
+	}
+}
+
+func hyperTextMentionContent(content string, targets []mentionTarget) []map[string]any {
+	out := make([]map[string]any, 0, len(targets)+1)
+	for _, target := range targets {
+		out = append(out, map[string]any{"subtype": 1, "text": target.UserID})
+	}
+	if strings.TrimSpace(content) != "" {
+		out = append(out, map[string]any{"subtype": 0, "text": " " + strings.TrimSpace(content)})
+	}
+	return out
+}
+
+func contentWithMentionPrefix(content string, targets []mentionTarget) string {
+	labels := make([]string, 0, len(targets))
+	for _, target := range targets {
+		label := strings.TrimSpace(target.Name)
+		if label == "" {
+			label = target.UserID
+		}
+		labels = append(labels, "@"+label)
+	}
+	if len(labels) == 0 {
+		return content
+	}
+	return strings.Join(labels, " ") + " " + strings.TrimSpace(content)
+}
+
+func mentionFallback(method string, params map[string]any, info mentionSendInfo) (string, map[string]any) {
+	fallbackParams := cloneSendParams(params)
+	if info.Enabled {
+		fallbackParams["content"] = contentWithMentionPrefix(sendTextContent(fallbackParams["content"]), info.Targets)
+		return "/msg/sendText", fallbackParams
+	}
+	return method, fallbackParams
+}
+
+func sendTextContent(raw any) string {
+	if content := anyToString(raw); content != "" {
+		return content
+	}
+	var parts []string
+	switch v := raw.(type) {
+	case []map[string]any:
+		for _, item := range v {
+			if anyToInt64(item["subtype"]) == 0 {
+				parts = append(parts, anyToString(item["text"]))
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok && anyToInt64(m["subtype"]) == 0 {
+				parts = append(parts, anyToString(m["text"]))
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func cloneSendParams(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func (a *app) sendWithMentionFallback(ctx context.Context, rt *accountRuntime, method string, params map[string]any, fallbackMethod string, fallbackParams map[string]any, info mentionSendInfo) (any, string, string, error) {
+	data, err := sendQiweiRaw(ctx, rt, method, params)
+	if err == nil {
+		if info.Enabled {
+			return data, "attempted", "", nil
+		}
+		return data, info.Status, info.Error, nil
+	}
+	if !info.Enabled {
+		return nil, "", "", err
+	}
+
+	fallbackData, fallbackErr := sendQiweiRaw(ctx, rt, fallbackMethod, fallbackParams)
+	if fallbackErr != nil {
+		return nil, "", "", fallbackErr
+	}
+	return fallbackData, "degraded", err.Error(), nil
+}
+
+func sendQiweiRaw(ctx context.Context, rt *accountRuntime, method string, params map[string]any) (any, error) {
+	res, err := rt.client.doAPIRaw(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+	var data any
+	if len(res.Data) > 0 {
+		if err := unmarshalSafe(res.Data, &data); err != nil {
+			return nil, err
+		}
+	}
+	if errMsg := checkSendSuccess(data); errMsg != "" {
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	return data, nil
+}
+
+func sendResponseData(data any, mentionStatus, mentionError string) any {
+	if mentionStatus == "" && mentionError == "" {
+		return data
+	}
+	out := map[string]any{
+		"data":          data,
+		"mentionStatus": mentionStatus,
+	}
+	if mentionError != "" {
+		out["mentionError"] = mentionError
+	}
+	return out
 }
 
 // doAPIRequest is the shared body shape for the generic /do and module
@@ -262,10 +451,10 @@ func (a *app) handleModuleCall(w http.ResponseWriter, ctx context.Context, rt *a
 		_ = unmarshalSafe(res.Data, &data)
 	}
 	writeJSON(w, http.StatusOK, apiResponse{Success: true, Data: map[string]any{
-		"code":   res.Code,
-		"msg":    res.Msg,
-		"data":   data,
-		"method": method,
+		"code":      res.Code,
+		"msg":       res.Msg,
+		"data":      data,
+		"method":    method,
 		"accountId": rt.AccountID(),
 	}})
 }

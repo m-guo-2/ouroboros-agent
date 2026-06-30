@@ -15,19 +15,25 @@ type apiResponse struct {
 }
 
 type outgoingMessage struct {
-	Channel                 string         `json:"channel"`
-	ChannelUserID           string         `json:"channelUserId"`
-	ReplyToChannelMessageID string         `json:"replyToChannelMessageId,omitempty"`
-	ChannelConversationID   string         `json:"channelConversationId,omitempty"`
-	MessageType             string         `json:"messageType"`
-	Content                 string         `json:"content"`
-	ChannelMeta             map[string]any `json:"channelMeta,omitempty"`
+	Channel                 string          `json:"channel"`
+	ChannelUserID           string          `json:"channelUserId"`
+	ReplyToChannelMessageID string          `json:"replyToChannelMessageId,omitempty"`
+	ChannelConversationID   string          `json:"channelConversationId,omitempty"`
+	MessageType             string          `json:"messageType"`
+	Content                 string          `json:"content"`
+	ChannelMeta             map[string]any  `json:"channelMeta,omitempty"`
+	Mentions                []mentionTarget `json:"mentions,omitempty"`
 
 	// AccountID lets operators target a specific qiwei account when the
 	// conversation id has no suffix (e.g. custom tooling calling /api/qiwei/send
 	// directly). Optional — default account is used when unset and only one
 	// account is registered.
 	AccountID string `json:"account_id,omitempty"`
+}
+
+type mentionTarget struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name,omitempty"`
 }
 
 type incomingAttachment struct {

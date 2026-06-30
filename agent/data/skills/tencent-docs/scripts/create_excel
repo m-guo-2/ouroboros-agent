@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""创建在线表格（简单数据表，适合公式计算）。
+
+用法:
+  create_excel --title "标题" --markdown "| 列A | 列B |\n|---|---|\n| 1 | 2 |"
+
+参数:
+  --title      表格标题（必填）
+  --markdown   表格内容，Markdown 表格格式（必填）
+  --parent_id  父节点 ID
+
+返回: 包含 url 字段的 JSON
+"""
+import json, os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+
+def parse_markdown_table(md):
+    md = md.replace("\\n", "\n")
+    rows = []
+    for line in md.strip().split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if cells and all(c.replace("-", "").replace(":", "").strip() == "" for c in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+args = parse_args(sys.argv[1:], required=["title", "markdown"])
+params = {"title": args["title"], "file_type": "sheet"}
+if "parent_id" in args:
+    params["parent_id"] = args["parent_id"]
+
+result = call_mcp("manage.create_file", params)
+if isinstance(result, dict) and result.get("error"):
+    output(result)
+    sys.exit(1)
+
+file_id = result.get("file_id", "")
+url = result.get("url", "")
+if not file_id:
+    output({"error": "创建表格失败：未获取到 file_id", "raw": result})
+    sys.exit(1)
+
+rows = parse_markdown_table(args["markdown"])
+if rows:
+    js_parts = []
+    for r, row in enumerate(rows):
+        for c, val in enumerate(row):
+            js_parts.append(f"Spreadsheet.setCellValue({r},{c},{json.dumps(val)});")
+    call_mcp("sheet.operation_sheet", {
+        "file_id": file_id,
+        "js_script": "\n".join(js_parts),
+    })
+
+output({"url": url, "file_id": file_id})

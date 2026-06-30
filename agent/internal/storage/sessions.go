@@ -18,11 +18,11 @@ func newID() string {
 
 func scanSession(row *sql.Row) (*SessionData, error) {
 	var sd SessionData
-	var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, mode, ctx sql.NullString
+	var agentID, userID, sourceChannel, sessionKey, channelConvID, channelName, workDir, sandboxTemplateID, mode, ctx sql.NullString
 	err := row.Scan(
 		&sd.ID, &sd.Title, &agentID, &userID, &sourceChannel,
 		&sessionKey, &channelConvID, &channelName, &workDir,
-		&sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+		&sandboxTemplateID, &sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -37,6 +37,7 @@ func scanSession(row *sql.Row) (*SessionData, error) {
 	sd.ChannelConversationID = channelConvID.String
 	sd.ChannelName = channelName.String
 	sd.WorkDir = workDir.String
+	sd.SandboxTemplateID = normalizeSandboxTemplateID(sandboxTemplateID.String)
 	sd.Mode = mode.String
 	if sd.Mode == "" {
 		sd.Mode = "normal"
@@ -48,6 +49,7 @@ func scanSession(row *sql.Row) (*SessionData, error) {
 const sessionSelectSQL = `
 	SELECT id, title, agent_id, user_id, source_channel, session_key,
 	       channel_conversation_id, COALESCE(channel_name,''), work_dir,
+	       COALESCE(sandbox_template_id,''),
 	       COALESCE(execution_status,'idle'),
 	       COALESCE(mode,'normal'),
 	       COALESCE(event_cursor, 0),
@@ -120,13 +122,18 @@ func CreateSession(params map[string]interface{}) (*SessionData, error) {
 	channelConvID, _ := params["channelConversationId"].(string)
 	channelName, _ := params["channelName"].(string)
 	workDir, _ := params["workDir"].(string)
+	sandboxTemplateID, _ := params["sandboxTemplateId"].(string)
+	if sandboxTemplateID == "" {
+		sandboxTemplateID = ResolveSessionSandboxTemplateID(agentID, sessionKey)
+	}
+	sandboxTemplateID = normalizeSandboxTemplateID(sandboxTemplateID)
 
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO agent_sessions
-		 (id, title, agent_id, user_id, source_channel, session_key, channel_conversation_id, channel_name, work_dir, execution_status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
-		id, title, agentID, userID, channel, sessionKey, channelConvID, channelName, workDir, now, now,
+		 (id, title, agent_id, user_id, source_channel, session_key, channel_conversation_id, channel_name, work_dir, sandbox_template_id, execution_status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+		id, title, agentID, userID, channel, sessionKey, channelConvID, channelName, workDir, sandboxTemplateID, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -185,11 +192,11 @@ func ListSessions(agentID, userID, channel, status, search string, limit int, be
 	var out []SessionData
 	for rows.Next() {
 		var sd SessionData
-		var agentIDn, userIDn, sourceChannel, sessionKey, channelConvID, channelName, workDir, mode, ctx sql.NullString
+		var agentIDn, userIDn, sourceChannel, sessionKey, channelConvID, channelName, workDir, sandboxTemplateID, mode, ctx sql.NullString
 		if err := rows.Scan(
 			&sd.ID, &sd.Title, &agentIDn, &userIDn, &sourceChannel,
 			&sessionKey, &channelConvID, &channelName, &workDir,
-			&sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
+			&sandboxTemplateID, &sd.ExecutionStatus, &mode, &sd.EventCursor, &sd.CreatedAt, &sd.UpdatedAt, &ctx,
 		); err != nil {
 			return nil, err
 		}
@@ -200,6 +207,7 @@ func ListSessions(agentID, userID, channel, status, search string, limit int, be
 		sd.ChannelConversationID = channelConvID.String
 		sd.ChannelName = channelName.String
 		sd.WorkDir = workDir.String
+		sd.SandboxTemplateID = normalizeSandboxTemplateID(sandboxTemplateID.String)
 		sd.Mode = mode.String
 		if sd.Mode == "" {
 			sd.Mode = "normal"
@@ -247,6 +255,28 @@ func PurgeSession(sessionID string) error {
 	return tx.Commit()
 }
 
+// ClearSessionHistory removes conversation history and derived session memory
+// while keeping the session row itself for future messages in the same channel.
+func ClearSessionHistory(sessionID string) error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteSessionChildren(tx, sessionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE agent_sessions
+		 SET context = '', event_cursor = 0, work_dir = '', execution_status = 'idle', updated_at = ?
+		 WHERE id = ? AND deleted_at = 0`,
+		timeutil.NowMs(), sessionID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func deleteSessionChildren(tx *sql.Tx, sessionID string) error {
 	for _, stmt := range []string{
 		`DELETE mtc FROM message_tool_calls mtc
@@ -261,7 +291,10 @@ func deleteSessionChildren(tx *sql.Tx, sessionID string) error {
 		`DELETE FROM session_events WHERE session_id = ?`,
 		`DELETE FROM message_lifecycle_events WHERE session_id = ?`,
 		`DELETE FROM session_facts WHERE session_id = ?`,
+		`DELETE FROM session_participants WHERE session_id = ?`,
 		`DELETE FROM session_active_skills WHERE session_id = ?`,
+		`DELETE FROM delayed_tasks WHERE session_id = ?`,
+		`DELETE FROM agent_executions WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 	} {
 		if _, err := tx.Exec(stmt, sessionID); err != nil {
@@ -286,13 +319,14 @@ func UpdateSessionContextAndCursor(sessionID, context, workDir string, eventCurs
 // Supported keys: executionStatus, workDir, context, title, sessionKey.
 func UpdateSession(sessionID string, updates map[string]interface{}) error {
 	colMap := map[string]string{
-		"executionStatus": "execution_status",
-		"workDir":         "work_dir",
-		"context":         "context",
-		"title":           "title",
-		"sessionKey":      "session_key",
-		"eventCursor":     "event_cursor",
-		"mode":            "mode",
+		"executionStatus":   "execution_status",
+		"workDir":           "work_dir",
+		"context":           "context",
+		"title":             "title",
+		"sessionKey":        "session_key",
+		"eventCursor":       "event_cursor",
+		"mode":              "mode",
+		"sandboxTemplateId": "sandbox_template_id",
 	}
 	for key, val := range updates {
 		col, ok := colMap[key]

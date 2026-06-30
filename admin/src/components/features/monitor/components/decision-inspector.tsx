@@ -260,6 +260,7 @@ const STAGE_LABELS: Record<string, string> = {
   worker_notified: "通知 worker",
   worker_started: "worker 启动",
   event_drained: "事件消费",
+  skill_context_built: "Skill 上下文",
   context_built: "进入上下文",
   outbound_send_requested: "请求发送",
   outbound_send_completed: "发送完成",

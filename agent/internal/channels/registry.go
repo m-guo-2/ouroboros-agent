@@ -77,7 +77,19 @@ func SendToChannel(msg OutgoingMessage) error {
 	adaptersMu.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("no adapter registered for channel: %s", msg.Channel)
+		err := fmt.Errorf("no adapter registered for channel: %s", msg.Channel)
+		_ = storage.StartExecutionDelivery(msg.TraceID)
+		_ = storage.CompleteExecutionDelivery(msg.TraceID, err)
+		_ = storage.SaveLifecycleEvent(map[string]any{
+			"sessionId": msg.SessionID,
+			"traceId":   msg.TraceID,
+			"stage":     "outbound_send_completed",
+			"status":    "failed",
+			"outcome":   "send_failed",
+			"summary":   "渠道未注册",
+			"payload":   map[string]any{"error": err.Error()},
+		})
+		return err
 	}
 
 	if msg.MessageType == "" {
@@ -94,6 +106,7 @@ func SendToChannel(msg OutgoingMessage) error {
 			"content":     msg.Content,
 		},
 	})
+	_ = storage.StartExecutionDelivery(msg.TraceID)
 
 	now := timeutil.NowMs()
 	// Best-effort DB write — never block the send on a DB error.
@@ -108,6 +121,7 @@ func SendToChannel(msg OutgoingMessage) error {
 	}
 
 	err := adapter.Send(msg)
+	_ = storage.CompleteExecutionDelivery(msg.TraceID, err)
 	if msgID > 0 {
 		if err != nil {
 			_, _ = storage.DB.Exec(`UPDATE messages SET status = 'failed' WHERE id = ?`, msgID)

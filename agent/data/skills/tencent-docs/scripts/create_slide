@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""创建幻灯片（PPT）。生成需要几分钟，脚本自动等待完成。
+
+用法:
+  create_slide --description "关于 AI 的技术分享，包含：1. 背景 2. 架构 3. 实践"
+
+参数:
+  --description  PPT 内容描述（必填）
+  --reference    参考材料（仅传用户明确提供的内容）
+
+返回: 包含 url 字段的 JSON
+"""
+import os, sys, time
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["description"])
+params = {"description": args["description"]}
+if "reference" in args:
+    params["reference_context"] = args["reference"]
+
+result = call_mcp("create_slide", params)
+if isinstance(result, dict) and result.get("error"):
+    output(result)
+    sys.exit(1)
+
+task_id = result.get("task_id", "")
+if not task_id:
+    output(result)
+    sys.exit(0)
+
+deadline = time.time() + 900
+while time.time() < deadline:
+    time.sleep(20)
+    progress = call_mcp("slide_progress", {"task_id": task_id})
+    if isinstance(progress, dict):
+        if progress.get("error"):
+            output(progress)
+            sys.exit(1)
+        if progress.get("status") in (2, "completed", "done"):
+            output(progress)
+            sys.exit(0)
+
+output({"error": "PPT 生成超时（15分钟）", "task_id": task_id})
+sys.exit(1)

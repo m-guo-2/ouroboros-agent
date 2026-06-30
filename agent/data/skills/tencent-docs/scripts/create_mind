@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""创建思维导图。
+
+用法:
+  create_mind --title "项目规划" --markdown "# 项目\n## 阶段一\n- 需求\n- 设计\n## 阶段二\n- 开发"
+
+参数:
+  --title      标题（必填）
+  --markdown   思维导图内容（必填）。标题层级 + 列表嵌套决定导图结构
+  --parent_id  父节点 ID
+
+返回: 包含 url 字段的 JSON
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _mcp_client import call_mcp, output, parse_args
+
+args = parse_args(sys.argv[1:], required=["title", "markdown"])
+params = {"title": args["title"], "markdown": args["markdown"]}
+if "parent_id" in args:
+    params["parent_id"] = args["parent_id"]
+
+result = call_mcp("create_mind_by_markdown", params)
+output(result)

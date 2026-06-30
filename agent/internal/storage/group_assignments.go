@@ -11,24 +11,27 @@ import (
 // BIGINT epoch-ms but surfaced to callers as RFC3339 strings for API stability.
 func scanGroupAssignment(scan func(...interface{}) error) (GroupAssignment, error) {
 	var ga GroupAssignment
-	var personaID sql.NullString
+	var personaID, sandboxTemplateID sql.NullString
 	var createdMs, updatedMs int64
 
 	if err := scan(
 		&ga.ID, &ga.AgentID, &ga.SessionKey, &ga.GroupName,
-		&personaID, &createdMs, &updatedMs,
+		&personaID, &sandboxTemplateID, &createdMs, &updatedMs,
 	); err != nil {
 		return ga, err
 	}
-	if personaID.Valid {
+	if personaID.Valid && personaID.String != "" {
 		ga.PersonaID = &personaID.String
+	}
+	if sandboxTemplateID.Valid && sandboxTemplateID.String != "" {
+		ga.SandboxTemplateID = &sandboxTemplateID.String
 	}
 	ga.CreatedAt = msToRFC3339(createdMs)
 	ga.UpdatedAt = msToRFC3339(updatedMs)
 	return ga, nil
 }
 
-const groupAssignmentSelectSQL = `SELECT id, agent_id, session_key, group_name, persona_id, created_at, updated_at`
+const groupAssignmentSelectSQL = `SELECT id, agent_id, session_key, group_name, persona_id, sandbox_template_id, created_at, updated_at`
 
 // GetGroupAssignment finds the assignment for a specific agent + session_key.
 // Returns nil, nil when no assignment exists.
@@ -93,9 +96,9 @@ func CreateGroupAssignment(ga GroupAssignment) (*GroupAssignment, error) {
 	now := timeutil.NowMs()
 	_, err := DB.Exec(
 		`INSERT INTO group_persona_assignments
-		 (id, agent_id, session_key, group_name, persona_id, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-		ga.ID, ga.AgentID, ga.SessionKey, ga.GroupName, nullStr(ga.PersonaID), now, now,
+		 (id, agent_id, session_key, group_name, persona_id, sandbox_template_id, created_at, updated_at, deleted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		ga.ID, ga.AgentID, ga.SessionKey, ga.GroupName, nullStr(ga.PersonaID), nullStr(ga.SandboxTemplateID), now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -106,8 +109,9 @@ func CreateGroupAssignment(ga GroupAssignment) (*GroupAssignment, error) {
 func UpdateGroupAssignment(id string, updates map[string]interface{}) (*GroupAssignment, error) {
 	now := timeutil.NowMs()
 	colMap := map[string]string{
-		"groupName": "group_name",
-		"personaId": "persona_id",
+		"groupName":         "group_name",
+		"personaId":         "persona_id",
+		"sandboxTemplateId": "sandbox_template_id",
 	}
 	for key, val := range updates {
 		col, ok := colMap[key]

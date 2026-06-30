@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""地址与坐标互转。
+
+用法:
+  geocode --address "北京市朝阳区阜通东大街6号"
+  geocode --location "116.397499,39.908722"
+
+参数（二选一）:
+  --address   地址转坐标
+  --location  坐标转地址（经度,纬度）
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _amap_client import call_amap, output, parse_args
+
+args = parse_args(sys.argv[1:])
+
+if "address" in args:
+    result = call_amap("/v3/geocode/geo", {"address": args["address"]})
+elif "location" in args:
+    result = call_amap("/v3/geocode/regeo", {"location": args["location"]})
+else:
+    output({"error": "需要 --address 或 --location 参数"})
+    sys.exit(1)
+
+output(result)

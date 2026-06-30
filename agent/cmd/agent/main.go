@@ -124,14 +124,15 @@ func main() {
 
 	// --- Fast init: no network, all local ---
 	stepAt = time.Now()
-	logger.Boundary(ctx, "开始初始化 GitHub skill store")
+	logger.Boundary(ctx, "开始初始化 skill store")
 	if err := github.NewStore(cfg.GitHub); err != nil {
-		logger.Error(ctx, "GitHub skill store 初始化失败", "error", err.Error())
+		logger.Error(ctx, "skill store 初始化失败", "error", err.Error())
 		os.Exit(1)
 	}
-	logger.Boundary(ctx, "GitHub skill store 初始化完成",
+	logger.Boundary(ctx, "skill store 初始化完成",
 		"skillsRepo", cfg.GitHub.SkillsRepo,
 		"skillsPath", displayValue(cfg.GitHub.SkillsPath, "<default>"),
+		"skillsSourceDir", displayValue(cfg.GitHub.SkillsSourceDir, "<auto>"),
 		"localDir", displayValue(cfg.GitHub.SkillsLocalDir, "<default>"),
 		"elapsed", time.Since(stepAt).String(),
 	)
@@ -193,14 +194,14 @@ func main() {
 
 	go func() {
 		loadAt := time.Now()
-		logger.Boundary(ctx, "开始后台加载 GitHub skills 缓存")
+		logger.Boundary(ctx, "开始后台加载 skills 缓存")
 		if err := github.DefaultStore.LoadCache(); err != nil {
-			logger.Error(ctx, "GitHub skill 缓存加载失败（后台重试将继续）", "error", err.Error())
+			logger.Error(ctx, "skill 缓存加载失败（后台重试将继续）", "error", err.Error())
 		} else {
-			logger.Boundary(ctx, "GitHub skills 缓存加载完成", "elapsed", time.Since(loadAt).String())
+			logger.Boundary(ctx, "skills 缓存加载完成", "elapsed", time.Since(loadAt).String())
 		}
 		interval := cfg.GitHub.ParseSyncInterval()
-		logger.Boundary(ctx, "启动 GitHub skills 周期同步", "interval", interval.String())
+		logger.Boundary(ctx, "启动 skills 周期同步", "interval", interval.String())
 		github.DefaultStore.StartSync(interval)
 	}()
 

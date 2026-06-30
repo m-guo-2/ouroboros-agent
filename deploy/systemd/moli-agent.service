@@ -9,7 +9,9 @@ User=__RUN_USER__
 Group=__RUN_GROUP__
 WorkingDirectory=__INSTALL_PREFIX__
 EnvironmentFile=__CONFIG_DIR__/agent.env
-ExecStart=__INSTALL_PREFIX__/bin/agent
+Environment=HOME=__INSTALL_PREFIX__
+Environment=PYTHONUSERBASE=__INSTALL_PREFIX__/.local
+ExecStart=__INSTALL_PREFIX__/bin/agent -config __CONFIG_DIR__/agent.yaml
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

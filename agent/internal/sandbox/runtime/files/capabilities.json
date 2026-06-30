@@ -1,0 +1,10 @@
+{
+  "office": {
+    "version": "0.1.0",
+    "docx": ["inspect", "create", "edit", "render", "validate"],
+    "xlsx": ["inspect", "create", "edit", "render", "validate"],
+    "csv": ["inspect"],
+    "render": ["soffice_pdf"],
+    "entrypoint": "office"
+  }
+}

@@ -36,6 +36,7 @@ This directory contains a production-oriented deployment bundle for running the 
 - `env/*.example`: environment-file templates
 - `systemd/*.service`: systemd unit templates
 - `nginx/moli.conf`: nginx template
+- `../scripts/prod-service.sh`: reusable systemd status/restart/health/log helper
 
 ## Quick Start
 
@@ -61,8 +62,25 @@ Apply bootstrap data after editing:
 
 ```bash
 sudo /opt/moli/bin/bootstrap
-sudo systemctl restart moli-agent
-sudo systemctl restart moli-qiwei
+./scripts/prod-service.sh restart
+```
+
+## Common Operations
+
+From a local checkout with the `qny` SSH alias configured:
+
+```bash
+./scripts/prod-service.sh --host qny restart
+./scripts/prod-service.sh --host qny status
+./scripts/prod-service.sh --host qny health
+./scripts/prod-service.sh --host qny logs
+```
+
+The restart command restarts `moli-agent.service` and `moli-qiwei.service`, then checks:
+
+```bash
+curl -fsS http://127.0.0.1:1997/health
+curl -fsS http://127.0.0.1:2000/health
 ```
 
 ## Useful Environment Overrides

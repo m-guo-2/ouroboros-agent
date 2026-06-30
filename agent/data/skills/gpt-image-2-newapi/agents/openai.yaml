@@ -1,0 +1,3 @@
+display_name: GPT Image 2 New API
+short_description: Generate image files through a New API Responses gateway.
+default_prompt: Generate an image with gpt-image-2 through my New API gateway and save the output file.

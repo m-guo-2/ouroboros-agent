@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -231,8 +233,9 @@ type ImportSkillResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// ImportSkills copies selected skills from a source repo into the destination Store's
-// GitHub repository, committing each file via PutFile. Skills are imported concurrently.
+// ImportSkills copies selected skills from a source repo into the destination
+// Store. The destination can be the embedded local skill directory or a GitHub
+// repository. Skills are imported concurrently.
 func ImportSkills(src *Client, srcBasePath string, dst *Store, skillIDs []string, overwrite bool) []ImportSkillResult {
 	results := make([]ImportSkillResult, len(skillIDs))
 
@@ -300,8 +303,6 @@ func importOneSkill(src *Client, srcBasePath string, dst *Store, id string) erro
 		return fmt.Errorf("read SKILL.md: %w", err)
 	}
 
-	dstPath := dst.skillMdPath(id)
-
 	var sha string
 	if existing := dst.GetByID(id); existing != nil {
 		dst.mu.RLock()
@@ -312,24 +313,28 @@ func importOneSkill(src *Client, srcBasePath string, dst *Store, id string) erro
 	}
 
 	msg := fmt.Sprintf("import skill: %s", id)
-	if err := dst.client.PutFile(dstPath, msg, content, sha); err != nil {
+	if err := dst.writeImportedFile(id, "", "SKILL.md", content, sha, msg); err != nil {
 		return fmt.Errorf("write SKILL.md: %w", err)
 	}
 
 	if hasScripts {
-		importDir(src, srcDir+"/scripts", dst, dst.scriptsDir(id), id)
+		if err := importDir(src, srcDir+"/scripts", dst, id, "scripts"); err != nil {
+			return err
+		}
 	}
 	if hasRefs {
-		importDir(src, srcDir+"/references", dst, dst.refsDir(id), id)
+		if err := importDir(src, srcDir+"/references", dst, id, "references"); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func importDir(src *Client, srcDir string, dst *Store, dstDir, skillID string) {
+func importDir(src *Client, srcDir string, dst *Store, skillID, subdir string) error {
 	entries, err := src.ListDir(srcDir)
 	if err != nil {
-		return
+		return nil
 	}
 
 	var files []FileEntry
@@ -339,10 +344,11 @@ func importDir(src *Client, srcDir string, dst *Store, dstDir, skillID string) {
 		}
 	}
 	if len(files) == 0 {
-		return
+		return nil
 	}
 
 	sem := make(chan struct{}, maxConcurrency)
+	errs := make(chan error, len(files))
 	var wg sync.WaitGroup
 
 	for _, e := range files {
@@ -354,13 +360,48 @@ func importDir(src *Client, srcDir string, dst *Store, dstDir, skillID string) {
 
 			content, _, err := src.GetFileContent(srcDir + "/" + name)
 			if err != nil {
+				errs <- fmt.Errorf("read %s/%s: %w", srcDir, name, err)
 				return
 			}
-			dstPath := dstDir + "/" + name
 			msg := fmt.Sprintf("import skill %s: %s", skillID, name)
-			_ = dst.client.PutFile(dstPath, msg, content, "")
+			if err := dst.writeImportedFile(skillID, subdir, name, content, "", msg); err != nil {
+				errs <- fmt.Errorf("write %s/%s: %w", subdir, name, err)
+			}
 		}(e.Name)
 	}
 
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) writeImportedFile(skillID, subdir, name, content, sha, msg string) error {
+	if s.sourceDir != "" {
+		mode := os.FileMode(0o644)
+		if subdir == "scripts" {
+			mode = 0o755
+		}
+		parts := []string{skillID}
+		if subdir != "" {
+			parts = append(parts, subdir)
+		}
+		parts = append(parts, name)
+		target := s.sourcePath(parts...)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, []byte(content), mode)
+	}
+
+	dstPath := s.skillDir(skillID)
+	if subdir != "" {
+		dstPath += "/" + subdir
+	}
+	dstPath += "/" + name
+	return s.client.PutFile(dstPath, msg, content, sha)
 }

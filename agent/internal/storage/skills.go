@@ -15,7 +15,7 @@ import (
 
 // skillSelectSQL keeps the live-only filter inside the base clause. Callers
 // append further WHERE conditions with " AND ...".
-const skillSelectBase = `SELECT id, name, COALESCE(description,''), enabled, COALESCE(metadata,'{}'), updated_at FROM skills`
+const skillSelectBase = `SELECT id, name, COALESCE(description,''), enabled, COALESCE(readme,''), COALESCE(metadata,'{}'), updated_at FROM skills`
 const skillSelectSQL = skillSelectBase + ` WHERE deleted_at = 0`
 
 // SkillRuntimeMetadata stores the local runtime copy details for a skill.
@@ -44,6 +44,7 @@ type skillRow struct {
 	Name        string
 	Description string
 	Enabled     bool
+	Readme      string
 	Metadata    SkillRuntimeMetadata
 	UpdatedAt   int64
 }
@@ -64,7 +65,7 @@ func store() *github.Store {
 	return github.DefaultStore
 }
 
-// RefreshSkills forces a re-read of all skills from the GitHub repository.
+// RefreshSkills forces a re-read of all skills from the configured source.
 func RefreshSkills() error {
 	return store().Refresh()
 }
@@ -187,7 +188,7 @@ func GetSkillsContext(skillIDs []string) (*SkillContext, error) {
 			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q disabled in local store", id))
 			continue
 		}
-		if strings.TrimSpace(row.Metadata.BasePath) == "" {
+		if strings.TrimSpace(row.Metadata.BasePath) == "" && strings.TrimSpace(row.Readme) == "" {
 			ctx.Diagnostics = append(ctx.Diagnostics, fmt.Sprintf("bound skill %q missing local base path metadata", id))
 		}
 		lines = append(lines, fmt.Sprintf("- **%s**（id: `%s`）: %s", row.Name, row.ID, row.Description))
@@ -321,7 +322,7 @@ func scanSkillRow(scan func(...interface{}) error) (skillRow, error) {
 	var row skillRow
 	var enabled int
 	var metadataJSON string
-	if err := scan(&row.ID, &row.Name, &row.Description, &enabled, &metadataJSON, &row.UpdatedAt); err != nil {
+	if err := scan(&row.ID, &row.Name, &row.Description, &enabled, &row.Readme, &metadataJSON, &row.UpdatedAt); err != nil {
 		return row, err
 	}
 	row.Enabled = enabled == 1
@@ -349,6 +350,8 @@ func skillRecordFromRow(row skillRow, includeReadme bool) SkillRecord {
 	}
 	if !includeReadme {
 		record.Readme = ""
+	} else {
+		record.Readme = row.Readme
 	}
 	return record
 }
@@ -373,7 +376,7 @@ func requireEnabledSkill(skillID string) (*skillRow, error) {
 	if !row.Enabled {
 		return nil, fmt.Errorf("skill not found or disabled: %s", skillID)
 	}
-	if strings.TrimSpace(row.Metadata.BasePath) == "" {
+	if strings.TrimSpace(row.Metadata.BasePath) == "" && strings.TrimSpace(row.Readme) == "" {
 		return nil, fmt.Errorf("skill %q missing local base path metadata", skillID)
 	}
 	return row, nil
@@ -381,6 +384,9 @@ func requireEnabledSkill(skillID string) (*skillRow, error) {
 
 func readLocalSkillBody(row skillRow) (string, error) {
 	if strings.TrimSpace(row.Metadata.BasePath) == "" {
+		if strings.TrimSpace(row.Readme) != "" {
+			return row.Readme, nil
+		}
 		return "", fmt.Errorf("skill %q missing local base path metadata", row.ID)
 	}
 	path := filepath.Join(row.Metadata.BasePath, "SKILL.md")

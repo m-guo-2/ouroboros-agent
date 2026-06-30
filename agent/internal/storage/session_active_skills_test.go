@@ -58,3 +58,54 @@ func TestActivateSessionSkillIsIdempotentAndKeepsOriginalOrder(t *testing.T) {
 		t.Fatalf("expected 2 active skills, got %d", count)
 	}
 }
+
+func TestExpireSessionSkillsBeforeContext(t *testing.T) {
+	cleanup := setupSkillTestDB(t)
+	defer cleanup()
+
+	sessionID := "sess-expire"
+	if err := ActivateSessionSkillWithOptions(ActivateSessionSkillOptions{
+		SessionID:          sessionID,
+		SkillID:            "icebreaker",
+		Source:             "hook",
+		SourceEvent:        "participant_discovered",
+		ScopeType:          "participant",
+		ScopeKey:           "user-1",
+		ActivatedAtSeq:     10,
+		ExpiresAfterEvents: 2,
+	}); err != nil {
+		t.Fatalf("activate skill: %v", err)
+	}
+
+	expired, err := ExpireSessionSkillsBeforeContext(sessionID, 11)
+	if err != nil {
+		t.Fatalf("expire at seq 11: %v", err)
+	}
+	if expired != 0 {
+		t.Fatalf("expired at seq 11 = %d, want 0", expired)
+	}
+
+	active, err := GetActiveSessionSkills(sessionID)
+	if err != nil {
+		t.Fatalf("get active skills: %v", err)
+	}
+	if !reflect.DeepEqual(active, []string{"icebreaker"}) {
+		t.Fatalf("active skills before expiry = %v", active)
+	}
+
+	expired, err = ExpireSessionSkillsBeforeContext(sessionID, 12)
+	if err != nil {
+		t.Fatalf("expire at seq 12: %v", err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired at seq 12 = %d, want 1", expired)
+	}
+
+	active, err = GetActiveSessionSkills(sessionID)
+	if err != nil {
+		t.Fatalf("get active skills after expiry: %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active skills after expiry = %v, want empty", active)
+	}
+}

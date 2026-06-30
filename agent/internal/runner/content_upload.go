@@ -27,14 +27,13 @@ const (
 var mediaDownloadClient = &http.Client{Timeout: 30 * time.Second}
 
 // resolveMediaContent ensures content is an OSS-backed presigned URL
-// for media message types (file, image, voice). All media goes through OSS
+// for media message types (file, image, gif, voice, video). All media goes through OSS
 // so that downstream channel adapters can reliably access the content.
 //
-//   - OSS presigned URL → pass through
-//   - http(s):// (non-OSS) → download → upload to OSS → presigned URL
+//   - http(s):// → pass through for the channel adapter to fetch directly
 //   - oss://bucket/key → presigned URL
 //   - local file path → upload to OSS → presigned URL
-func resolveMediaContent(ctx context.Context, messageType, content string) (string, error) {
+func resolveMediaContent(ctx context.Context, messageType, content, baseDir string) (string, error) {
 	if !isMediaMessageType(messageType) {
 		return content, nil
 	}
@@ -43,7 +42,7 @@ func resolveMediaContent(ctx context.Context, messageType, content string) (stri
 		return content, nil
 	}
 
-	if isHTTPURL(content) && isOwnOSSURL(content) {
+	if isHTTPURL(content) {
 		return content, nil
 	}
 
@@ -57,20 +56,20 @@ func resolveMediaContent(ctx context.Context, messageType, content string) (stri
 		return "", fmt.Errorf("媒体发送需要 OSS 存储配置，当前不可用")
 	}
 
-	if isHTTPURL(content) {
-		return reuploadHTTPMedia(ctx, storage, content)
-	}
-
 	if strings.HasPrefix(content, "oss://") {
 		return resolveOSSURI(ctx, storage, content)
 	}
 
-	return uploadLocalFile(ctx, storage, content)
+	localPath, err := resolveLocalMediaPath(content, baseDir)
+	if err != nil {
+		return "", err
+	}
+	return uploadLocalFile(ctx, storage, localPath)
 }
 
 func isMediaMessageType(messageType string) bool {
 	switch messageType {
-	case "file", "image", "voice":
+	case "file", "image", "gif", "voice", "video":
 		return true
 	default:
 		return false
@@ -104,7 +103,7 @@ func uploadLocalFile(ctx context.Context, storage oss.Storage, localPath string)
 		contentType = "application/octet-stream"
 	}
 
-	_, err = storage.PutObject(ctx, oss.PutObjectInput{
+	putResult, err := storage.PutObject(ctx, oss.PutObjectInput{
 		Key:         key,
 		FileName:    fileName,
 		ContentType: contentType,
@@ -115,14 +114,14 @@ func uploadLocalFile(ctx context.Context, storage oss.Storage, localPath string)
 		return "", fmt.Errorf("文件上传 OSS 失败: %w", err)
 	}
 
-	url, err := storage.PresignGetURL(ctx, key, uploadURLExpiry)
+	url, err := storage.PresignGetURL(ctx, putResult.Key, uploadURLExpiry)
 	if err != nil {
 		return "", fmt.Errorf("生成预签名 URL 失败: %w", err)
 	}
 
 	logger.Business(ctx, "本地文件已上传 OSS",
 		"localPath", localPath,
-		"ossKey", key,
+		"ossKey", putResult.Key,
 		"fileName", fileName,
 		"size", stat.Size(),
 	)
@@ -134,9 +133,15 @@ var imageExtensions = map[string]bool{
 	".png":  true,
 	".jpg":  true,
 	".jpeg": true,
-	".gif":  true,
 	".webp": true,
 	".bmp":  true,
+}
+
+var videoExtensions = map[string]bool{
+	".mp4":  true,
+	".mov":  true,
+	".m4v":  true,
+	".webm": true,
 }
 
 // looksLikeFilePath returns true when content looks like a filesystem path
@@ -158,22 +163,85 @@ func looksLikeFilePath(content string) bool {
 	if strings.HasPrefix(content, "/") {
 		return true
 	}
+	if hasKnownMediaExtension(content) {
+		return true
+	}
 	return strings.Contains(content, "/")
 }
 
-// inferMessageTypeFromFile stats the path and returns "image" or "file"
+// inferMessageTypeFromFile stats the path and returns a media message type
 // based on its extension. Returns "" if the file does not exist or is a
 // directory.
-func inferMessageTypeFromFile(filePath string) string {
-	info, err := os.Stat(filePath)
+func inferMessageTypeFromFile(filePath, baseDir string) string {
+	resolved, err := resolveLocalMediaPath(filePath, baseDir)
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(resolved)
 	if err != nil || info.IsDir() {
 		return ""
 	}
-	ext := strings.ToLower(filepath.Ext(filePath))
+	ext := strings.ToLower(filepath.Ext(resolved))
+	if ext == ".gif" {
+		return "gif"
+	}
 	if imageExtensions[ext] {
 		return "image"
 	}
+	if videoExtensions[ext] {
+		return "video"
+	}
 	return "file"
+}
+
+func hasKnownMediaExtension(content string) bool {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(content)))
+	if ext == "" {
+		return false
+	}
+	if ext == ".gif" || imageExtensions[ext] || videoExtensions[ext] {
+		return true
+	}
+	switch ext {
+	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".ppt", ".pptx", ".txt", ".zip":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveLocalMediaPath(content, baseDir string) (string, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", fmt.Errorf("媒体文件路径不能为空")
+	}
+
+	candidates := []string{content}
+	if baseDir != "" {
+		if strings.HasPrefix(content, "/workspace/") {
+			candidates = append(candidates, filepath.Join(baseDir, strings.TrimPrefix(content, "/workspace/")))
+		}
+		if !filepath.IsAbs(content) {
+			candidates = append(candidates, filepath.Join(baseDir, content))
+		}
+	}
+
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	if baseDir == "" {
+		return content, nil
+	}
+	return "", fmt.Errorf("无法读取文件 %s: 当前工作目录和沙箱目录 %s 下都不存在该文件", content, baseDir)
 }
 
 func isOwnOSSURL(rawURL string) bool {
@@ -226,7 +294,7 @@ func reuploadHTTPMedia(ctx context.Context, storage oss.Storage, sourceURL strin
 		return "", fmt.Errorf("生成 OSS key 失败: %w", err)
 	}
 
-	_, err = storage.PutObject(ctx, oss.PutObjectInput{
+	putResult, err := storage.PutObject(ctx, oss.PutObjectInput{
 		Key:         key,
 		FileName:    fileName,
 		ContentType: contentType,
@@ -237,14 +305,14 @@ func reuploadHTTPMedia(ctx context.Context, storage oss.Storage, sourceURL strin
 		return "", fmt.Errorf("媒体文件上传 OSS 失败: %w", err)
 	}
 
-	presignedURL, err := storage.PresignGetURL(ctx, key, uploadURLExpiry)
+	presignedURL, err := storage.PresignGetURL(ctx, putResult.Key, uploadURLExpiry)
 	if err != nil {
 		return "", fmt.Errorf("生成预签名 URL 失败: %w", err)
 	}
 
 	logger.Business(ctx, "HTTP 媒体已中转上传 OSS",
 		"sourceURL", sourceURL,
-		"ossKey", key,
+		"ossKey", putResult.Key,
 		"fileName", fileName,
 		"size", len(body),
 	)

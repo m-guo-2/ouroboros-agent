@@ -70,12 +70,13 @@ func (o OSS) ToSharedConfig() oss.Config {
 }
 
 type GitHub struct {
-	Token          string `yaml:"token"`
-	SkillsRepo     string `yaml:"skills_repo"`
-	Branch         string `yaml:"branch"`
-	SkillsPath     string `yaml:"skills_path"`
-	SkillsLocalDir string `yaml:"skills_local_dir"` // local disk cache for skill files (scripts, references)
-	SyncInterval   string `yaml:"sync_interval"`
+	Token           string `yaml:"token"`
+	SkillsRepo      string `yaml:"skills_repo"`
+	Branch          string `yaml:"branch"`
+	SkillsPath      string `yaml:"skills_path"`
+	SkillsLocalDir  string `yaml:"skills_local_dir"`  // local disk cache for skill files (scripts, references)
+	SkillsSourceDir string `yaml:"skills_source_dir"` // optional local repository root used instead of GitHub API
+	SyncInterval    string `yaml:"sync_interval"`
 }
 
 // ParseSyncInterval returns the sync interval as a time.Duration.
@@ -109,8 +110,7 @@ func defaults() Config {
 			Params:          "charset=utf8mb4&collation=utf8mb4_bin&loc=UTC&multiStatements=true",
 		},
 		GitHub: GitHub{
-			Branch:     "main",
-			SkillsPath: "skills",
+			Branch: "main",
 		},
 	}
 }
@@ -190,7 +190,7 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("PORT", &cfg.Port)
 	envStr("AGENT_APP_VERSION", &cfg.Version)
 	envStr("AGENT_ID", &cfg.ID)
-	envStr("DB_PATH", &cfg.DBPath) // legacy; warned at startup
+	envStr("DB_PATH", &cfg.DBPath)       // legacy; warned at startup
 	envStr("AGENT_DB_PATH", &cfg.DBPath) // legacy; warned at startup
 	envStr("LOG_DIR", &cfg.LogDir)
 	envStr("ADMIN_DIST", &cfg.AdminDist)
@@ -217,6 +217,7 @@ func applyEnvOverrides(cfg *Config) {
 	envStr("GITHUB_SKILLS_BRANCH", &cfg.GitHub.Branch)
 	envStr("GITHUB_SKILLS_PATH", &cfg.GitHub.SkillsPath)
 	envStr("GITHUB_SKILLS_LOCAL_DIR", &cfg.GitHub.SkillsLocalDir)
+	envStr("GITHUB_SKILLS_SOURCE_DIR", &cfg.GitHub.SkillsSourceDir)
 	envStr("GITHUB_SYNC_INTERVAL", &cfg.GitHub.SyncInterval)
 
 	envStr("OSS_ENDPOINT", &cfg.OSS.Endpoint)

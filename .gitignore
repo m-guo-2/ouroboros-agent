@@ -91,6 +91,8 @@ temp/
 tmp/
 **/tmp/
 skills/
+!agent/data/skills/
+!agent/data/skills/**
 
 # Local deploy configs
 deploy/config/agent.yaml

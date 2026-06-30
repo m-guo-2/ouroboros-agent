@@ -59,7 +59,7 @@ func handleSkills(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// POST /api/skills/refresh — force re-sync from GitHub
+// POST /api/skills/refresh — force re-sync from the configured skill source
 func handleSkillsRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")

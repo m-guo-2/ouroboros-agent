@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,16 +32,17 @@ type SkillData struct {
 	SourceSHA   string   `json:"-"` // source SKILL.md sha for local sync metadata
 }
 
-
 type cachedEntry struct {
 	SkillData
 	skillMdSHA string
 }
 
 const defaultBasePath = "skills"
+const embeddedBasePath = "agent/data/skills"
 
-// Store manages skills in a GitHub repository with an in-memory cache
-// and local disk mirror for scripts/references.
+// Store manages skills in either an embedded local repository directory or a
+// GitHub repository, with an in-memory cache and local disk mirror for
+// scripts/references.
 //
 // Repo layout:
 //
@@ -49,9 +52,10 @@ const defaultBasePath = "skills"
 //	{basePath}/{skill-id}/scripts/        — executable scripts
 //	{basePath}/{skill-id}/references/     — reference documents
 type Store struct {
-	client   *Client
-	basePath string
-	localDir string // local disk mirror root
+	client    *Client
+	basePath  string
+	localDir  string // local disk mirror root
+	sourceDir string // optional local repository root; bypasses GitHub API when set
 
 	mu    sync.RWMutex
 	cache map[string]*cachedEntry
@@ -72,14 +76,17 @@ func SetSkillSnapshotWriter(fn func([]SkillData) error) {
 }
 
 // NewStore creates the skill store and sets DefaultStore, but does NOT load
-// skills from GitHub. Call Store.LoadCache afterwards (typically in a goroutine)
-// to perform the initial network fetch.
+// skills. Call Store.LoadCache afterwards (typically in a goroutine) to perform
+// the initial fetch.
 func NewStore(gh config.GitHub) error {
-	client, err := NewClientFromConfig(gh)
-	if err != nil {
-		return err
+	base := strings.TrimSuffix(strings.TrimSpace(gh.SkillsPath), "/")
+	sourceDir := strings.TrimSuffix(strings.TrimSpace(gh.SkillsSourceDir), "/")
+	if sourceDir == "" && strings.TrimSpace(gh.SkillsRepo) == "" {
+		if detectedSource, detectedBase, ok := discoverEmbeddedSkills(base); ok {
+			sourceDir = detectedSource
+			base = detectedBase
+		}
 	}
-	base := gh.SkillsPath
 	if base == "" {
 		base = defaultBasePath
 	}
@@ -87,23 +94,32 @@ func NewStore(gh config.GitHub) error {
 	if localDir == "" {
 		localDir = "data/skills"
 	}
+	var client *Client
+	if sourceDir == "" {
+		var err error
+		client, err = NewClientFromConfig(gh)
+		if err != nil {
+			return err
+		}
+	}
 	DefaultStore = &Store{
-		client:   client,
-		basePath: strings.TrimSuffix(base, "/"),
-		localDir: localDir,
-		cache:    make(map[string]*cachedEntry),
+		client:    client,
+		basePath:  base,
+		localDir:  localDir,
+		sourceDir: sourceDir,
+		cache:     make(map[string]*cachedEntry),
 	}
 	return nil
 }
 
-// LoadCache performs the initial skill fetch from GitHub. Safe to call from a
-// goroutine. After it returns successfully the store is ready to serve data.
+// LoadCache performs the initial skill fetch. Safe to call from a goroutine.
+// After it returns successfully the store is ready to serve data.
 func (s *Store) LoadCache() error {
 	if err := s.refresh(); err != nil {
 		return fmt.Errorf("initial cache load: %w", err)
 	}
 	s.ready.Store(true)
-	log.Printf("📦 GitHub skill store ready: %d skills loaded", len(s.cache))
+	log.Printf("📦 skill store ready: %d skills loaded", len(s.cache))
 	return nil
 }
 
@@ -112,14 +128,38 @@ func (s *Store) Ready() bool {
 	return s.ready.Load()
 }
 
-func (s *Store) skillDir(id string) string     { return s.basePath + "/" + id }
-func (s *Store) skillMdPath(id string) string   { return s.skillDir(id) + "/SKILL.md" }
-func (s *Store) refsDir(id string) string       { return s.skillDir(id) + "/references" }
-func (s *Store) scriptsDir(id string) string    { return s.skillDir(id) + "/scripts" }
+func (s *Store) skillDir(id string) string    { return s.basePath + "/" + id }
+func (s *Store) skillMdPath(id string) string { return s.skillDir(id) + "/SKILL.md" }
+func (s *Store) refsDir(id string) string     { return s.skillDir(id) + "/references" }
+func (s *Store) scriptsDir(id string) string  { return s.skillDir(id) + "/scripts" }
+
+func discoverEmbeddedSkills(configuredBase string) (sourceDir, basePath string, ok bool) {
+	bases := []string{configuredBase}
+	if configuredBase == "" {
+		bases = []string{embeddedBasePath}
+	}
+	for _, base := range bases {
+		base = strings.TrimSuffix(strings.TrimSpace(base), "/")
+		if base == "" {
+			continue
+		}
+		for _, root := range []string{".", ".."} {
+			candidate := filepath.Join(root, base)
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return root, base, true
+			}
+		}
+	}
+	return "", "", false
+}
 
 // refresh reloads every skill from the GitHub repo, syncs files to local disk,
 // and updates the in-memory metadata cache.
 func (s *Store) refresh() error {
+	if s.sourceDir != "" {
+		return s.refreshFromLocal()
+	}
+
 	entries, err := s.client.ListDir(s.basePath)
 	if err != nil {
 		if IsNotFound(err) {
@@ -186,6 +226,98 @@ func (s *Store) refresh() error {
 	return nil
 }
 
+func (s *Store) refreshFromLocal() error {
+	sourceBase := s.sourcePath()
+	entries, err := os.ReadDir(sourceBase)
+	if err != nil {
+		return fmt.Errorf("read local skills source: %w", err)
+	}
+	if err := os.MkdirAll(s.localDir, 0o755); err != nil {
+		return fmt.Errorf("create local skills dir: %w", err)
+	}
+
+	next := make(map[string]*cachedEntry, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		sourceSkillDir := filepath.Join(sourceBase, id)
+		entry, err := s.loadLocalSkillEntry(id, sourceSkillDir)
+		if err != nil {
+			log.Printf("⚠️  skip local skill %s: %s", id, err)
+			continue
+		}
+		localSkillDir := filepath.Join(s.localDir, id)
+		if err := copyLocalSkillToDisk(sourceSkillDir, localSkillDir); err != nil {
+			log.Printf("⚠️  local disk sync failed for skill %s: %s", id, err)
+			continue
+		}
+		entry.BasePath = localSkillDir
+		next[id] = entry
+	}
+
+	if err := s.pruneLocalSkills(next); err != nil {
+		return err
+	}
+
+	snapshot := make([]SkillData, 0, len(next))
+	for _, entry := range next {
+		snapshot = append(snapshot, entry.SkillData)
+	}
+	if skillSnapshotWriter != nil {
+		if err := skillSnapshotWriter(snapshot); err != nil {
+			return fmt.Errorf("persist local skill snapshot: %w", err)
+		}
+	}
+
+	s.mu.Lock()
+	s.cache = next
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Store) sourcePath(parts ...string) string {
+	all := append([]string{s.sourceDir, s.basePath}, parts...)
+	return filepath.Join(all...)
+}
+
+func (s *Store) loadLocalSkillEntry(id, sourceSkillDir string) (*cachedEntry, error) {
+	content, err := os.ReadFile(filepath.Join(sourceSkillDir, "SKILL.md"))
+	if err != nil {
+		return nil, fmt.Errorf("read SKILL.md: %w", err)
+	}
+	entry := &cachedEntry{}
+	entry.skillMdSHA = localContentSHA(content)
+	fm, body := splitFrontmatter(string(content))
+	entry.SkillData = SkillData{
+		ID:        id,
+		Enabled:   true,
+		Readme:    body,
+		SourceSHA: entry.skillMdSHA,
+	}
+	if fm != "" {
+		var meta map[string]interface{}
+		if err := json.Unmarshal([]byte(frontmatterToJSON(fm)), &meta); err == nil {
+			if v, ok := meta["name"].(string); ok {
+				entry.Name = v
+			}
+			if v, ok := meta["description"].(string); ok {
+				entry.Description = v
+			}
+			if v, ok := meta["enabled"].(bool); ok {
+				entry.Enabled = v
+			}
+		}
+	}
+	if entry.Name == "" {
+		entry.Name = id
+	}
+	entry.Scripts = listLocalFiles(filepath.Join(sourceSkillDir, "scripts"), true)
+	entry.References = listLocalFiles(filepath.Join(sourceSkillDir, "references"), false)
+	return entry, nil
+}
+
 // syncSkillToDisk writes SKILL.md, scripts/, and references/ to local disk.
 func (s *Store) syncSkillToDisk(id, localDir string) error {
 	if err := os.MkdirAll(localDir, 0o755); err != nil {
@@ -211,6 +343,94 @@ func (s *Store) syncSkillToDisk(id, localDir string) error {
 	}
 
 	return nil
+}
+
+func copyLocalSkillToDisk(sourceDir, localDir string) error {
+	if err := os.RemoveAll(localDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		return err
+	}
+	if err := copyFile(filepath.Join(sourceDir, "SKILL.md"), filepath.Join(localDir, "SKILL.md"), 0o644); err != nil {
+		return err
+	}
+	for _, name := range []string{"scripts", "references"} {
+		sourceSubdir := filepath.Join(sourceDir, name)
+		if _, err := os.Stat(sourceSubdir); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := copyDir(sourceSubdir, filepath.Join(localDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyDir(sourceDir, targetDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		sourcePath := filepath.Join(sourceDir, entry.Name())
+		targetPath := filepath.Join(targetDir, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(sourcePath, targetPath); err != nil {
+				return err
+			}
+			continue
+		}
+		mode := os.FileMode(0o644)
+		if strings.Contains(sourceDir, string(filepath.Separator)+"scripts") {
+			mode = 0o755
+		}
+		if err := copyFile(sourcePath, targetPath, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(targetPath, content, mode)
+}
+
+func localContentSHA(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func listLocalFiles(dir string, excludeInternal bool) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if excludeInternal && strings.HasPrefix(name, "_") {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // syncDirToDisk downloads all files from a remote directory to a local directory.
@@ -415,7 +635,7 @@ func frontmatterToJSON(fm string) string {
 	return "{" + strings.Join(pairs, ", ") + "}"
 }
 
-// Refresh reloads skills from the GitHub repo. Safe for concurrent use.
+// Refresh reloads skills from the configured source. Safe for concurrent use.
 func (s *Store) Refresh() error {
 	return s.refresh()
 }
@@ -503,7 +723,7 @@ func (s *Store) GetByName(name string) *SkillData {
 	return nil
 }
 
-// Create writes a new skill to the repo and refreshes the cache.
+// Create writes a new skill to the source and refreshes the cache.
 func (s *Store) Create(skill SkillData) (*SkillData, error) {
 	if skill.ID == "" {
 		b := make([]byte, 6)
@@ -547,8 +767,18 @@ func (s *Store) Update(id string, updates map[string]interface{}) (*SkillData, e
 	return s.GetByID(id), nil
 }
 
-// Delete removes a skill's directory from the repo and refreshes the cache.
+// Delete removes a skill's directory from the source and refreshes the cache.
 func (s *Store) Delete(id string) error {
+	if s.sourceDir != "" {
+		if err := os.RemoveAll(s.sourcePath(id)); err != nil {
+			return err
+		}
+		if err := s.refresh(); err != nil {
+			return fmt.Errorf("refresh after delete: %w", err)
+		}
+		return nil
+	}
+
 	entries, err := s.client.ListDir(s.skillDir(id))
 	if err != nil {
 		if IsNotFound(err) {
@@ -595,6 +825,17 @@ func (s *Store) writeFiles(skill SkillData, sha, msg string) error {
 		if !strings.HasSuffix(skill.Readme, "\n") {
 			buf.WriteString("\n")
 		}
+	}
+
+	if s.sourceDir != "" {
+		localSkillDir := s.sourcePath(skill.ID)
+		if err := os.MkdirAll(localSkillDir, 0o755); err != nil {
+			return fmt.Errorf("create local skill dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(localSkillDir, "SKILL.md"), []byte(buf.String()), 0o644); err != nil {
+			return fmt.Errorf("write local SKILL.md: %w", err)
+		}
+		return nil
 	}
 
 	if err := s.client.PutFile(s.skillMdPath(skill.ID), msg, buf.String(), sha); err != nil {

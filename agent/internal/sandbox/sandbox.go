@@ -7,15 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	defaultExecTimeout  = 300 * time.Second
-	maxOutputBytes      = 10 * 1024 // 10KB, truncate preserving head+tail
-	skillsDirName       = "skills"
+	defaultExecTimeout = 300 * time.Second
+	maxOutputBytes     = 10 * 1024 // 10KB, truncate preserving head+tail
+	skillsDirName      = "skills"
 )
 
 // Sandbox is an isolated per-session workspace on the local filesystem.
@@ -23,12 +25,15 @@ const (
 type Sandbox struct {
 	SessionID string
 	RootDir   string
+	Template  SandboxTemplate
 
 	env       []string // host environment snapshot, captured at creation
 	createdAt time.Time
 	lastUsed  time.Time
 	mu        sync.Mutex
 }
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // SkillBasePath returns the base directory for a skill within the sandbox.
 // This is used as BasePath in skillexec.ScriptRequest.
@@ -39,17 +44,73 @@ func (s *Sandbox) SkillBasePath(skillID string) string {
 // Environ returns the sandbox environment as a key-value map.
 // Used to populate ScriptRequest.Env for skill script execution.
 func (s *Sandbox) Environ() map[string]string {
-	m := make(map[string]string, len(s.env))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.environLocked(nil)
+}
+
+// SetEnv persists environment variables for all future commands and scripts
+// in this sandbox.
+func (s *Sandbox) SetEnv(values map[string]string) error {
+	if err := validateEnvMap(values); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	env := s.environLocked(values)
+	s.env = envMapToSlice(env)
+	s.lastUsed = time.Now()
+	return nil
+}
+
+// UnsetEnv removes persisted environment variables from future commands and
+// scripts in this sandbox.
+func (s *Sandbox) UnsetEnv(names []string) error {
+	for _, name := range names {
+		if !envNamePattern.MatchString(name) {
+			return fmt.Errorf("invalid env name: %s", name)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	env := s.environLocked(nil)
+	for _, name := range names {
+		delete(env, name)
+	}
+	s.env = envMapToSlice(env)
+	s.lastUsed = time.Now()
+	return nil
+}
+
+func (s *Sandbox) environLocked(overrides map[string]string) map[string]string {
+	m := make(map[string]string, len(s.env)+len(overrides))
 	for _, entry := range s.env {
 		if k, v, ok := strings.Cut(entry, "="); ok {
 			m[k] = v
 		}
+	}
+	for k, v := range overrides {
+		m[k] = v
 	}
 	return m
 }
 
 // Exec runs a shell command inside the sandbox workspace.
 func (s *Sandbox) Exec(ctx context.Context, command string, timeout time.Duration) (string, int, error) {
+	return s.ExecWithEnv(ctx, command, timeout, nil)
+}
+
+// ExecWithEnv runs a shell command with per-command environment overrides.
+// Overrides are not persisted to the sandbox.
+func (s *Sandbox) ExecWithEnv(ctx context.Context, command string, timeout time.Duration, env map[string]string) (string, int, error) {
+	if err := validateEnvMap(env); err != nil {
+		return "", -1, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastUsed = time.Now()
@@ -62,8 +123,8 @@ func (s *Sandbox) Exec(ctx context.Context, command string, timeout time.Duratio
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = s.RootDir
-	if len(s.env) > 0 {
-		cmd.Env = s.env
+	if len(s.env) > 0 || len(env) > 0 {
+		cmd.Env = envMapToSlice(s.environLocked(env))
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -78,6 +139,29 @@ func (s *Sandbox) Exec(ctx context.Context, command string, timeout time.Duratio
 		}
 	}
 	return output, exitCode, nil
+}
+
+func validateEnvMap(env map[string]string) error {
+	for k := range env {
+		if !envNamePattern.MatchString(k) {
+			return fmt.Errorf("invalid env name: %s", k)
+		}
+	}
+	return nil
+}
+
+func envMapToSlice(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	result := make([]string, 0, len(keys))
+	for _, k := range keys {
+		result = append(result, k+"="+env[k])
+	}
+	return result
 }
 
 // WriteFile writes content to a path relative to the sandbox root.

@@ -115,7 +115,7 @@ export function useCreateGroupAssignment() {
       data,
     }: {
       agentId: string
-      data: { sessionKey: string; groupName: string; personaId?: string }
+      data: { sessionKey: string; groupName: string; personaId?: string; sandboxTemplateId?: string | null }
     }) => groupAssignmentsApi.create(agentId, data),
     onSuccess: (_res, variables) => {
       qc.invalidateQueries({ queryKey: ["groupAssignments", variables.agentId] })
@@ -134,7 +134,7 @@ export function useUpdateGroupAssignment() {
     }: {
       agentId: string
       id: string
-      data: { personaId?: string; groupName?: string }
+      data: { personaId?: string; groupName?: string; sandboxTemplateId?: string | null }
     }) => groupAssignmentsApi.update(agentId, id, data),
     onSuccess: (_res, variables) => {
       qc.invalidateQueries({ queryKey: ["groupAssignments", variables.agentId] })
@@ -150,6 +150,21 @@ export function useDeleteGroupAssignment() {
     onSuccess: (_res, variables) => {
       qc.invalidateQueries({ queryKey: ["groupAssignments", variables.agentId] })
       qc.invalidateQueries({ queryKey: ["unconfiguredGroups", variables.agentId] })
+    },
+  })
+}
+
+export function useClearGroupHistory() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ agentId, id }: { agentId: string; id: string }) =>
+      groupAssignmentsApi.clearHistory(agentId, id),
+    onSuccess: (_res, variables) => {
+      qc.invalidateQueries({ queryKey: ["groupAssignments", variables.agentId] })
+      qc.invalidateQueries({ queryKey: ["sessions"] })
+      qc.invalidateQueries({ queryKey: ["monitor"] })
+      qc.invalidateQueries({ queryKey: ["monitor-overview"] })
+      qc.invalidateQueries({ queryKey: ["monitor-executions"] })
     },
   })
 }

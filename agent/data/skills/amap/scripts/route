@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""查路线。自动将地址转坐标再规划路线。
+
+用法:
+  route --from "北京南站" --to "故宫博物院"
+  route --from "北京南站" --to "故宫博物院" --mode transit
+  route --from "116.378,39.865" --to "116.397,39.909"
+
+参数:
+  --from   出发地，地址或坐标（必填）
+  --to     目的地，地址或坐标（必填）
+  --mode   出行方式：driving（默认）/ walking / bicycling / transit
+  --city   公交规划时的起点城市名（transit 模式必填）
+"""
+import os, re, sys
+sys.path.insert(0, os.path.dirname(__file__))
+from _amap_client import call_amap, output, parse_args
+
+COORD_RE = re.compile(r'^\d+\.\d+,\d+\.\d+$')
+
+def geocode(address):
+    if COORD_RE.match(address.strip()):
+        return address.strip()
+    result = call_amap("/v3/geocode/geo", {"address": address})
+    geocodes = result.get("geocodes", [])
+    if not geocodes:
+        return None
+    return geocodes[0].get("location", "")
+
+args = parse_args(sys.argv[1:], required=["from", "to"])
+mode = args.get("mode", "driving")
+
+origin = geocode(args["from"])
+if not origin:
+    output({"error": f"无法识别出发地: {args['from']}"})
+    sys.exit(1)
+
+destination = geocode(args["to"])
+if not destination:
+    output({"error": f"无法识别目的地: {args['to']}"})
+    sys.exit(1)
+
+params = {"origin": origin, "destination": destination}
+
+if mode == "transit":
+    city = args.get("city", "")
+    if not city:
+        output({"error": "公交规划需要 --city 参数"})
+        sys.exit(1)
+    params["city1"] = city
+    result = call_amap("/v5/direction/transit/integrated", params)
+elif mode == "driving":
+    result = call_amap("/v5/direction/driving", params)
+elif mode == "walking":
+    result = call_amap("/v5/direction/walking", params)
+elif mode == "bicycling":
+    result = call_amap("/v5/direction/bicycling", params)
+else:
+    output({"error": f"不支持的出行方式: {mode}"})
+    sys.exit(1)
+
+output(result)

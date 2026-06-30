@@ -70,6 +70,11 @@ func InitMySQL(cfg MySQLConfig) error {
 	}
 
 	DB = db
+	if err := RecoverInterruptedExecutions(); err != nil {
+		_ = db.Close()
+		DB = nil
+		return fmt.Errorf("recover interrupted executions: %w", err)
+	}
 	log.Printf("📦 MySQL connected: %s", redacted)
 	return nil
 }

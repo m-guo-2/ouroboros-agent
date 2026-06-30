@@ -21,16 +21,18 @@ export const groupAssignmentsApi = {
   list: (agentId: string) => fetchApi<GroupAssignment[]>(`/agents/${agentId}/groups`),
   discover: (agentId: string) =>
     fetchApi<UnconfiguredGroup[]>(`/agents/${agentId}/groups/discover`),
-  create: (agentId: string, data: { sessionKey: string; groupName: string; personaId?: string }) =>
+  create: (agentId: string, data: { sessionKey: string; groupName: string; personaId?: string; sandboxTemplateId?: string | null }) =>
     fetchApi<GroupAssignment>(`/agents/${agentId}/groups`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  update: (agentId: string, id: string, data: { personaId?: string; groupName?: string }) =>
+  update: (agentId: string, id: string, data: { personaId?: string; groupName?: string; sandboxTemplateId?: string | null }) =>
     fetchApi<GroupAssignment>(`/agents/${agentId}/groups/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
   delete: (agentId: string, id: string) =>
     fetchApi<void>(`/agents/${agentId}/groups/${id}`, { method: "DELETE" }),
+  clearHistory: (agentId: string, id: string) =>
+    fetchApi<{ cleared: boolean; sessionId: string; messageCount: number }>(`/agents/${agentId}/groups/${id}/clear-history`, { method: "POST" }),
 }

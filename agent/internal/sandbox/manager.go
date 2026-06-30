@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -11,14 +12,24 @@ import (
 // Manager manages per-session sandboxes.
 type Manager struct {
 	baseDir   string
+	template  SandboxTemplate
 	mu        sync.RWMutex
 	sandboxes map[string]*Sandbox
 }
 
 // NewManager creates a sandbox manager that stores workspaces under baseDir.
 func NewManager(baseDir string) *Manager {
+	return NewManagerWithTemplate(baseDir, DefaultSandboxTemplate())
+}
+
+// NewManagerWithTemplate creates a sandbox manager with an explicit default template.
+func NewManagerWithTemplate(baseDir string, template SandboxTemplate) *Manager {
+	if strings.TrimSpace(template.ID) == "" {
+		template = DefaultSandboxTemplate()
+	}
 	return &Manager{
 		baseDir:   baseDir,
+		template:  template,
 		sandboxes: make(map[string]*Sandbox),
 	}
 }
@@ -26,6 +37,16 @@ func NewManager(baseDir string) *Manager {
 // GetOrCreate returns the existing sandbox for a session, or creates a new one.
 // The second return value is true when a new sandbox was created (caller should sync skills).
 func (m *Manager) GetOrCreate(sessionID string) (*Sandbox, bool, error) {
+	return m.GetOrCreateWithTemplate(sessionID, m.template)
+}
+
+// GetOrCreateWithTemplate returns the existing sandbox for a session, or creates
+// a new one with the requested template. Existing live sandboxes keep their
+// original template for runtime stability.
+func (m *Manager) GetOrCreateWithTemplate(sessionID string, template SandboxTemplate) (*Sandbox, bool, error) {
+	if strings.TrimSpace(template.ID) == "" {
+		template = m.template
+	}
 	m.mu.RLock()
 	if sb, ok := m.sandboxes[sessionID]; ok {
 		m.mu.RUnlock()
@@ -48,9 +69,13 @@ func (m *Manager) GetOrCreate(sessionID string) (*Sandbox, bool, error) {
 	sb := &Sandbox{
 		SessionID: sessionID,
 		RootDir:   rootDir,
+		Template:  template,
 		env:       os.Environ(),
 		createdAt: time.Now(),
 		lastUsed:  time.Now(),
+	}
+	if err := sb.InstallRuntime(); err != nil {
+		return nil, false, fmt.Errorf("install sandbox runtime: %w", err)
 	}
 	m.sandboxes[sessionID] = sb
 	return sb, true, nil
