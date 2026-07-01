@@ -1371,6 +1371,8 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	loadedSkills := make(map[string]bool)
 
 	internalHandlers := map[string]types.ToolExecutor{
+		"inspect_attachment":          createInspectAttachmentExecutor(sessionReq),
+		"transcribe_audio_attachment": createTranscribeAudioAttachmentExecutor(sessionReq),
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)
 			if !ok || skillID == "" {

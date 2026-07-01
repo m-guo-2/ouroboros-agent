@@ -185,6 +185,12 @@ func applyQiweiEnv(cfg *Config) {
 	envInt("QIWEI_MYSQL_MAX_IDLE_CONNS", &cfg.MySQL.MaxIdleConns)
 	envStr("QIWEI_MYSQL_CONN_MAX_LIFETIME", &cfg.MySQL.ConnMaxLifetime)
 	envStr("QIWEI_MYSQL_PARAMS", &cfg.MySQL.Params)
+
+	envStr("VOLC_SPEECH_APP_KEY", &cfg.Volc.Speech.AppKey)
+	envStr("VOLC_SPEECH_ACCESS_KEY", &cfg.Volc.Speech.AccessKey)
+	envStr("VOLC_SPEECH_RESOURCE_ID", &cfg.Volc.Speech.ResourceID)
+	envStr("VOLC_SPEECH_SUBMIT_URL", &cfg.Volc.Speech.SubmitURL)
+	envStr("VOLC_SPEECH_QUERY_URL", &cfg.Volc.Speech.QueryURL)
 }
 
 func configDefaults() Config {

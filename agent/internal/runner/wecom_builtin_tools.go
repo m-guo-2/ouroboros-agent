@@ -71,7 +71,7 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	)
 
 	registry.RegisterBuiltin("inspect_attachment",
-		"按需分析当前会话中的结构化附件。调用前先根据用户问题和对话上下文规划本次分析目标，并通过 goal 明确要从附件中确认什么。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document。语音已前置转写，不需要通过这个工具处理。",
+		"按需分析当前会话中的结构化附件。调用前先根据用户问题和对话上下文规划本次分析目标，并通过 goal 明确要从附件中确认什么。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document。用户直接发送的语音消息已前置转写；用户发送的音频文件请使用 transcribe_audio_attachment。",
 		types.JSONSchema{
 			Type: "object",
 			Properties: map[string]interface{}{
@@ -82,6 +82,18 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 			Required: []string{"attachmentId", "goal"},
 		},
 		createInspectAttachmentExecutor(request),
+	)
+
+	registry.RegisterBuiltin("transcribe_audio_attachment",
+		"转写当前会话中用户作为文件发送的音频附件。只用于 [attachments] 里 kind=file 且 mime_type/文件名显示为音频的附件。火山 ASR 可直接识别 mp3、wav、m4a、aac、ogg/oga、opus、spx、amr；silk/slk、flac、webm/weba 会先尝试转成 wav。不要用于用户直接发的语音消息；语音消息已经在入口层自动转成文本。",
+		types.JSONSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"attachmentId": map[string]interface{}{"type": "string", "description": "音频文件附件 ID。来自用户消息里 [attachments] 段中的 id 字段"},
+			},
+			Required: []string{"attachmentId"},
+		},
+		createTranscribeAudioAttachmentExecutor(request),
 	)
 
 	registry.RegisterBuiltin("wecom_send_message",

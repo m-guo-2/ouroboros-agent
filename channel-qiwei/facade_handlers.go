@@ -681,6 +681,13 @@ func (a *app) parsePreparedResource(ctx context.Context, msgType, resourceURI, g
 			return "", err
 		}
 		return firstNonEmpty(strings.TrimSpace(parsed.ParsedText), strings.TrimSpace(parsed.Summary), "[文件已解析]"), nil
+	case "audio":
+		attachment.Kind = "audio"
+		text, err := a.transcribePreparedAudioResource(ctx, attachment)
+		if err != nil {
+			return "", err
+		}
+		return firstNonEmpty(strings.TrimSpace(text), "[音频转写为空]"), nil
 	default:
 		return "", fmt.Errorf("resource parsing unsupported for messageType: %s", msgType)
 	}

@@ -3,9 +3,11 @@ package runner
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"agent/internal/storage"
+	"agent/internal/types"
 )
 
 func createInspectAttachmentExecutor(request ProcessRequest) func(context.Context, map[string]interface{}) (interface{}, error) {
@@ -79,6 +81,78 @@ func createInspectAttachmentExecutor(request ProcessRequest) func(context.Contex
 	}
 }
 
+func createTranscribeAudioAttachmentExecutor(request ProcessRequest) types.ToolExecutor {
+	return createTranscribeAudioAttachmentExecutorWithParser(request, createWecomHTTPToolExecutor("parse_message"))
+}
+
+func createTranscribeAudioAttachmentExecutorWithParser(request ProcessRequest, parseExecutor types.ToolExecutor) types.ToolExecutor {
+	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		attachmentID := strings.TrimSpace(anyString(input["attachmentId"]))
+		if attachmentID == "" {
+			return map[string]any{
+				"status":  "failed",
+				"code":    "attachment_id_required",
+				"message": "attachmentId is required",
+			}, nil
+		}
+		attachment, ok := resolveAttachmentForSession(request, attachmentID)
+		if !ok {
+			return map[string]any{
+				"status":       "failed",
+				"code":         "attachment_not_found",
+				"attachmentId": attachmentID,
+				"message":      "attachment not found in current session",
+			}, nil
+		}
+		if isVoiceMessageAttachment(attachment) {
+			return map[string]any{
+				"status":       "failed",
+				"code":         "voice_message_not_supported",
+				"attachmentId": attachmentID,
+				"kind":         attachment.Kind,
+				"message":      "voice messages are transcribed before they reach the agent; this tool only handles user-sent audio files",
+			}, nil
+		}
+		if !isAudioFileAttachment(attachment) {
+			return map[string]any{
+				"status":       "failed",
+				"code":         "not_audio_file",
+				"attachmentId": attachmentID,
+				"kind":         attachment.Kind,
+				"mimeType":     attachment.MIMEType,
+				"name":         attachment.DisplayName,
+				"message":      "attachment is not an audio file",
+			}, nil
+		}
+		result, err := parseExecutor(ctx, map[string]interface{}{
+			"messageType": "audio",
+			"resourceUri": attachment.ResourceURI,
+		})
+		if err != nil {
+			return map[string]any{
+				"status":       "failed",
+				"code":         classifyAttachmentInspectionError(err),
+				"attachmentId": attachmentID,
+				"message":      err.Error(),
+			}, nil
+		}
+		payload, _ := result.(map[string]interface{})
+		text := strings.TrimSpace(anyString(payload["text"]))
+		if text == "" {
+			text = strings.TrimSpace(anyString(payload["content"]))
+		}
+		return map[string]any{
+			"status":       "ok",
+			"attachmentId": attachmentID,
+			"kind":         attachment.Kind,
+			"mimeType":     attachment.MIMEType,
+			"name":         attachment.DisplayName,
+			"text":         text,
+			"raw":          result,
+		}, nil
+	}
+}
+
 func resolveAttachmentForSession(request ProcessRequest, attachmentID string) (storage.AttachmentData, bool) {
 	for _, attachment := range request.Attachments {
 		if attachment.ID == attachmentID {
@@ -129,6 +203,33 @@ func validateAttachmentTask(task, kind string) (string, string) {
 		return "unsupported_format", fmt.Sprintf("attachment kind %q is not supported", kind)
 	}
 	return "invalid_task", fmt.Sprintf("task %q is not valid for %s attachment", task, kind)
+}
+
+func isVoiceMessageAttachment(attachment storage.AttachmentData) bool {
+	return strings.TrimSpace(attachment.Kind) == "voice" || strings.TrimSpace(attachment.SourceMessageType) == "voice"
+}
+
+func isAudioFileAttachment(attachment storage.AttachmentData) bool {
+	if strings.TrimSpace(attachment.Kind) != "file" {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MIMEType)), "audio/") {
+		return true
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(attachment.DisplayName))), ".")
+	if ext == "" {
+		ext = strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(attachment.ResourceURI))), ".")
+	}
+	return isSupportedOrConvertibleAudioExt(ext)
+}
+
+func isSupportedOrConvertibleAudioExt(ext string) bool {
+	switch strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".") {
+	case "mp3", "wav", "m4a", "aac", "ogg", "oga", "opus", "spx", "amr", "silk", "slk", "flac", "webm", "weba":
+		return true
+	default:
+		return false
+	}
 }
 
 func classifyAttachmentInspectionError(err error) string {

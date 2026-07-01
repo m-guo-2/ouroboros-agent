@@ -451,18 +451,34 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 	}
 
 	audioData := raw
-	audioFormat := inferAudioFormatFromName(name)
 
-	if isSilkFormat(name) || isSilkData(raw) {
-		wav, convErr := decodeSilkToWav(raw)
-		if convErr != nil {
-			return "", fmt.Errorf("silk to wav: %w", convErr)
-		}
-		audioData = wav
-		audioFormat = "wav"
-		logger.Business(ctx, "silk 转换为 wav", "originalName", name, "wavSize", len(wav))
+	prepared, err := prepareAudioForTranscription(ctx, name, audioData)
+	if err != nil {
+		return "", err
 	}
+	if prepared.Converted {
+		logger.Business(ctx, "音频转换为 wav", "originalName", name, "wavSize", len(prepared.Data))
+	}
+	return a.submitAndWaitAudioTranscription(ctx, prepared.Data, prepared.Format)
+}
 
+func (a *app) transcribePreparedAudioResource(ctx context.Context, attachment parsedAttachment) (string, error) {
+	name := strings.TrimSpace(firstNonEmpty(attachment.Name, resourceBaseName(firstNonEmpty(attachment.ResourceURI, attachment.LocalPath))))
+	raw, _, err := a.readPreparedResource(ctx, attachment)
+	if err != nil {
+		return "", fmt.Errorf("read audio: %w", err)
+	}
+	prepared, err := prepareAudioForTranscription(ctx, name, raw)
+	if err != nil {
+		return "", err
+	}
+	if prepared.Converted {
+		logger.Business(ctx, "音频转换为 wav", "originalName", name, "wavSize", len(prepared.Data))
+	}
+	return a.submitAndWaitAudioTranscription(ctx, prepared.Data, prepared.Format)
+}
+
+func (a *app) submitAndWaitAudioTranscription(ctx context.Context, audioData []byte, audioFormat string) (string, error) {
 	taskID, err := a.recognizer.SubmitAudioTranscription(ctx, audioData, audioFormat)
 	if err != nil {
 		return "", err
@@ -479,16 +495,6 @@ func (a *app) transcribePreparedVoice(ctx context.Context, desc mediaDescriptor,
 		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("audio transcription timed out")
-}
-
-func inferAudioFormatFromName(name string) string {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
-	switch ext {
-	case "wav", "mp3", "ogg", "silk":
-		return ext
-	default:
-		return "mp3"
-	}
 }
 
 func mediaPlaceholder(classification mediaClassification) string {

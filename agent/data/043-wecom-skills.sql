@@ -129,7 +129,7 @@ VALUES (
     },
     {
       "name": "inspect_attachment",
-      "description": "按 attachmentId 按需分析当前会话里的结构化附件。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document；语音已经在入口层前置转写，不需要通过这个工具处理。",
+      "description": "按 attachmentId 按需分析当前会话里的结构化附件。图片可做 describe_image 或 ocr_image，文件可做 extract_text 或 summarize_document；用户直接发送的语音消息已经在入口层前置转写；用户作为文件发送的音频附件请使用 transcribe_audio_attachment。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -141,8 +141,20 @@ VALUES (
       "executor": {"type": "builtin", "handler": "inspect_attachment"}
     },
     {
+      "name": "transcribe_audio_attachment",
+      "description": "转写当前会话中用户作为文件发送的音频附件。只用于 [attachments] 里 kind=file 且 mime_type/文件名显示为音频的附件。火山 ASR 可直接识别 mp3、wav、m4a、aac、ogg/oga、opus、spx、amr；silk/slk、flac、webm/weba 会先尝试转成 wav。不要用于用户直接发的语音消息；语音消息已经在入口层自动转成文本。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "attachmentId": {"type": "string", "description": "音频文件附件 ID。来自用户消息 [attachments] 段中的 id 字段"}
+        },
+        "required": ["attachmentId"]
+      },
+      "executor": {"type": "builtin", "handler": "transcribe_audio_attachment"}
+    },
+    {
       "name": "wecom_api",
-      "description": "兼容入口：企微通用 API 透传工具。仅当 load_skill 加载的旧扩展技能明确要求 method + params 调用时再使用。日常沟通优先使用 wecom_search_targets、wecom_list_or_get_conversations、inspect_attachment、wecom_parse_message、wecom_send_message 这些语义化工具。",
+      "description": "兼容入口：企微通用 API 透传工具。仅当 load_skill 加载的旧扩展技能明确要求 method + params 调用时再使用。日常沟通优先使用 wecom_search_targets、wecom_list_or_get_conversations、inspect_attachment、transcribe_audio_attachment、wecom_parse_message、wecom_send_message 这些语义化工具。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -173,7 +185,10 @@ VALUES (
 统一解析企微消息，尤其用于图片、文件、语音等非纯文本内容。
 
 ### inspect_attachment
-按 attachmentId 按需分析当前会话里的结构化附件。优先用于图片、文件、视频的进一步理解；如果只是看当前消息正文里的链接，不要自行猜参数，优先使用这个工具。
+按 attachmentId 按需分析当前会话里的结构化附件。优先用于图片、文件、视频的进一步理解；如果只是看当前消息正文里的链接，不要自行猜参数，优先使用这个工具。用户直接发送的语音消息已经在入口层前置转写，不需要再处理。
+
+### transcribe_audio_attachment
+按 attachmentId 转写用户作为文件发送的音频附件。只用于 kind=file 且 mime_type 或文件名是音频的附件。mp3、wav、m4a、aac、ogg/oga、opus、spx、amr 直接识别；silk/slk、flac、webm/weba 会先尝试转成 wav；不要用于用户直接发的语音消息。
 
 ### wecom_api
 兼容旧扩展技能的透传入口。只有 load_skill 文档明确要求 method + params 时才使用，日常沟通不要优先选它。',

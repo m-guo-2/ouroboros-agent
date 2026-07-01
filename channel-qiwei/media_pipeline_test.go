@@ -225,6 +225,40 @@ func TestParseMessageLocalFileReadsText(t *testing.T) {
 	}
 }
 
+func TestParseMessagePreparedAudioResourceTranscribes(t *testing.T) {
+	app := newTestApp(t, "音频文件转写结果")
+	resourceURI := putTestObject(t, app, "sample.wav", "audio/wav", []byte("fake-wav-data"))
+
+	parsed, err := app.parseMessage(context.Background(), testRuntime(t, app), "audio", nil, nil, resourceURI, "")
+	if err != nil {
+		t.Fatalf("parseMessage resource audio failed: %v", err)
+	}
+	if parsed.Text != "音频文件转写结果" {
+		t.Fatalf("expected audio transcript, got %q", parsed.Text)
+	}
+	recognizer := app.recognizer.(*fakeRecognizer)
+	if recognizer.submitFormat != "wav" {
+		t.Fatalf("expected wav format, got %q", recognizer.submitFormat)
+	}
+}
+
+func TestPrepareAudioForTranscriptionUsesDirectSupportedFormat(t *testing.T) {
+	prepared, err := prepareAudioForTranscription(context.Background(), "recording.m4a", []byte("fake-m4a-data"))
+	if err != nil {
+		t.Fatalf("prepareAudioForTranscription failed: %v", err)
+	}
+	if prepared.Format != "m4a" || prepared.Converted {
+		t.Fatalf("unexpected prepared audio: %+v", prepared)
+	}
+}
+
+func TestPrepareAudioForTranscriptionRejectsUnknownFormat(t *testing.T) {
+	_, err := prepareAudioForTranscription(context.Background(), "recording.xyz", []byte("fake-audio-data"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported audio format") {
+		t.Fatalf("expected unsupported format error, got %v", err)
+	}
+}
+
 func TestDownloadAttachmentInfersDocxNameFromHeaders(t *testing.T) {
 	app := newTestApp(t, "")
 	downloadServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

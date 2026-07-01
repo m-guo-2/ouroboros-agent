@@ -25,7 +25,7 @@ func TestVolcSpeechRecognizerLive(t *testing.T) {
 		t.Skip("speech config is incomplete")
 	}
 
-	wavData := generateTestWav(t)
+	wavData := downloadPublicWav(t)
 	t.Logf("test wav: %d bytes", len(wavData))
 
 	recognizer := newVolcengineRecognizer(cfg)
@@ -47,6 +47,9 @@ func TestVolcSpeechRecognizerLive(t *testing.T) {
 			t.Fatalf("query audio transcription failed: %v", err)
 		}
 		if done {
+			if strings.TrimSpace(parsed.ParsedText) == "" {
+				t.Fatal("live transcript is empty")
+			}
 			t.Logf("live transcript: %q", parsed.ParsedText)
 			return
 		}
@@ -59,7 +62,7 @@ func TestVolcSpeechRecognizerLive(t *testing.T) {
 func downloadPublicWav(t *testing.T) []byte {
 	t.Helper()
 	client := logger.NewClient("test", 30*time.Second)
-	resp, err := client.Get("https://raw.githubusercontent.com/microsoft/cognitive-services-speech-sdk/master/samples/csharp/sharedcontent/whatstheweatherlike.wav")
+	resp, err := client.Get("https://raw.githubusercontent.com/Azure-Samples/cognitive-services-speech-sdk/master/samples/csharp/sharedcontent/console/whatstheweatherlike.wav")
 	if err != nil {
 		t.Fatalf("download sample wav: %v", err)
 	}
