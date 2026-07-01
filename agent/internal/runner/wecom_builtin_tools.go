@@ -140,8 +140,10 @@ func registerWecomBuiltinTools(registry *engine.ToolRegistry, request ProcessReq
 	registry.RegisterBuiltin("wecom_get_group_detail",
 		"查询当前群聊的详情，返回群名、公告、创建者、成员数、成员列表。仅在群聊会话中可用。",
 		types.JSONSchema{
-			Type:       "object",
-			Properties: map[string]interface{}{},
+			Type: "object",
+			Properties: map[string]interface{}{
+				"_": map[string]interface{}{"type": "string", "description": "忽略此字段。无参数工具的兼容占位字段"},
+			},
 		},
 		createSessionAwareGroupDetailExecutor(request),
 	)

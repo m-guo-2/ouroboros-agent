@@ -1346,8 +1346,10 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	})
 
 	registry.RegisterBuiltin("list_delayed_tasks", "查看当前会话中所有待执行的延时任务。", types.JSONSchema{
-		Type:       "object",
-		Properties: map[string]interface{}{},
+		Type: "object",
+		Properties: map[string]interface{}{
+			"_": map[string]interface{}{"type": "string", "description": "忽略此字段。无参数工具的兼容占位字段"},
+		},
 	}, func(c context.Context, input map[string]interface{}) (interface{}, error) {
 		tasks, err := storage.ListPendingTasksBySession(worker.SessionID)
 		if err != nil {
@@ -1371,8 +1373,6 @@ func processSession(ctx context.Context, worker *SessionWorker) (err error) {
 	loadedSkills := make(map[string]bool)
 
 	internalHandlers := map[string]types.ToolExecutor{
-		"inspect_attachment":          createInspectAttachmentExecutor(sessionReq),
-		"transcribe_audio_attachment": createTranscribeAudioAttachmentExecutor(sessionReq),
 		"load_skill": func(c context.Context, input map[string]interface{}) (interface{}, error) {
 			skillID, ok := input["skill_id"].(string)
 			if !ok || skillID == "" {

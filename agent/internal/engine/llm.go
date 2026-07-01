@@ -231,7 +231,7 @@ func (c *AnthropicClient) Chat(ctx context.Context, params ChatParams) (*LLMResp
 	}
 
 	if len(params.Tools) > 0 {
-		body["tools"] = params.Tools
+		body["tools"] = normalizeChatTools(params.Tools)
 	}
 
 	reqBody, err := json.Marshal(body)
@@ -335,7 +335,7 @@ func (c *AnthropicClient) CountTokens(ctx context.Context, params ChatParams) (i
 		"messages": sanitizeMessagesForAnthropic(ctx, params.Messages),
 	}
 	if len(params.Tools) > 0 {
-		body["tools"] = params.Tools
+		body["tools"] = normalizeChatTools(params.Tools)
 	}
 
 	reqBody, err := json.Marshal(body)
@@ -484,7 +484,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 
 	if len(params.Tools) > 0 {
 		var tools []map[string]interface{}
-		for _, t := range params.Tools {
+		for _, t := range normalizeChatTools(params.Tools) {
 			tools = append(tools, map[string]interface{}{
 				"type": "function",
 				"function": map[string]interface{}{
@@ -637,4 +637,73 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, params ChatParams) (*
 		}, nil
 	}
 	return nil, lastErr
+}
+
+func normalizeChatTools(tools []types.ToolDefinition) []types.ToolDefinition {
+	out := make([]types.ToolDefinition, len(tools))
+	for i, tool := range tools {
+		out[i] = tool
+		out[i].InputSchema = normalizeJSONSchema(tool.InputSchema)
+	}
+	return out
+}
+
+func normalizeJSONSchema(schema types.JSONSchema) types.JSONSchema {
+	if schema.Type == "" {
+		schema.Type = "object"
+	}
+	if schema.Type == "object" && len(schema.Properties) == 0 {
+		schema.Properties = compatibleObjectProperties()
+	}
+	for key, value := range schema.Properties {
+		schema.Properties[key] = normalizeSchemaNode(value)
+	}
+	return schema
+}
+
+func normalizeSchemaNode(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		if typ, _ := v["type"].(string); typ == "object" {
+			props, _ := v["properties"].(map[string]interface{})
+			if len(props) == 0 {
+				v["properties"] = compatibleObjectProperties()
+			} else {
+				for key, child := range props {
+					props[key] = normalizeSchemaNode(child)
+				}
+				v["properties"] = props
+			}
+		}
+		for _, key := range []string{"items", "additionalProperties"} {
+			if child, ok := v[key]; ok {
+				v[key] = normalizeSchemaNode(child)
+			}
+		}
+		for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+			if children, ok := v[key].([]interface{}); ok {
+				for i, child := range children {
+					children[i] = normalizeSchemaNode(child)
+				}
+				v[key] = children
+			}
+		}
+		return v
+	case []interface{}:
+		for i, child := range v {
+			v[i] = normalizeSchemaNode(child)
+		}
+		return v
+	default:
+		return value
+	}
+}
+
+func compatibleObjectProperties() map[string]interface{} {
+	return map[string]interface{}{
+		"_": map[string]interface{}{
+			"type":        "string",
+			"description": "忽略此字段。无参数或自由结构对象的兼容占位字段。",
+		},
+	}
 }

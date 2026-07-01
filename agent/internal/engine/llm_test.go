@@ -68,3 +68,68 @@ func TestSanitizeMessagesForAnthropic(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeChatToolsFillsEmptyObjectSchema(t *testing.T) {
+	tools := normalizeChatTools([]types.ToolDefinition{
+		{Name: "empty_tool", InputSchema: types.JSONSchema{}},
+	})
+	if len(tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(tools))
+	}
+	schema := tools[0].InputSchema
+	if schema.Type != "object" {
+		t.Fatalf("expected object schema, got %q", schema.Type)
+	}
+	if len(schema.Properties) == 0 {
+		t.Fatal("expected compatible placeholder properties")
+	}
+}
+
+func TestNormalizeToolSchemaFillsEmptySchemaAtRegistration(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.RegisterBuiltin("empty_tool", "empty", types.JSONSchema{}, func(context.Context, map[string]interface{}) (interface{}, error) {
+		return nil, nil
+	})
+	tool, ok := registry.Get("empty_tool")
+	if !ok {
+		t.Fatal("expected registered tool")
+	}
+	schema := tool.Definition.InputSchema
+	if schema.Type != "object" {
+		t.Fatalf("expected object schema, got %q", schema.Type)
+	}
+	if len(schema.Properties) == 0 {
+		t.Fatal("expected compatible placeholder properties")
+	}
+}
+
+func TestRegisterSkillInternalToolsDoesNotOverrideUnknownBuiltin(t *testing.T) {
+	registry := NewToolRegistry()
+	wantSchema := types.JSONSchema{
+		Type: "object",
+		Properties: map[string]interface{}{
+			"attachmentId": map[string]interface{}{"type": "string"},
+		},
+		Required: []string{"attachmentId"},
+	}
+	registry.RegisterBuiltin("inspect_attachment", "inspect", wantSchema, func(context.Context, map[string]interface{}) (interface{}, error) {
+		return nil, nil
+	})
+
+	registry.RegisterSkillInternalTools(map[string]types.ToolExecutor{
+		"inspect_attachment": func(context.Context, map[string]interface{}) (interface{}, error) {
+			return nil, nil
+		},
+	})
+
+	tool, ok := registry.Get("inspect_attachment")
+	if !ok {
+		t.Fatal("expected inspect_attachment to remain registered")
+	}
+	if tool.Definition.Description != "inspect" {
+		t.Fatalf("unexpected description after internal registration: %q", tool.Definition.Description)
+	}
+	if _, ok := tool.Definition.InputSchema.Properties["attachmentId"]; !ok {
+		t.Fatalf("expected original attachment schema to remain, got %+v", tool.Definition.InputSchema)
+	}
+}

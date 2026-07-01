@@ -59,7 +59,7 @@ func createShellExecutor() types.ToolExecutor {
 func createMcpToolExecutor(config McpServerConfig, toolName string) types.ToolExecutor {
 	return func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 		url := fmt.Sprintf("%s/tools/%s/call", config.BaseURL, toolName)
-		
+
 		body := map[string]interface{}{
 			"arguments": input,
 		}
@@ -119,7 +119,7 @@ func NewToolRegistry() *ToolRegistry {
 func (r *ToolRegistry) GetAll() []types.RegisteredTool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	tools := make([]types.RegisteredTool, 0, len(r.tools))
 	for _, t := range r.tools {
 		tools = append(tools, t)
@@ -130,7 +130,7 @@ func (r *ToolRegistry) GetAll() []types.RegisteredTool {
 func (r *ToolRegistry) Get(name string) (types.RegisteredTool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	t, ok := r.tools[name]
 	return t, ok
 }
@@ -138,7 +138,7 @@ func (r *ToolRegistry) Get(name string) (types.RegisteredTool, bool) {
 func (r *ToolRegistry) GetDefinitions() []types.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	defs := make([]types.ToolDefinition, 0, len(r.tools))
 	for _, t := range r.tools {
 		defs = append(defs, t.Definition)
@@ -157,7 +157,7 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, input map[strin
 func (r *ToolRegistry) Has(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	_, ok := r.tools[name]
 	return ok
 }
@@ -165,7 +165,8 @@ func (r *ToolRegistry) Has(name string) bool {
 func (r *ToolRegistry) RegisterBuiltin(name, description string, inputSchema types.JSONSchema, executor types.ToolExecutor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
+	inputSchema = normalizeToolSchema(inputSchema)
 	r.tools[name] = types.RegisteredTool{
 		Definition: types.ToolDefinition{
 			Name:        name,
@@ -185,11 +186,16 @@ func (r *ToolRegistry) RegisterSkillInternalTools(internalHandlers map[string]ty
 	defer r.mu.Unlock()
 
 	for name, handler := range internalHandlers {
+		description, hasDescription := skillToolDescriptions[name]
+		schema, hasSchema := skillToolSchemas[name]
+		if !hasDescription || !hasSchema {
+			continue
+		}
 		r.tools[name] = types.RegisteredTool{
 			Definition: types.ToolDefinition{
 				Name:        name,
-				Description: skillToolDescriptions[name],
-				InputSchema: skillToolSchemas[name],
+				Description: description,
+				InputSchema: normalizeToolSchema(schema),
 			},
 			Execute:    handler,
 			Source:     "builtin",
@@ -275,7 +281,7 @@ func (r *ToolRegistry) RegisterMcpServer(ctx context.Context, config McpServerCo
 			Definition: types.ToolDefinition{
 				Name:        name,
 				Description: fmt.Sprintf("[MCP: %s] %s", config.Name, tool.Description),
-				InputSchema: tool.InputSchema,
+				InputSchema: normalizeToolSchema(tool.InputSchema),
 			},
 			Execute:    createMcpToolExecutor(config, tool.Name),
 			Source:     "mcp",
@@ -289,6 +295,16 @@ func (r *ToolRegistry) RegisterMcpServer(ctx context.Context, config McpServerCo
 func (r *ToolRegistry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	r.tools = make(map[string]types.RegisteredTool)
+}
+
+func normalizeToolSchema(schema types.JSONSchema) types.JSONSchema {
+	if schema.Type == "" {
+		schema.Type = "object"
+	}
+	if schema.Type == "object" && len(schema.Properties) == 0 {
+		schema.Properties = compatibleObjectProperties()
+	}
+	return schema
 }
