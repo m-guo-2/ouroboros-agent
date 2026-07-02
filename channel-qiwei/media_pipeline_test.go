@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,12 @@ type fakeRecognizer struct {
 type fakeMediaStorage struct {
 	bucket string
 	store  *sharedoss.FakeStorage
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func newFakeMediaStorage(bucket string) *fakeMediaStorage {
@@ -154,6 +161,102 @@ func TestPlanMediaDownloadUsesSourceSpecificContracts(t *testing.T) {
 	}
 	if qwPlan.Method != "/cloud/wxWorkDownload" {
 		t.Fatalf("expected qw download method, got %s", qwPlan.Method)
+	}
+}
+
+func TestCallbackProcessingTimeoutCoversRetryBudget(t *testing.T) {
+	app := &app{cfg: Config{RequestTimout: 25}}
+	if got := app.callbackProcessingTimeout(); got < 90*time.Second {
+		t.Fatalf("expected callback timeout to cover three 25s attempts plus buffer, got %s", got)
+	}
+}
+
+func TestPrepareMediaForAgentFallsBackToDirectURLWhenGatewayDownloadFails(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "gateway unavailable", http.StatusBadGateway)
+	}))
+	t.Cleanup(apiServer.Close)
+
+	directURL := "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=abc"
+	app := &app{
+		http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() != directURL {
+				t.Fatalf("unexpected direct download url: %s", r.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"audio/mp4"}},
+				Body:       io.NopCloser(strings.NewReader("audio-data")),
+			}, nil
+		})},
+		storage: newFakeMediaStorage("test-bucket"),
+	}
+	rt := newAccountRuntime(Config{APIBaseURL: apiServer.URL, RequestTimout: 1}, nil, Account{
+		ID:    "qw_test",
+		GUID:  "guid",
+		Token: "token",
+	})
+
+	prepared := app.prepareMediaForAgent(context.Background(), rt, 102, "file", map[string]any{
+		"fileAesKey":  "aes",
+		"fileAuthKey": "auth",
+		"fileSize":    10,
+		"fileHttpUrl": directURL,
+		"filename":    "新录音.m4a",
+	})
+
+	if prepared.ResourceURI == "" {
+		t.Fatalf("expected direct fallback to materialize an attachment, got %+v", prepared)
+	}
+	if prepared.Name != "新录音.m4a" {
+		t.Fatalf("expected original filename, got %q", prepared.Name)
+	}
+	if prepared.MIMEType != "audio/mp4" {
+		t.Fatalf("expected downloaded MIME type, got %q", prepared.MIMEType)
+	}
+}
+
+func TestHandleNormalFileMessageMaterializesAttachmentBeforeForwarding(t *testing.T) {
+	app, received := newTestAppWithAgentCapture(t, "")
+	rt := testRuntime(t, app)
+
+	err := app.handleNormalMessage(context.Background(), rt, qiweiCallbackMessage{
+		MsgType:        102,
+		MsgSvrID:       "msg-file-1",
+		SenderID:       "user-1",
+		SenderNickname: "GM",
+		CreateTime:     1782961401,
+		MsgData: map[string]any{
+			"fileAesKey":  "aes",
+			"fileAuthKey": "auth",
+			"fileSize":    4651367,
+			"fileHttpUrl": "https://imunion.weixin.qq.com/cgi-bin/mmae-bin/tpdownloadmedia?param=protected",
+			"filename":    "新录音.m4a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleNormalMessage failed: %v", err)
+	}
+
+	msg := received()
+	if msg.MessageType != "file" {
+		t.Fatalf("expected file message, got %q", msg.MessageType)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected one materialized attachment, got %+v", msg.Attachments)
+	}
+	attachment := msg.Attachments[0]
+	if attachment.Kind != "file" || attachment.DisplayName != "新录音.m4a" {
+		t.Fatalf("unexpected attachment metadata: %+v", attachment)
+	}
+	if !strings.HasPrefix(attachment.ResourceURI, "oss://test-bucket/") {
+		t.Fatalf("expected OSS resource URI, got %q", attachment.ResourceURI)
+	}
+	if strings.Contains(msg.Content, "imunion.weixin.qq.com") {
+		t.Fatalf("agent content leaked protected source URL: %s", msg.Content)
+	}
+	if !strings.Contains(msg.Content, attachment.ResourceURI) {
+		t.Fatalf("expected content to reference materialized resource URI, content=%q attachment=%q", msg.Content, attachment.ResourceURI)
 	}
 }
 

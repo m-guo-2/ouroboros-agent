@@ -348,6 +348,22 @@ func (a *app) prepareMediaForAgent(ctx context.Context, rt *accountRuntime, msgT
 
 	resolvedURL, err := a.executeMediaDownloadPlan(ctx, rt, plan)
 	if err != nil {
+		if fallback, ok := directMediaFallbackPlan(desc, plan); ok {
+			logger.Warn(ctx, "媒体下载计划失败，回退直接下载",
+				"msgType", msgType,
+				"messageType", classification.MessageType,
+				"source", string(classification.Source),
+				"kind", string(classification.Kind),
+				"strategy", plan.Name,
+				"method", plan.Method,
+				"fallbackStrategy", fallback.Name,
+				"error", err.Error(),
+			)
+			plan = fallback
+			resolvedURL, err = a.executeMediaDownloadPlan(ctx, rt, plan)
+		}
+	}
+	if err != nil {
 		logger.Warn(ctx, "媒体处理失败",
 			"stage", "resolve",
 			"msgType", msgType,
@@ -404,6 +420,17 @@ func (a *app) prepareMediaForAgent(ctx context.Context, rt *accountRuntime, msgT
 		Name:        desc.Name,
 		MIMEType:    mimeType,
 	}
+}
+
+func directMediaFallbackPlan(desc mediaDescriptor, failed mediaDownloadPlan) (mediaDownloadPlan, bool) {
+	if failed.Method == "DIRECT" || strings.TrimSpace(desc.PreferredURL) == "" {
+		return mediaDownloadPlan{}, false
+	}
+	return mediaDownloadPlan{
+		Name:   "direct-fallback",
+		Method: "DIRECT",
+		Params: map[string]any{"url": desc.PreferredURL},
+	}, true
 }
 
 func (a *app) executeMediaDownloadPlan(ctx context.Context, rt *accountRuntime, plan mediaDownloadPlan) (string, error) {

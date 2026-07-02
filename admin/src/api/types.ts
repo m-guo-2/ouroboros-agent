@@ -87,6 +87,14 @@ export interface MessageData {
   initiator?: string
   senderName?: string
   senderId?: string
+  channelMeta?: {
+    quotedMessage?: {
+      msgSvrId?: string
+      content?: string
+      senderName?: string
+    }
+    [key: string]: unknown
+  }
   createdAt?: number
 }
 

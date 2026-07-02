@@ -6,7 +6,7 @@ import { cn, timeAgo, absoluteTime, copyToClipboard } from "@/lib/utils"
 import type { MessageExchange } from "../lib/types"
 import { CompactionEvent } from "./compaction-event"
 import { ExchangeSkeleton } from "./exchange-skeleton"
-import type { CompactionData, ExecutionTrace, MessageLifecycleEvent } from "@/api/types"
+import type { CompactionData, ExecutionTrace, MessageData, MessageLifecycleEvent } from "@/api/types"
 
 interface Props {
   exchanges: MessageExchange[]
@@ -21,6 +21,26 @@ interface Props {
   hasMoreMessages?: boolean
   onLoadMoreMessages?: () => void
   isLoadingMoreMessages?: boolean
+}
+
+type MessageWithQuote = Pick<MessageData, "content"> & Partial<Pick<MessageData, "channelMeta">>
+
+function quotedMessage(message: MessageWithQuote) {
+  const quoted = message.channelMeta?.quotedMessage
+  if (!quoted || (!quoted.content && !quoted.msgSvrId)) return null
+  return quoted
+}
+
+function formatMessageForCopy(message: MessageWithQuote) {
+  const quoted = quotedMessage(message)
+  if (!quoted) return message.content || ""
+  const header = [
+    "> [引用消息]",
+    quoted.senderName ? `发送者: ${quoted.senderName}` : "",
+    quoted.msgSvrId ? `msg_id: ${quoted.msgSvrId}` : "",
+  ].filter(Boolean).join(" | ")
+  const quotedText = quoted.content ? quoted.content.split("\n").map(line => `> ${line}`).join("\n") : "> (原消息不可见)"
+  return `${header}\n${quotedText}\n${message.content || ""}`.trim()
 }
 
 export function ConversationTimeline({
@@ -133,6 +153,7 @@ export function ConversationTimeline({
           const errors = steps.filter(s => s.type === "error" || (s.type === "tool_result" && s.toolSuccess === false)).length
           const messageLifecycle = exchange.userMessage.id ? lifecycleByMessage.get(exchange.userMessage.id) ?? [] : []
           const outcome = resolveExchangeOutcome(exchange, messageLifecycle, isRunning)
+          const quoted = quotedMessage(exchange.userMessage)
 
           const initiator = exchange.userMessage.initiator
           const initiatorStyle = !initiator || initiator === "user"
@@ -182,7 +203,7 @@ export function ConversationTimeline({
                         {exchange.traceId && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">trace</span>}
                       </div>
                       <button
-                        onClick={(e) => { e.stopPropagation(); copyToClipboard(exchange.userMessage.content || "") }}
+                        onClick={(e) => { e.stopPropagation(); copyToClipboard(formatMessageForCopy(exchange.userMessage)) }}
                         className="opacity-0 group-hover/exchange:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all shrink-0"
                         title="复制收到内容"
                       >
@@ -191,8 +212,22 @@ export function ConversationTimeline({
                     </div>
 
                     <div className="px-4 py-3">
+                      {quoted && (
+                        <div className="mb-2 rounded-md border-l-2 border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                          <div className="mb-1 flex min-w-0 items-center gap-1.5 font-medium text-slate-700">
+                            <CornerDownRight className="h-3.5 w-3.5 shrink-0" />
+                            <span>引用消息</span>
+                            {quoted.senderName && (
+                              <span className="truncate text-slate-500">· {quoted.senderName}</span>
+                            )}
+                          </div>
+                          <p className="line-clamp-3 whitespace-pre-wrap leading-relaxed">
+                            {quoted.content || "(原消息不可见)"}
+                          </p>
+                        </div>
+                      )}
                       <p className="line-clamp-4 text-sm leading-relaxed text-slate-950 whitespace-pre-wrap">
-                      {exchange.userMessage.content || "(无内容)"}
+                        {exchange.userMessage.content || "(无内容)"}
                       </p>
                     </div>
 

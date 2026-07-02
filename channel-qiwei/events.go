@@ -72,7 +72,7 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 	for _, msg := range messages {
 		msg := msg
 		go func() {
-			msgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			msgCtx, cancel := context.WithTimeout(context.Background(), a.callbackProcessingTimeout())
 			defer cancel()
 			// Carry requestId from the webhook request into the async goroutine.
 			if rid := logger.GetRequestID(ctx); rid != "" {
@@ -83,6 +83,21 @@ func (a *app) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
+}
+
+func (a *app) callbackProcessingTimeout() time.Duration {
+	timeoutSeconds := a.cfg.RequestTimout
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = configDefaults().HTTPTimeout
+	}
+	timeout := time.Duration(timeoutSeconds*3+15) * time.Second
+	if timeout < 60*time.Second {
+		return 60 * time.Second
+	}
+	if timeout > 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return timeout
 }
 
 func (a *app) handleCallbackMessage(ctx context.Context, msg qiweiCallbackMessage) error {
@@ -210,15 +225,16 @@ func (a *app) handleNormalMessage(ctx context.Context, rt *accountRuntime, msg q
 			return nil
 		}
 		if replyMap := mapValue(msg.MsgData["reply"]); len(replyMap) > 0 {
-			replyContent := strings.TrimSpace(anyToString(replyMap["content"]))
-			replyMsgID := anyToString(replyMap["msgId"])
+			replyContent := quotedMessageContent(replyMap)
+			replyMsgID := quotedMessageID(replyMap)
+			replySender := quotedMessageSender(replyMap)
 			if replyContent != "" || replyMsgID != "" {
 				messageType = "quote"
 				channelMeta = map[string]any{
 					"quotedMessage": map[string]any{
 						"msgSvrId":   replyMsgID,
 						"content":    replyContent,
-						"senderName": "",
+						"senderName": replySender,
 					},
 				}
 			}
@@ -251,7 +267,7 @@ func (a *app) handleNormalMessage(ctx context.Context, rt *accountRuntime, msg q
 				messageType = prepared.MessageType
 			}
 			if strings.TrimSpace(prepared.ResourceURI) == "" {
-				logger.Error(ctx, "媒体上传失败，跳过",
+				logger.Error(ctx, "接收层媒体准备失败，跳过",
 					"tag", tagCallback, "msg", msg.MsgSvrID, "type", messageType)
 				return nil
 			}
@@ -284,7 +300,7 @@ func (a *app) handleNormalMessage(ctx context.Context, rt *accountRuntime, msg q
 			content = strings.TrimSpace(prepared.Content)
 		} else {
 			if strings.TrimSpace(prepared.ResourceURI) == "" {
-				logger.Error(ctx, "媒体上传失败，跳过",
+				logger.Error(ctx, "接收层媒体准备失败，跳过",
 					"tag", tagCallback,
 					"msg", msg.MsgSvrID,
 					"type", messageType,
@@ -539,10 +555,14 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 	}
 
 	referMsg := firstNonNilMap(
+		msgData["refMsg"],
+		msgData["refmsg"],
+		msgData["ref_msg"],
 		msgData["referMsg"],
 		msgData["refermsg"],
 		msgData["refer_msg"],
 		msgData["referMessage"],
+		msgData["quotedMessage"],
 	)
 
 	// Fallback: parse XML when flat fields are missing or content looks like XML.
@@ -570,18 +590,9 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 		return "[引用消息]", nil
 	}
 
-	quotedContent := strings.TrimSpace(decodeMaybeBase64(anyToString(referMsg["content"])))
-	quotedSender := strings.TrimSpace(decodeMaybeBase64(firstNonEmpty(
-		anyToString(referMsg["displayName"]),
-		anyToString(referMsg["displayname"]),
-		anyToString(referMsg["nickname"]),
-		anyToString(referMsg["chatnickname"]),
-	)))
-	quotedMsgID := firstNonEmpty(
-		anyToString(referMsg["svrid"]),
-		anyToString(referMsg["msgSvrId"]),
-		anyToString(referMsg["msgServerId"]),
-	)
+	quotedContent := quotedMessageContent(referMsg)
+	quotedSender := quotedMessageSender(referMsg)
+	quotedMsgID := quotedMessageID(referMsg)
 
 	meta := map[string]any{
 		"quotedMessage": map[string]any{
@@ -598,6 +609,122 @@ func contentFromQuote(msgData map[string]any) (string, map[string]any) {
 	return replyText, meta
 }
 
+func quotedMessageContent(m map[string]any) string {
+	raw := strings.TrimSpace(decodeMaybeBase64(firstNonEmpty(
+		anyToString(m["content"]),
+		anyToString(m["text"]),
+		anyToString(m["title"]),
+		anyToString(m["digest"]),
+		anyToString(m["summary"]),
+		anyToString(m["contentHtml"]),
+		anyToString(m["contentHTML"]),
+	)))
+	if looksLikeXML(raw) {
+		if summary := quotedAppMsgXMLSummary(raw); summary != "" {
+			return summary
+		}
+	}
+	if raw != "" {
+		return raw
+	}
+	return quotedAttachmentDescription(m)
+}
+
+func quotedMessageSender(m map[string]any) string {
+	return strings.TrimSpace(decodeMaybeBase64(firstNonEmpty(
+		anyToString(m["senderName"]),
+		anyToString(m["sender"]),
+		anyToString(m["displayName"]),
+		anyToString(m["displayname"]),
+		anyToString(m["nickname"]),
+		anyToString(m["chatnickname"]),
+		anyToString(m["fromUserName"]),
+		anyToString(m["fromusr"]),
+	)))
+}
+
+func quotedMessageID(m map[string]any) string {
+	return firstNonEmpty(
+		anyToString(m["msgId"]),
+		anyToString(m["msgid"]),
+		anyToString(m["msgID"]),
+		anyToString(m["msgSvrId"]),
+		anyToString(m["msgSvrID"]),
+		anyToString(m["msgServerId"]),
+		anyToString(m["msgServerID"]),
+		anyToString(m["svrid"]),
+		anyToString(m["svrId"]),
+		anyToString(m["svrID"]),
+		anyToString(m["id"]),
+	)
+}
+
+func quotedAttachmentDescription(m map[string]any) string {
+	name := firstNonEmpty(
+		decodeMaybeBase64(anyToString(m["fileName"])),
+		decodeMaybeBase64(anyToString(m["fileNameUtf8"])),
+		decodeMaybeBase64(anyToString(m["filename"])),
+		decodeMaybeBase64(anyToString(m["file_name"])),
+		decodeMaybeBase64(anyToString(m["name"])),
+	)
+	url := firstNonEmpty(
+		anyToString(m["resourceUri"]),
+		anyToString(m["resourceURI"]),
+		anyToString(m["fileUrl"]),
+		anyToString(m["fileHttpUrl"]),
+		anyToString(m["url"]),
+		anyToString(m["downloadUrl"]),
+	)
+	fileID := firstNonEmpty(anyToString(m["fileId"]), anyToString(m["fileID"]), anyToString(m["cdnKey"]), anyToString(m["cdn_key"]))
+	if name == "" && url == "" && fileID == "" {
+		return ""
+	}
+
+	parts := []string{"[引用文件]"}
+	if name != "" {
+		parts = append(parts, "名称: "+name)
+	}
+	if name == "" {
+		parts = append(parts, "名称: (未提供)")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func quotedAppMsgXMLSummary(raw string) string {
+	var msg appMsgXML
+	if err := xml.Unmarshal([]byte(raw), &msg); err != nil {
+		return ""
+	}
+	app := msg.AppMsg
+	switch app.Type {
+	case 6:
+		parts := []string{"[引用文件]"}
+		if strings.TrimSpace(app.Title) != "" {
+			parts = append(parts, "名称: "+strings.TrimSpace(app.Title))
+		} else {
+			parts = append(parts, "名称: (未提供)")
+		}
+		return strings.Join(parts, "\n")
+	case 2:
+		if strings.TrimSpace(app.Title) != "" {
+			return "[引用图片]\n名称: " + strings.TrimSpace(app.Title)
+		}
+		return "[引用图片]"
+	case 4, 5:
+		if strings.TrimSpace(app.Title) != "" {
+			return "[引用链接]\n标题: " + strings.TrimSpace(app.Title)
+		}
+	case 57:
+		if strings.TrimSpace(app.Title) != "" {
+			return strings.TrimSpace(app.Title)
+		}
+	}
+	if strings.TrimSpace(app.Title) != "" {
+		return strings.TrimSpace(app.Title)
+	}
+	return ""
+}
+
 // appMsgXML maps the XML structure used by personal WeChat for appmsg (type 49).
 type appMsgXML struct {
 	XMLName xml.Name       `xml:"msg"`
@@ -605,9 +732,11 @@ type appMsgXML struct {
 }
 
 type appMsgInnerXML struct {
-	Title    string      `xml:"title"`
-	Type     int         `xml:"type"`
-	ReferMsg referMsgXML `xml:"refermsg"`
+	Title     string       `xml:"title"`
+	Des       string       `xml:"des"`
+	Type      int          `xml:"type"`
+	AppAttach appAttachXML `xml:"appattach"`
+	ReferMsg  referMsgXML  `xml:"refermsg"`
 }
 
 type referMsgXML struct {
@@ -617,6 +746,12 @@ type referMsgXML struct {
 	ChatNickname string `xml:"chatnickname"`
 	DisplayName  string `xml:"displayname"`
 	Content      string `xml:"content"`
+}
+
+type appAttachXML struct {
+	AttachID string `xml:"attachid"`
+	TotalLen int64  `xml:"totallen"`
+	FileExt  string `xml:"fileext"`
 }
 
 // tryParseAppMsgXML attempts to parse XML from msgData["content"] (possibly base64-encoded).
