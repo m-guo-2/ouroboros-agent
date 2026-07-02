@@ -32,10 +32,9 @@ func handlePersonas(w http.ResponseWriter, r *http.Request, agentID string) {
 			AgentID:     agentID,
 			DisplayName: displayName,
 		}
-		if v, ok := body["systemPrompt"]; ok {
-			if s, ok := v.(string); ok {
-				p.SystemPrompt = &s
-			}
+		if v, ok := body["systemPrompt"]; ok && nonEmptyString(v) {
+			apiErr(w, http.StatusBadRequest, "persona cannot override systemPrompt; create a new agent instead")
+			return
 		}
 		if v, ok := body["provider"]; ok {
 			if s, ok := v.(string); ok {
@@ -137,6 +136,10 @@ func handlePersonaWithID(w http.ResponseWriter, r *http.Request, agentID, person
 			apiErr(w, http.StatusBadRequest, "invalid sandboxTemplateId")
 			return
 		}
+		if v, ok := body["systemPrompt"]; ok && nonEmptyString(v) {
+			apiErr(w, http.StatusBadRequest, "persona cannot override systemPrompt; create a new agent instead")
+			return
+		}
 		result, err := storage.UpdatePersona(id, body)
 		if err != nil {
 			apiErr(w, http.StatusInternalServerError, err.Error())
@@ -161,4 +164,9 @@ func handlePersonaWithID(w http.ResponseWriter, r *http.Request, agentID, person
 	default:
 		apiErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func nonEmptyString(v interface{}) bool {
+	s, ok := v.(string)
+	return ok && strings.TrimSpace(s) != ""
 }

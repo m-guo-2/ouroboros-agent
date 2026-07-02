@@ -24,10 +24,9 @@ import (
 	"agent/internal/types"
 )
 
-// BuildSystemPrompt appends the compiled skills snippet to the agent's
-// system prompt. The prompt stored in the database remains the source of
-// truth for the agent's role and behavior, while skill material is injected
-// as a separate runtime section.
+// BuildSystemPrompt expands the compiled skills snippet into the agent's
+// database-backed system prompt. The stored prompt remains the source of truth
+// for the agent's role and behavior.
 const memoryInstruction = `
 
 ## Memory
@@ -110,11 +109,10 @@ func buildLLMClient(provider string, creds *storage.ProviderCredentials) engine.
 	})
 }
 
-// applyPersonaOverride replaces fields in agentConfig with non-nil persona values.
+// applyPersonaOverride replaces runtime-scoped fields in agentConfig with
+// persona values. The agent system prompt defines identity and must not be
+// overridden by a persona; use a separate agent for a different prompt.
 func applyPersonaOverride(agent *storage.AgentConfig, persona *storage.Persona) {
-	if persona.SystemPrompt != nil {
-		agent.SystemPrompt = *persona.SystemPrompt
-	}
 	if persona.Provider != nil && persona.Model != nil {
 		agent.Provider = *persona.Provider
 		agent.Model = *persona.Model

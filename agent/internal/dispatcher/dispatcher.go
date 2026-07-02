@@ -78,13 +78,9 @@ func Dispatch(ctx context.Context, msg IncomingMessage) DispatchResult {
 	}
 
 	// 3. Locate target agent.
-	agentID := msg.AgentID
-	if agentID == "" {
-		agentID = "default-agent-config"
-	}
-	agentCfg, err := storage.GetAgentConfig(agentID)
+	agentCfg, err := resolveTargetAgent(msg)
 	if err != nil || agentCfg == nil {
-		logger.Error(ctx, "Agent 配置未找到", "agentId", agentID)
+		logger.Error(ctx, "Agent 配置未找到", "agentId", msg.AgentID, "error", fmt.Sprint(err))
 		return DispatchResult{Success: false, Error: "no agent available"}
 	}
 
@@ -431,10 +427,101 @@ func resolveSessionKey(msg IncomingMessage) string {
 	return msg.Channel + ":" + uniqueID
 }
 
+func resolveTargetAgent(msg IncomingMessage) (*storage.AgentConfig, error) {
+	if strings.TrimSpace(msg.AgentID) != "" {
+		return storage.GetAgentConfig(strings.TrimSpace(msg.AgentID))
+	}
+
+	agents, err := storage.GetActiveAgents()
+	if err != nil {
+		return nil, err
+	}
+	if cfg := matchAgentByChannel(agents, msg, false); cfg != nil {
+		return cfg, nil
+	}
+	if cfg := matchAgentByChannel(agents, msg, true); cfg != nil {
+		return cfg, nil
+	}
+	return storage.GetAgentConfig("default-agent-config")
+}
+
+func matchAgentByChannel(agents []storage.AgentConfig, msg IncomingMessage, allowWildcard bool) *storage.AgentConfig {
+	channel := strings.TrimSpace(msg.Channel)
+	if channel == "" {
+		return nil
+	}
+	candidates := channelBindingCandidates(msg)
+	for _, candidate := range candidates {
+		for i := range agents {
+			for _, binding := range agents[i].Channels {
+				if strings.TrimSpace(binding.ChannelType) != channel {
+					continue
+				}
+				if strings.TrimSpace(binding.ChannelIdentifier) == candidate {
+					return &agents[i]
+				}
+			}
+		}
+	}
+	if !allowWildcard {
+		return nil
+	}
+	for i := range agents {
+		for _, binding := range agents[i].Channels {
+			if strings.TrimSpace(binding.ChannelType) != channel {
+				continue
+			}
+			if strings.TrimSpace(binding.ChannelIdentifier) == "*" {
+				return &agents[i]
+			}
+		}
+	}
+	return nil
+}
+
+func channelBindingCandidates(msg IncomingMessage) []string {
+	candidates := []string{}
+	seen := map[string]bool{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" && !seen[v] {
+			candidates = append(candidates, v)
+			seen[v] = true
+		}
+	}
+	if msg.ChannelAccountID != "" {
+		add("account:" + msg.ChannelAccountID)
+	}
+	add(msg.ChannelAccountID)
+	if msg.ChannelAccountShortHash != "" {
+		add("accountHash:" + msg.ChannelAccountShortHash)
+	}
+	add(msg.ChannelAccountShortHash)
+	add(msg.ChannelConversationID)
+	rawID, shortHash := splitConversationShortHash(msg.ChannelConversationID)
+	add(rawID)
+	add(shortHash)
+	if shortHash != "" {
+		add("accountHash:" + shortHash)
+	}
+	return candidates
+}
+
 func isGroupClearCommand(msg IncomingMessage) bool {
 	return strings.TrimSpace(msg.ConversationType) == "group" &&
 		strings.EqualFold(strings.TrimSpace(msg.SenderName), "GM") &&
-		strings.TrimSpace(msg.Content) == "#clear"
+		clearCommandText(msg.Content) == "#clear"
+}
+
+func clearCommandText(content string) string {
+	text := strings.TrimSpace(content)
+	if text == "#clear" {
+		return text
+	}
+	if idx := strings.LastIndex(text, ":"); idx >= 0 {
+		return strings.TrimSpace(text[idx+1:])
+	}
+	return text
 }
 
 func resolveDedupeKey(msg IncomingMessage) string {

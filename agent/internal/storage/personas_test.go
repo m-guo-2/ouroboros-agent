@@ -47,6 +47,32 @@ func TestPersonaWithSkillBindingsReportsOverride(t *testing.T) {
 	}
 }
 
+func TestPersonaSystemPromptIsNotPersisted(t *testing.T) {
+	cleanup := setupSkillTestDB(t)
+	defer cleanup()
+
+	prompt := "persona prompt should be ignored"
+	persona, err := CreatePersona(Persona{
+		AgentID:      "agent-1",
+		DisplayName:  "Group Persona",
+		SystemPrompt: &prompt,
+	})
+	if err != nil {
+		t.Fatalf("create persona: %v", err)
+	}
+	if persona.SystemPrompt != nil {
+		t.Fatalf("expected persona system prompt to be ignored, got %q", *persona.SystemPrompt)
+	}
+
+	updated, err := UpdatePersona(persona.ID, map[string]any{"systemPrompt": "still ignored"})
+	if err != nil {
+		t.Fatalf("update persona: %v", err)
+	}
+	if updated.SystemPrompt != nil {
+		t.Fatalf("expected update to ignore persona system prompt, got %q", *updated.SystemPrompt)
+	}
+}
+
 func TestResolveEffectiveSandboxTemplateID(t *testing.T) {
 	cleanup := setupSkillTestDB(t)
 	defer cleanup()

@@ -39,8 +39,8 @@ const personaCoreSelect = `SELECT p.id, p.agent_id, p.display_name,
 	   WHERE g.persona_id = p.id AND g.deleted_at = 0) AS group_count
 	FROM agent_personas p`
 
-// scanPersonaCore scans only the core columns. Nullability is modeled via
-// sql.NullString; pointer semantics in Persona preserve "unset" vs "empty".
+// scanPersonaCore scans only the core columns. Persona system prompts are not
+// exposed or applied; prompt changes belong to agents, not personas.
 func scanPersonaCore(scan func(...interface{}) error) (Persona, error) {
 	var p Persona
 	var systemPrompt, provider, model, sandboxTemplateID sql.NullString
@@ -52,9 +52,6 @@ func scanPersonaCore(scan func(...interface{}) error) (Persona, error) {
 		&createdMs, &updatedMs, &groupCount,
 	); err != nil {
 		return p, err
-	}
-	if systemPrompt.Valid {
-		p.SystemPrompt = &systemPrompt.String
 	}
 	if provider.Valid {
 		p.Provider = &provider.String
@@ -183,6 +180,7 @@ func CreatePersona(p Persona) (*Persona, error) {
 	if p.ID == "" {
 		p.ID = prefixedID("persona")
 	}
+	p.SystemPrompt = nil
 	now := timeutil.NowMs()
 
 	tx, err := DB.Begin()
@@ -196,7 +194,7 @@ func CreatePersona(p Persona) (*Persona, error) {
 		 (id, agent_id, display_name, system_prompt, provider, model, sandbox_template_id, created_at, updated_at, deleted_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		p.ID, p.AgentID, p.DisplayName,
-		nullStr(p.SystemPrompt), nullStr(p.Provider), nullStr(p.Model),
+		"", nullStr(p.Provider), nullStr(p.Model),
 		nullStr(p.SandboxTemplateID),
 		now, now,
 	); err != nil {
@@ -214,7 +212,6 @@ func CreatePersona(p Persona) (*Persona, error) {
 func UpdatePersona(id string, updates map[string]interface{}) (*Persona, error) {
 	colMap := map[string]string{
 		"displayName":       "display_name",
-		"systemPrompt":      "system_prompt",
 		"provider":          "provider",
 		"model":             "model",
 		"sandboxTemplateId": "sandbox_template_id",
@@ -276,6 +273,7 @@ func ClonePersona(srcID, newDisplayName string) (*Persona, error) {
 	clone := *src
 	clone.ID = prefixedID("persona")
 	clone.DisplayName = newDisplayName
+	clone.SystemPrompt = nil
 	clone.GroupCount = 0
 	return CreatePersona(clone)
 }

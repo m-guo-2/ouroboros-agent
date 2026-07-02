@@ -15,6 +15,7 @@ import { useUnconfiguredGroups } from "@/hooks/use-personas"
 import { PersonaList } from "@/components/features/agents/persona-list"
 import { GroupAssignments } from "@/components/features/agents/group-assignments"
 import { AgentHooks } from "@/components/features/agents/agent-hooks"
+import { ConfigComposition } from "@/components/features/agents/config-composition"
 import { useSkills } from "@/hooks/use-skills"
 import { useSandboxTemplates } from "@/hooks/use-sandbox-templates"
 import { agentsApi } from "@/api/agents"
@@ -226,8 +227,9 @@ export function AgentDetail() {
         }
       />
 
-      <Tabs defaultValue="config" className="mt-6">
+      <Tabs defaultValue="composition" className="mt-6">
         <TabsList>
+          <TabsTrigger value="composition">构成</TabsTrigger>
           <TabsTrigger value="config">配置</TabsTrigger>
           <TabsTrigger value="skills">技能</TabsTrigger>
           <TabsTrigger value="hooks">Hooks</TabsTrigger>
@@ -242,6 +244,23 @@ export function AgentDetail() {
             )}
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="composition">
+          <ConfigComposition
+            agentId={agent.id}
+            agent={agent}
+            draft={{
+              displayName: name,
+              systemPrompt: prompt,
+              model,
+              sandboxTemplateId,
+              skills: selectedSkills,
+            }}
+            skills={skills}
+            fullPrompt={fullPrompt}
+            previewLoading={previewLoading}
+          />
+        </TabsContent>
 
         <TabsContent value="config">
           <Card>

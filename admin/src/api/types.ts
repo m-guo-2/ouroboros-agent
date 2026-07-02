@@ -320,7 +320,6 @@ export interface Persona {
   id: string
   agentId: string
   displayName: string
-  systemPrompt?: string | null
   provider?: string | null
   model?: string | null
   sandboxTemplateId?: string | null

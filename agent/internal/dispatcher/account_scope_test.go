@@ -2,8 +2,13 @@ package dispatcher
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"agent/internal/storage"
 )
@@ -47,6 +52,244 @@ func TestResolveDedupeKeyIsolatesSameMessageAcrossAccounts(t *testing.T) {
 
 	if resolveDedupeKey(a) == resolveDedupeKey(b) {
 		t.Fatalf("expected account-scoped dedupe keys to differ")
+	}
+}
+
+func TestMatchAgentByChannelPrefersExactBindingWithoutDB(t *testing.T) {
+	agents := []storage.AgentConfig{
+		{
+			ID: "agent-wildcard",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "*"},
+			},
+		},
+		{
+			ID: "agent-exact",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "accountHash:hash-a"},
+			},
+		},
+	}
+	msg := IncomingMessage{
+		Channel:                 "qiwei",
+		ChannelAccountShortHash: "hash-a",
+	}
+
+	if got := matchAgentByChannel(agents, msg, false); got == nil || got.ID != "agent-exact" {
+		t.Fatalf("exact match = %+v, want agent-exact", got)
+	}
+	if got := matchAgentByChannel(agents, IncomingMessage{Channel: "qiwei"}, true); got == nil || got.ID != "agent-wildcard" {
+		t.Fatalf("wildcard match = %+v, want agent-wildcard", got)
+	}
+}
+
+func TestMatchAgentByChannelPrefersAccountIDOverAccountHash(t *testing.T) {
+	agents := []storage.AgentConfig{
+		{
+			ID: "agent-account-hash",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "accountHash:hash-a"},
+			},
+		},
+		{
+			ID: "agent-account-id",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "account:qw_a"},
+			},
+		},
+	}
+	msg := IncomingMessage{
+		Channel:                 "qiwei",
+		ChannelAccountID:        "qw_a",
+		ChannelAccountShortHash: "hash-a",
+	}
+
+	if got := matchAgentByChannel(agents, msg, false); got == nil || got.ID != "agent-account-id" {
+		t.Fatalf("match = %+v, want agent-account-id", got)
+	}
+}
+
+func TestMatchAgentByChannelPrefersAccountHashOverConversationDerivedHash(t *testing.T) {
+	agents := []storage.AgentConfig{
+		{
+			ID: "agent-conversation-hash",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "accountHash:conv-hash"},
+			},
+		},
+		{
+			ID: "agent-account-hash",
+			Channels: []storage.ChannelBinding{
+				{ChannelType: "qiwei", ChannelIdentifier: "accountHash:acct-hash"},
+			},
+		},
+	}
+	msg := IncomingMessage{
+		Channel:                 "qiwei",
+		ChannelAccountShortHash: "acct-hash",
+		ChannelConversationID:   "room@conv-hash",
+	}
+
+	if got := matchAgentByChannel(agents, msg, false); got == nil || got.ID != "agent-account-hash" {
+		t.Fatalf("match = %+v, want agent-account-hash", got)
+	}
+}
+
+func TestResolveTargetAgentUsesChannelBindingWhenAgentIDMissing(t *testing.T) {
+	storage.SetupTestDB(t)
+
+	agent, err := storage.CreateAgentConfig(storage.AgentConfig{
+		ID:          "agent-bound-test",
+		DisplayName: "Bound Test",
+		Provider:    "openai",
+		Model:       "gpt-4o-mini",
+		IsActive:    true,
+		Channels: []storage.ChannelBinding{
+			{ChannelType: "qiwei", ChannelIdentifier: "account:qw_a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	resolved, err := resolveTargetAgent(IncomingMessage{
+		Channel:          "qiwei",
+		ChannelAccountID: "qw_a",
+	})
+	if err != nil {
+		t.Fatalf("resolve target agent: %v", err)
+	}
+	if resolved == nil || resolved.ID != agent.ID {
+		t.Fatalf("resolved agent = %+v, want %s", resolved, agent.ID)
+	}
+}
+
+func TestResolveTargetAgentPrefersExactBindingOverWildcard(t *testing.T) {
+	storage.SetupTestDB(t)
+
+	wildcard, err := storage.CreateAgentConfig(storage.AgentConfig{
+		ID:          "agent-wildcard-test",
+		DisplayName: "Wildcard Test",
+		Provider:    "openai",
+		Model:       "gpt-4o-mini",
+		IsActive:    true,
+		Channels: []storage.ChannelBinding{
+			{ChannelType: "qiwei", ChannelIdentifier: "*"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create wildcard agent: %v", err)
+	}
+	exact, err := storage.CreateAgentConfig(storage.AgentConfig{
+		ID:          "agent-exact-test",
+		DisplayName: "Exact Test",
+		Provider:    "openai",
+		Model:       "gpt-4o-mini",
+		IsActive:    true,
+		Channels: []storage.ChannelBinding{
+			{ChannelType: "qiwei", ChannelIdentifier: "accountHash:hash-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create exact agent: %v", err)
+	}
+
+	resolved, err := resolveTargetAgent(IncomingMessage{
+		Channel:                 "qiwei",
+		ChannelAccountShortHash: "hash-a",
+	})
+	if err != nil {
+		t.Fatalf("resolve target agent: %v", err)
+	}
+	if resolved == nil || resolved.ID != exact.ID {
+		t.Fatalf("resolved agent = %+v, want exact %s over wildcard %s", resolved, exact.ID, wildcard.ID)
+	}
+}
+
+func TestDispatchUsesBoundAgentPromptForActualLLMRequest(t *testing.T) {
+	storage.SetupTestDB(t)
+
+	const promptSentinel = "BOUND_AGENT_PROMPT_SENTINEL"
+	requests := make(chan map[string]interface{}, 1)
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode llm request: %v", err)
+		} else {
+			requests <- body
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{"message":{"content":"done"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1}
+		}`))
+	}))
+	defer llm.Close()
+
+	if err := storage.SetSettingValue("api_key.openai", "test-key"); err != nil {
+		t.Fatalf("set api key: %v", err)
+	}
+	if err := storage.SetSettingValue("base_url.openai", llm.URL); err != nil {
+		t.Fatalf("set base url: %v", err)
+	}
+
+	agent, err := storage.CreateAgentConfig(storage.AgentConfig{
+		ID:           "agent-prompt-request-test",
+		DisplayName:  "Prompt Request Test",
+		SystemPrompt: promptSentinel,
+		Provider:     "openai",
+		Model:        "gpt-4o-mini",
+		IsActive:     true,
+		Channels: []storage.ChannelBinding{
+			{ChannelType: "qiwei", ChannelIdentifier: "account:qw_prompt"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	result := Dispatch(context.Background(), IncomingMessage{
+		Channel:                 "qiwei",
+		ChannelAccountID:        "qw_prompt",
+		ChannelUserID:           "user-prompt",
+		ChannelMessageID:        "msg-prompt",
+		ChannelConversationID:   "room-prompt",
+		ChannelConversationName: "Prompt Room",
+		SenderName:              "Alice",
+		Content:                 "hello",
+		MessageType:             "text",
+	})
+	if !result.Success {
+		t.Fatalf("dispatch failed: %s", result.Error)
+	}
+
+	session, err := storage.GetSession(result.SessionID)
+	if err != nil || session == nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if session.AgentID != agent.ID {
+		t.Fatalf("session agent = %s, want %s", session.AgentID, agent.ID)
+	}
+
+	select {
+	case body := <-requests:
+		messages, ok := body["messages"].([]interface{})
+		if !ok || len(messages) == 0 {
+			t.Fatalf("llm messages missing: %+v", body["messages"])
+		}
+		first, ok := messages[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("first llm message has unexpected type: %#v", messages[0])
+		}
+		if first["role"] != "system" {
+			t.Fatalf("first llm message role = %v, want system", first["role"])
+		}
+		content, _ := first["content"].(string)
+		if !strings.Contains(content, promptSentinel) {
+			t.Fatalf("system prompt does not contain bound agent prompt %q: %q", promptSentinel, content)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for llm request")
 	}
 }
 
@@ -173,7 +416,7 @@ func TestDispatchGroupClearCommandClearsSessionWithoutSavingCommand(t *testing.T
 		ChannelConversationID: "room-1",
 		ConversationType:      "group",
 		SenderName:            "GM",
-		Content:               "#clear",
+		Content:               "GM[gm-user] 2026-07-01 10:00:00:#clear",
 		MessageType:           "text",
 		AgentID:               agent.ID,
 	})
@@ -204,5 +447,20 @@ func TestDispatchGroupClearCommandClearsSessionWithoutSavingCommand(t *testing.T
 	}
 	if clearedSession.Context != "" || clearedSession.EventCursor != 0 || clearedSession.WorkDir != "" || clearedSession.ExecutionStatus != "idle" {
 		t.Fatalf("session was not reset: %+v", clearedSession)
+	}
+}
+
+func TestClearCommandTextHandlesQiweiSenderPrefix(t *testing.T) {
+	tests := map[string]string{
+		"#clear":                                 "#clear",
+		" #clear \n":                             "#clear",
+		"GM[gm-user] 2026-07-01 10:00:00:#clear": "#clear",
+		"GM 2026-07-01 10:00:00: #clear ":        "#clear",
+		"hello #clear":                           "hello #clear",
+	}
+	for input, want := range tests {
+		if got := clearCommandText(input); got != want {
+			t.Fatalf("clearCommandText(%q) = %q, want %q", input, got, want)
+		}
 	}
 }

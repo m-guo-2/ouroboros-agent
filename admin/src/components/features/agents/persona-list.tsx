@@ -3,7 +3,6 @@ import { Copy, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -70,8 +69,6 @@ function PersonaFormDialog({
   const updateMutation = useUpdatePersona()
 
   const [displayName, setDisplayName] = useState("")
-  const [overridePrompt, setOverridePrompt] = useState(false)
-  const [prompt, setPrompt] = useState("")
   const [overrideModel, setOverrideModel] = useState(false)
   const [model, setModel] = useState("")
   const [overrideSandbox, setOverrideSandbox] = useState(false)
@@ -91,9 +88,6 @@ function PersonaFormDialog({
   const resetFromProps = useCallback(() => {
     if (mode === "edit" && persona) {
       setDisplayName(persona.displayName)
-      const hasPrompt = persona.systemPrompt != null && persona.systemPrompt !== ""
-      setOverridePrompt(hasPrompt)
-      setPrompt(persona.systemPrompt ?? "")
       const hasModel = Boolean(persona.provider || persona.model)
       setOverrideModel(hasModel)
       setModel(persona.model ?? "")
@@ -112,8 +106,6 @@ function PersonaFormDialog({
       setSubagentSkills({ ...(persona.subagentSkills ?? agent.subagentSkills ?? {}) })
     } else {
       setDisplayName("")
-      setOverridePrompt(false)
-      setPrompt("")
       setOverrideModel(false)
       setModel("")
       setOverrideSandbox(false)
@@ -187,7 +179,6 @@ function PersonaFormDialog({
     }
     return {
       displayName: displayName.trim(),
-      systemPrompt: overridePrompt ? (prompt || null) : null,
       provider: overrideModel && model ? NEWAPI_PROVIDER : null,
       model: overrideModel ? (model || null) : null,
       sandboxTemplateId: overrideSandbox ? sandboxTemplateId : null,
@@ -217,7 +208,6 @@ function PersonaFormDialog({
 
   const pending = createMutation.isPending || updateMutation.isPending
 
-  const defaultPromptPreview = agent.systemPrompt ?? "（Agent 未配置系统提示词）"
   const defaultModelPreview = formatModelLabel(agent.provider, agent.model)
   const defaultSandboxPreview = formatSandboxTemplateLabel(agent.sandboxTemplateId ?? "office-worker", sandboxTemplates)
   const defaultSkillsCount = agent.skills?.length ?? 0
@@ -235,28 +225,6 @@ function PersonaFormDialog({
               显示名称 <span className="text-red-500">*</span>
             </label>
             <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-          </div>
-
-          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-medium text-slate-800">系统提示词</span>
-              <Switch checked={overridePrompt} onCheckedChange={setOverridePrompt} />
-            </div>
-            {!overridePrompt ? (
-              <p className="text-sm text-slate-400">使用默认配置</p>
-            ) : (
-              <Textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={6}
-                className="font-mono text-xs"
-              />
-            )}
-            {!overridePrompt && (
-              <p className="text-xs text-slate-500 line-clamp-3 whitespace-pre-wrap">
-                预览：{defaultPromptPreview}
-              </p>
-            )}
           </div>
 
           <div className="rounded-lg border border-slate-200 p-3 space-y-2">

@@ -36,8 +36,10 @@ func registerPlanModeTools(registry *engine.ToolRegistry, worker *SessionWorker,
 - 单条消息回复
 - 用户指令非常明确且影响范围小（"给张三发句早安"）`,
 		types.JSONSchema{
-			Type:       "object",
-			Properties: map[string]interface{}{},
+			Type: "object",
+			Properties: map[string]interface{}{
+				"_": map[string]interface{}{"type": "string", "description": "忽略此字段。无参数工具的兼容占位字段"},
+			},
 		},
 		createEnterPlanModeExecutor(worker),
 	)

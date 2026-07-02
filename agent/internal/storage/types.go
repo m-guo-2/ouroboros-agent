@@ -66,7 +66,7 @@ type Persona struct {
 	ID                string                         `json:"id"`
 	AgentID           string                         `json:"agentId"`
 	DisplayName       string                         `json:"displayName"`
-	SystemPrompt      *string                        `json:"systemPrompt"`
+	SystemPrompt      *string                        `json:"-"`
 	Provider          *string                        `json:"provider"`
 	Model             *string                        `json:"model"`
 	SandboxTemplateID *string                        `json:"sandboxTemplateId"`
